@@ -1,0 +1,18 @@
+{
+  "result": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "logging": {},
+      "tools": {
+        "listChanged": true
+      }
+    },
+    "serverInfo": {
+      "name": "olog-mcp",
+      "version": "0.0.1"
+    },
+    "instructions": "This server provides a structural model (ontology log) of the TypeScript codebase at /Users/wilbrt/projects/ologmcp/packages/mcp-server. Use olog_query to search for elements by kind/name/module. Use olog_inspect to get details and connections for a specific element. Use olog_dump for an overview. Use olog_reindex to refresh after code changes. The name and module parameters in olog_query accept JavaScript regex patterns."
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}

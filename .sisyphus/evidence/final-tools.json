@@ -1,0 +1,123 @@
+{
+  "result": {
+    "tools": [
+      {
+        "name": "olog_query",
+        "description": "Query the ontology log for structural elements matching filters. Returns elements with their kind, name, module (file path), and span (location).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "file",
+                "module",
+                "symbol",
+                "callsite",
+                "import",
+                "type",
+                "interface",
+                "class",
+                "enum",
+                "function",
+                "method",
+                "const",
+                "var",
+                "namespace",
+                "any"
+              ],
+              "default": "any",
+              "description": "Element kind to filter by. Use 'any' to match all kinds."
+            },
+            "name": {
+              "type": "string",
+              "description": "Regex pattern matched against element name. Examples: '^handle', 'User', 'Button$'"
+            },
+            "module": {
+              "type": "string",
+              "description": "Regex pattern matched against module (relative file path). Examples: 'src/components', 'utils/'"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 50,
+              "description": "Maximum number of results to return"
+            }
+          },
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        }
+      },
+      {
+        "name": "olog_inspect",
+        "description": "Get detailed information about a specific element by ID, including all its outgoing and incoming arrows (connections to other elements).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Element ID to inspect. Get IDs from olog_query results."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        }
+      },
+      {
+        "name": "olog_dump",
+        "description": "Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, and total counts. Useful for understanding what the olog knows about the codebase.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": true,
+          "idempotentHint": true
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        }
+      },
+      {
+        "name": "olog_reindex",
+        "description": "Force a full re-ingestion of the TypeScript codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false,
+          "$schema": "http://json-schema.org/draft-07/schema#"
+        },
+        "annotations": {
+          "readOnlyHint": false,
+          "idempotentHint": false,
+          "destructiveHint": false
+        },
+        "execution": {
+          "taskSupport": "forbidden"
+        }
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 2
+}

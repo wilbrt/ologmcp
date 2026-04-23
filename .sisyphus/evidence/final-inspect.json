@@ -1,0 +1,12 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"element\": {\n    \"id\": \"module:src/index.ts:58:7:function:cleanup\",\n    \"kind\": \"function\",\n    \"name\": \"cleanup\",\n    \"module\": \"src/index.ts\",\n    \"span\": \"src/index.ts:58:7-58:14\",\n    \"attrs\": {}\n  },\n  \"outgoing\": [],\n  \"incoming\": [\n    {\n      \"id\": \"file:src/index.ts:contains:module:src/index.ts:58:7:function:cleanup\",\n      \"kind\": \"contains\",\n      \"srcId\": \"file:src/index.ts\",\n      \"dstId\": \"module:src/index.ts:58:7:function:cleanup\",\n      \"attrs\": {}\n    }\n  ]\n}"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 5
+}

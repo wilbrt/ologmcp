@@ -1,0 +1,29 @@
+{
+  "name": "@olog/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-typescript": "^0.21.0",
+    "better-sqlite3": "^11.7.0",
+    "glob": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.1",
+    "@types/better-sqlite3": "^7.6.12",
+    "tsx": "^4.19.2",
+    "tsup": "^8.3.5"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"No tests yet\""
+  }
+}

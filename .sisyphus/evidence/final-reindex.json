@@ -1,0 +1,12 @@
+{
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"filesProcessed\": 6,\n  \"elementsCreated\": 35,\n  \"arrowsCreated\": 54,\n  \"durationMs\": 109\n}"
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 6
+}
