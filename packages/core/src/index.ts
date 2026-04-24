@@ -68,3 +68,19 @@ export type {
   ImportEntry,
   StructuralContext,
 } from './delegate/context.js';
+export {
+  mineEquations,
+  type MiningOptions,
+  type ArrowPath,
+} from './mining/index.js';
+export { enumeratePaths, getArrowKindsInUse } from './mining/paths.js';
+export {
+  annotatePathKinds,
+  generateCandidatePairs,
+  type CandidatePair,
+} from './mining/candidates.js';
+export {
+  evaluateEquationCandidate,
+  type EquationCandidate,
+  type Counterexample,
+} from './mining/evaluate.js';

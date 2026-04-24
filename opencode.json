@@ -9,7 +9,7 @@
     }
   },
   "agent": {
-    "build": {
+    "olog": {
       "mode": "primary",
       "model": "opencode-go/glm-5.1",
       "prompt": "{file:./prompts/prompt.txt}",

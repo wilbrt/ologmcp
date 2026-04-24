@@ -3,7 +3,7 @@
 // src/index.ts
 import { mkdirSync } from "fs";
 import { join as join4 } from "path";
-import { McpServer as McpServer11 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer as McpServer12 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // ../core/src/db.ts
@@ -2688,6 +2688,338 @@ function parseSpanSimple(span) {
   return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
 }
 
+// ../core/src/mining/paths.ts
+function getArrowKindsInUse(allArrowKinds, hasArrowKind) {
+  return allArrowKinds.filter((k) => hasArrowKind(k));
+}
+function enumeratePaths(arrowKinds, maxDepth) {
+  const paths = [];
+  for (const kind of arrowKinds) {
+    paths.push({
+      arrows: [kind],
+      domainKind: null,
+      codomainKind: null
+    });
+  }
+  let currentDepthPaths = paths.slice();
+  for (let depth = 2; depth <= maxDepth; depth++) {
+    const nextDepthPaths = [];
+    for (const existingPath of currentDepthPaths) {
+      for (const kind of arrowKinds) {
+        const lastArrow = existingPath.arrows[existingPath.arrows.length - 1];
+        if (kind === lastArrow) continue;
+        nextDepthPaths.push({
+          arrows: [...existingPath.arrows, kind],
+          domainKind: null,
+          codomainKind: null
+        });
+      }
+    }
+    paths.push(...nextDepthPaths);
+    currentDepthPaths = nextDepthPaths;
+    if (paths.length > 1e4) break;
+  }
+  return paths;
+}
+
+// ../core/src/mining/candidates.ts
+function annotatePathKinds(paths, store2, elementKinds, sampleSize = 50) {
+  const kindToIds = /* @__PURE__ */ new Map();
+  for (const kind of elementKinds) {
+    const elems = store2.queryElements({ kind, limit: sampleSize });
+    kindToIds.set(kind, elems.map((e) => e.id));
+  }
+  for (const path2 of paths) {
+    const steps = path2.arrows.map((kind) => ({
+      kind,
+      direction: "out"
+    }));
+    const domainKinds = [];
+    const codomainKinds = /* @__PURE__ */ new Set();
+    for (const [kind, ids] of kindToIds) {
+      let anyReached = false;
+      for (const id of ids) {
+        const result = store2.traverse({ startId: id, steps });
+        if (result.elements.length > 0) {
+          anyReached = true;
+          for (const elem of result.elements) {
+            codomainKinds.add(elem.kind);
+          }
+        }
+      }
+      if (anyReached) {
+        domainKinds.push(kind);
+      }
+    }
+    path2.domainKind = domainKinds.length === 1 ? domainKinds[0] : null;
+    path2.codomainKind = codomainKinds.size > 0 ? Array.from(codomainKinds).sort().join(",") : null;
+  }
+  return paths;
+}
+function generateCandidatePairs(paths) {
+  const pairs = [];
+  const byDomain = /* @__PURE__ */ new Map();
+  for (const path2 of paths) {
+    if (!path2.domainKind) continue;
+    const existing = byDomain.get(path2.domainKind) ?? [];
+    existing.push(path2);
+    byDomain.set(path2.domainKind, existing);
+  }
+  for (const [, domainPaths] of byDomain) {
+    for (let i = 0; i < domainPaths.length; i++) {
+      for (let j = i + 1; j < domainPaths.length; j++) {
+        const lhs = domainPaths[i];
+        const rhs = domainPaths[j];
+        if (arrowsEqual(lhs.arrows, rhs.arrows)) continue;
+        if (!lhs.codomainKind || !rhs.codomainKind) continue;
+        const lhsCodomains = new Set(lhs.codomainKind.split(","));
+        const rhsCodomains = new Set(rhs.codomainKind.split(","));
+        const overlap = [...lhsCodomains].some((k) => rhsCodomains.has(k));
+        if (!overlap) continue;
+        pairs.push({
+          lhs: [...lhs.arrows],
+          rhs: [...rhs.arrows]
+        });
+      }
+    }
+  }
+  const nullDomainPaths = paths.filter((p) => !p.domainKind);
+  for (let i = 0; i < nullDomainPaths.length; i++) {
+    for (let j = i + 1; j < nullDomainPaths.length; j++) {
+      const lhs = nullDomainPaths[i];
+      const rhs = nullDomainPaths[j];
+      if (arrowsEqual(lhs.arrows, rhs.arrows)) continue;
+      if (!lhs.codomainKind || !rhs.codomainKind) continue;
+      const lhsCodomains = new Set(lhs.codomainKind.split(","));
+      const rhsCodomains = new Set(rhs.codomainKind.split(","));
+      const overlap = [...lhsCodomains].some((k) => rhsCodomains.has(k));
+      if (!overlap) continue;
+      pairs.push({
+        lhs: [...lhs.arrows],
+        rhs: [...rhs.arrows]
+      });
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const deduped = [];
+  for (const pair of pairs) {
+    const key = canonicalKey(pair.lhs, pair.rhs);
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(pair);
+    }
+  }
+  return deduped;
+}
+function arrowsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+function canonicalKey(lhs, rhs) {
+  const lhsKey = lhs.join("\u2192");
+  const rhsKey = rhs.join("\u2192");
+  if (lhsKey <= rhsKey) {
+    return `${lhsKey}\u2261${rhsKey}`;
+  }
+  return `${rhsKey}\u2261${lhsKey}`;
+}
+
+// ../core/src/mining/evaluate.ts
+function evaluateEquationCandidate(store2, lhsPath, rhsPath, seedElements, maxCounterexamples = 5) {
+  let support = 0;
+  let total = 0;
+  const counterexamples = [];
+  const lhsSteps = lhsPath.map((kind) => ({
+    kind,
+    direction: "out"
+  }));
+  const rhsSteps = rhsPath.map((kind) => ({
+    kind,
+    direction: "out"
+  }));
+  const kindCounts = /* @__PURE__ */ new Map();
+  for (const elem of seedElements) {
+    kindCounts.set(elem.kind, (kindCounts.get(elem.kind) ?? 0) + 1);
+  }
+  let domainKind = "any";
+  let maxCount = 0;
+  for (const [kind, count] of kindCounts) {
+    if (count > maxCount) {
+      maxCount = count;
+      domainKind = kind;
+    }
+  }
+  for (const elem of seedElements) {
+    const lhsResult = store2.traverse({ startId: elem.id, steps: lhsSteps });
+    const rhsResult = store2.traverse({ startId: elem.id, steps: rhsSteps });
+    if (lhsResult.elements.length === 0 && rhsResult.elements.length === 0) {
+      continue;
+    }
+    if (lhsResult.elements.length === 0 || rhsResult.elements.length === 0) {
+      total++;
+      if (counterexamples.length < maxCounterexamples) {
+        counterexamples.push({
+          elementId: elem.id,
+          elementName: elem.name,
+          elementKind: elem.kind,
+          lhsResult: lhsResult.elements.map((e) => e.name),
+          rhsResult: rhsResult.elements.map((e) => e.name)
+        });
+      }
+      continue;
+    }
+    total++;
+    const lhsIds = new Set(lhsResult.elements.map((e) => e.id));
+    const rhsIds = new Set(rhsResult.elements.map((e) => e.id));
+    const lhsOnly = [...lhsIds].filter((id) => !rhsIds.has(id));
+    const rhsOnly = [...rhsIds].filter((id) => !lhsIds.has(id));
+    if (lhsOnly.length === 0 && rhsOnly.length === 0) {
+      support++;
+    } else {
+      if (counterexamples.length < maxCounterexamples) {
+        counterexamples.push({
+          elementId: elem.id,
+          elementName: elem.name,
+          elementKind: elem.kind,
+          lhsResult: lhsResult.elements.filter((e) => !rhsIds.has(e.id)).map((e) => e.name),
+          rhsResult: rhsResult.elements.filter((e) => !lhsIds.has(e.id)).map((e) => e.name)
+        });
+      }
+    }
+  }
+  const coverage = total > 0 ? support / total : 0;
+  return {
+    lhsPath,
+    rhsPath,
+    domainKind,
+    support,
+    total,
+    coverage,
+    counterexamples
+  };
+}
+
+// ../core/src/mining/index.ts
+var DEFAULT_MINING_OPTIONS = {
+  maxDepth: 3,
+  minCoverage: 1,
+  maxResults: 50,
+  maxCounterexamples: 5,
+  sampleSize: 100
+};
+var ALL_ARROW_KINDS = [
+  "extends",
+  "implements",
+  "calls",
+  "imports",
+  "exports",
+  "references",
+  "contains",
+  "returns",
+  "param",
+  "typeof",
+  "instanceof",
+  "definedIn",
+  "inModule",
+  "memberOf",
+  "callerOf",
+  "calleeOf",
+  "importsFrom",
+  "locatedIn",
+  "other"
+];
+var DEFAULT_ELEMENT_KINDS = [
+  "function",
+  "method",
+  "class",
+  "interface",
+  "type",
+  "import",
+  "module"
+];
+function mineEquations(store2, options = {}) {
+  const opts = { ...DEFAULT_MINING_OPTIONS, ...options };
+  const arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store2.hasArrowKind(k));
+  const elementKinds = opts.elementKinds ?? DEFAULT_ELEMENT_KINDS;
+  const paths = enumeratePaths(arrowKinds, opts.maxDepth);
+  annotatePathKinds(paths, store2, elementKinds, opts.sampleSize);
+  const candidates = generateCandidatePairs(paths);
+  const seedElements = [];
+  for (const kind of elementKinds) {
+    const elems = store2.queryElements({ kind, limit: opts.sampleSize });
+    if (elems.length > 0) {
+      seedElements.push({ kind, elements: elems });
+    }
+  }
+  const results = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    const key = canonicalEquationKey(candidate.lhs, candidate.rhs);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const allSeeds = [];
+    for (const group of seedElements) {
+      allSeeds.push(...group.elements);
+    }
+    const result = evaluateEquationCandidate(
+      store2,
+      candidate.lhs,
+      candidate.rhs,
+      allSeeds,
+      opts.maxCounterexamples
+    );
+    if (result.total === 0) continue;
+    if (result.coverage < opts.minCoverage) continue;
+    results.push(result);
+    if (results.length >= opts.maxResults * 2) break;
+  }
+  results.sort((a, b) => {
+    if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+    return b.total - a.total;
+  });
+  const deduped = [];
+  for (const result of results) {
+    if (deduped.length >= opts.maxResults) break;
+    let subsumed = false;
+    for (const existing of deduped) {
+      if (isSubsumedBy(result, existing)) {
+        subsumed = true;
+        break;
+      }
+    }
+    if (!subsumed) {
+      deduped.push(result);
+    }
+  }
+  return deduped;
+}
+function isSubsumedBy(candidate, existing) {
+  if (candidate.coverage !== existing.coverage) return false;
+  const cLhs = candidate.lhsPath.join("\u2192");
+  const cRhs = candidate.rhsPath.join("\u2192");
+  const eLhs = existing.lhsPath.join("\u2192");
+  const eRhs = existing.rhsPath.join("\u2192");
+  const pairs = [
+    [cLhs, cRhs],
+    [eLhs, eRhs]
+  ];
+  if (cLhs.startsWith(eLhs + "\u2192") && cRhs.startsWith(eRhs + "\u2192") && cLhs.slice(eLhs.length) === cRhs.slice(eRhs.length)) {
+    return true;
+  }
+  if (cLhs.endsWith("\u2192" + eLhs) && cRhs.endsWith("\u2192" + eRhs) && cLhs.slice(0, cLhs.length - eLhs.length) === cRhs.slice(0, cRhs.length - eRhs.length)) {
+    return true;
+  }
+  return false;
+}
+function canonicalEquationKey(lhs, rhs) {
+  const lhsKey = lhs.join("\u2192");
+  const rhsKey = rhs.join("\u2192");
+  if (lhsKey <= rhsKey) {
+    return `${lhsKey}\u2261${rhsKey}`;
+  }
+  return `${rhsKey}\u2261${lhsKey}`;
+}
+
 // src/tools/olog-query.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -3849,6 +4181,114 @@ function registerOlogDelegate(server2, store2, projectRoot2) {
   );
 }
 
+// src/tools/olog-mine-equations.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z11 } from "zod";
+function registerOlogMineEquations(server2, store2) {
+  server2.registerTool(
+    "olog_mine_equations",
+    {
+      description: "Discover path equations that hold (or nearly hold) in the olog graph. Tests all possible commutativity conditions between arrow paths up to the specified depth. Returns equations ranked by coverage ratio. Coverage 1.0 means the equation holds for every element tested; lower values indicate near-invariants with counterexamples.",
+      inputSchema: z11.object({
+        maxDepth: z11.number().int().min(2).max(4).default(3).describe(
+          "Maximum path length to explore. Depth 2 finds 2-arrow paths, depth 3 finds 3-arrow paths. Higher = slower but more thorough."
+        ),
+        minCoverage: z11.number().min(0).max(1).default(1).describe(
+          "Minimum coverage ratio to report. 1.0 = only strict invariants. 0.8 = near-invariants that hold for 80%+ of elements."
+        ),
+        maxResults: z11.number().int().min(1).max(500).default(50).describe("Maximum number of equations to return."),
+        arrowKinds: z11.array(z11.string()).optional().describe(
+          "Restrict to these arrow kinds. Default: all arrow kinds in use."
+        ),
+        elementKinds: z11.array(z11.string()).optional().describe(
+          "Restrict seed elements to these kinds. Default: function, method, class, interface, type, import, module."
+        ),
+        maxCounterexamples: z11.number().int().min(0).max(20).default(5).describe(
+          "Maximum number of counterexamples to include per equation. Counterexamples show elements where the equation fails."
+        ),
+        sampleSize: z11.number().int().min(10).max(500).default(100).describe(
+          "Number of seed elements per kind to sample. Higher = more accurate but slower."
+        )
+      }),
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async (params) => {
+      try {
+        const opts = {
+          maxDepth: params.maxDepth,
+          minCoverage: params.minCoverage,
+          maxResults: params.maxResults,
+          maxCounterexamples: params.maxCounterexamples,
+          sampleSize: params.sampleSize
+        };
+        if (params.arrowKinds) {
+          opts.arrowKinds = params.arrowKinds;
+        }
+        if (params.elementKinds) {
+          opts.elementKinds = params.elementKinds;
+        }
+        const results = mineEquations(store2, opts);
+        if (results.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    message: "No path equations found at the specified coverage threshold.",
+                    suggestion: "Try lowering minCoverage to discover near-invariants, or increasing maxDepth to find longer-path equations."
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        const formatted = results.map((r) => ({
+          equation: `${r.lhsPath.join(" \u2192 ")} = ${r.rhsPath.join(" \u2192 ")}`,
+          domainKind: r.domainKind,
+          coverage: `${(r.coverage * 100).toFixed(1)}%`,
+          support: r.support,
+          total: r.total,
+          counterexamples: r.counterexamples.length > 0 ? r.counterexamples.map((c) => ({
+            element: `${c.elementName} (${c.elementKind})`,
+            lhsReaches: c.lhsResult,
+            rhsReaches: c.rhsResult
+          })) : void 0
+        }));
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  totalEquations: results.length,
+                  parameters: {
+                    maxDepth: params.maxDepth,
+                    minCoverage: params.minCoverage,
+                    arrowKinds: params.arrowKinds ?? "(all in use)",
+                    elementKinds: params.elementKinds ?? "(defaults)"
+                  },
+                  equations: formatted
+                },
+                null,
+                2
+              )
+            }
+          ]
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
+          isError: true
+        };
+      }
+    }
+  );
+}
+
 // src/index.ts
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
 var ologDir = join4(projectRoot, ".olog");
@@ -3876,10 +4316,10 @@ try {
   store.close();
   process.exit(1);
 }
-var server = new McpServer11(
+var server = new McpServer12(
   { name: "olog-mcp", version: "0.0.1" },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits). The name and module parameters accept JavaScript regex patterns.`,
+    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations). The name and module parameters accept JavaScript regex patterns.`,
     capabilities: { logging: {} }
   }
 );
@@ -3893,6 +4333,7 @@ registerOlogValidate(server, store);
 registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
+registerOlogMineEquations(server, store);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("[olog] MCP server connected on stdio");
