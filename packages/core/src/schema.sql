@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS olog_arr (
   CHECK (kind IN (
     'extends','implements','calls','imports','exports',
     'references','contains','returns','param','typeof',
-    'instanceof','other'
+    'instanceof','definedIn','inModule','memberOf',
+    'callerOf','calleeOf','importsFrom','locatedIn','other'
   )),
   CHECK (json_valid(attrs)),
   FOREIGN KEY (src_id) REFERENCES olog_elem(id) ON DELETE CASCADE,
@@ -63,6 +64,27 @@ CREATE TABLE IF NOT EXISTS olog_violation (
   FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS olog_equation (
+  id               TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  human_message    TEXT NOT NULL,
+  lhs_json         TEXT NOT NULL,
+  rhs_json         TEXT NOT NULL,
+  provenance_json  TEXT,
+  CHECK (json_valid(lhs_json)),
+  CHECK (json_valid(rhs_json))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS olog_constraint (
+  id               TEXT PRIMARY KEY,
+  name             TEXT NOT NULL,
+  kind             TEXT NOT NULL,
+  message          TEXT,
+  config_json      TEXT,
+  provenance_json  TEXT,
+  CHECK (kind IN ('existence','layering','monotonicity','totality'))
+) STRICT;
+
 -- Indexes for query performance
 CREATE INDEX IF NOT EXISTS idx_elem_kind   ON olog_elem(kind);
 CREATE INDEX IF NOT EXISTS idx_elem_name   ON olog_elem(name);
@@ -73,3 +95,5 @@ CREATE INDEX IF NOT EXISTS idx_arr_kind    ON olog_arr(kind);
 CREATE INDEX IF NOT EXISTS idx_attr_elem_id ON olog_attr(elem_id);
 CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id);
 CREATE INDEX IF NOT EXISTS idx_violation_elem_id ON olog_violation(elem_id);
+CREATE INDEX IF NOT EXISTS idx_equation_name ON olog_equation(name);
+CREATE INDEX IF NOT EXISTS idx_constraint_kind ON olog_constraint(kind);

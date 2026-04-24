@@ -2,13 +2,18 @@ import Parser from 'tree-sitter';
 import TS from 'tree-sitter-typescript';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RawElement, RawArrow } from '../ontology.js';
+import type { RawElement, RawArrow, ArrowKind } from '../ontology.js';
 
 /** Format a node position as "startLine:startCol-endLine:endCol" (1-based). */
 function formatSpan(node: Parser.SyntaxNode): string {
   const s = node.startPosition;
   const e = node.endPosition;
   return `${s.row + 1}:${s.column + 1}-${e.row + 1}:${e.column + 1}`;
+}
+
+/** Cast a string to ArrowKind (temporary until schema expansion adds new kinds). */
+function asKind(kind: string): ArrowKind {
+  return kind as ArrowKind;
 }
 
 /**
@@ -151,17 +156,23 @@ export function extractFromFile(
 
     for (const cap of byName.get('import.name') ?? []) {
       const n = cap.node;
-      elements.push({ kind: 'import', name: n.text, module: '', span: formatSpan(n), attrs: {} });
+      const sourceCap = first('import.source');
+      const sourceModule = sourceCap ? sourceCap.node.text : '';
+      elements.push({ kind: 'import', name: n.text, module: '', span: formatSpan(n), attrs: sourceModule ? { sourceModule } : {} });
     }
 
     if (first('import.default')) {
       const n = first('import.default')!.node;
-      elements.push({ kind: 'import', name: n.text, module: '', span: formatSpan(n), attrs: {} });
+      const sourceCap = first('import.source');
+      const sourceModule = sourceCap ? sourceCap.node.text : '';
+      elements.push({ kind: 'import', name: n.text, module: '', span: formatSpan(n), attrs: sourceModule ? { sourceModule } : {} });
     }
 
     if (first('import.namespace')) {
       const n = first('import.namespace')!.node;
-      elements.push({ kind: 'import', name: n.text, module: '', span: formatSpan(n), attrs: {} });
+      const sourceCap = first('import.source');
+      const sourceModule = sourceCap ? sourceCap.node.text : '';
+      elements.push({ kind: 'import', name: n.text, module: '', span: formatSpan(n), attrs: sourceModule ? { sourceModule } : {} });
     }
 
     // import / reexport / require arrows
@@ -172,12 +183,31 @@ export function extractFromFile(
       }
     }
 
+    // importsFrom arrows — from each imported name to source module
+    if (first('import.source')) {
+      const moduleNode = first('import.source')!.node;
+      const moduleStr = moduleNode.text;
+      for (const impCap of byName.get('import.name') ?? []) {
+        arrows.push({ kind: asKind('importsFrom'), srcModule: '', srcName: impCap.node.text, dstModule: moduleStr, dstName: '', attrs: { module: moduleStr } });
+      }
+      if (first('import.default')) {
+        arrows.push({ kind: asKind('importsFrom'), srcModule: '', srcName: first('import.default')!.node.text, dstModule: moduleStr, dstName: '', attrs: { module: moduleStr } });
+      }
+      if (first('import.namespace')) {
+        arrows.push({ kind: asKind('importsFrom'), srcModule: '', srcName: first('import.namespace')!.node.text, dstModule: moduleStr, dstName: '', attrs: { module: moduleStr } });
+      }
+    }
+
     // call arrow — direct function call: foo()
     if (first('call.callee')) {
       const calleeNode = first('call.callee')!.node;
       const callNode = first('call')?.node ?? first('call.member')?.node;
       const fnName = callNode ? findContainingFunctionName(callNode) : null;
       arrows.push({ kind: 'calls', srcModule: '', srcName: fnName ?? '', dstModule: '', dstName: calleeNode.text, attrs: {} });
+      if (fnName) {
+        arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: fnName, dstModule: '', dstName: calleeNode.text, attrs: {} });
+        arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: calleeNode.text, dstModule: '', dstName: fnName, attrs: {} });
+      }
     }
 
     // call arrow — method call: obj.method()
@@ -186,6 +216,10 @@ export function extractFromFile(
       const callNode = first('call.member')?.node ?? first('call')?.node;
       const fnName = callNode ? findContainingFunctionName(callNode) : null;
       arrows.push({ kind: 'calls', srcModule: '', srcName: fnName ?? '', dstModule: '', dstName: methodNode.text, attrs: {} });
+      if (fnName) {
+        arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: fnName, dstModule: '', dstName: methodNode.text, attrs: {} });
+        arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: methodNode.text, dstModule: '', dstName: fnName, attrs: {} });
+      }
     }
 
     // new expression arrow: new Foo()
@@ -194,6 +228,17 @@ export function extractFromFile(
       const newNode = first('new')?.node;
       const fnName = newNode ? findContainingFunctionName(newNode) : null;
       arrows.push({ kind: 'calls', srcModule: '', srcName: fnName ?? '', dstModule: '', dstName: ctorNode.text, attrs: {} });
+      if (fnName) {
+        arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: fnName, dstModule: '', dstName: ctorNode.text, attrs: {} });
+        arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: ctorNode.text, dstModule: '', dstName: fnName, attrs: {} });
+      }
+    }
+
+    // memberOf arrow — method inside class
+    if (first('memberof.method') && first('memberof.class')) {
+      const methodNode = first('memberof.method')!.node;
+      const classNode = first('memberof.class')!.node;
+      arrows.push({ kind: asKind('memberOf'), srcModule: '', srcName: methodNode.text, dstModule: '', dstName: classNode.text, attrs: {} });
     }
   }
 

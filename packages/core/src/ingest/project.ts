@@ -94,6 +94,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
   }> = [];
 
   let filesProcessed = 0;
+  const createdModuleIds = new Set<string>();
 
   for (const absolutePath of files) {
     let stats;
@@ -145,7 +146,9 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
       attrs: '{}',
     });
 
-    const nameToId = new Map<string, string>();
+    const nameToId = new Map<string, string[]>();
+    const seenArrowIds = new Set<string>();
+    const elementIds: Array<{ id: string; kind: string }> = [];
 
     for (const rawElem of extracted.elements) {
       const coords = parseTreeSitterSpan(rawElem.span);
@@ -156,7 +159,10 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
         : rawElem.span;
 
       const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
-      nameToId.set(rawElem.name, id);
+      const existing = nameToId.get(rawElem.name) ?? [];
+      existing.push(id);
+      nameToId.set(rawElem.name, existing);
+      elementIds.push({ id, kind: rawElem.kind });
 
       elems.push({
         id,
@@ -168,27 +174,93 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
       });
 
       if (rawElem.kind !== 'file') {
-        arrs.push({
-          id: arrowId(fileId, 'contains', id),
-          kind: 'contains',
-          src_id: fileId,
-          dst_id: id,
-          attrs: '{}',
-        });
+        const aid = arrowId(fileId, 'contains', id);
+        if (!seenArrowIds.has(aid)) {
+          seenArrowIds.add(aid);
+          arrs.push({
+            id: aid,
+            kind: 'contains',
+            src_id: fileId,
+            dst_id: id,
+            attrs: '{}',
+          });
+        }
+      }
+    }
+
+    // definedIn arrows — symbol definitions to their module (file)
+    const definitionKinds = new Set(['function', 'class', 'interface', 'type', 'enum', 'method']);
+    for (const { id, kind } of elementIds) {
+      if (definitionKinds.has(kind)) {
+        const aid = arrowId(id, 'definedIn', fileId);
+        if (!seenArrowIds.has(aid)) {
+          seenArrowIds.add(aid);
+          arrs.push({ id: aid, kind: 'definedIn', src_id: id, dst_id: fileId, attrs: '{}' });
+        }
+      }
+    }
+
+    // inModule arrows — every element belongs to its module (file)
+    for (const { id } of elementIds) {
+      const aid = arrowId(id, 'inModule', fileId);
+      if (!seenArrowIds.has(aid)) {
+        seenArrowIds.add(aid);
+        arrs.push({ id: aid, kind: 'inModule', src_id: id, dst_id: fileId, attrs: '{}' });
+      }
+    }
+
+    // locatedIn arrows — every element is located in its containing file
+    for (const { id } of elementIds) {
+      const aid = arrowId(id, 'locatedIn', fileId);
+      if (!seenArrowIds.has(aid)) {
+        seenArrowIds.add(aid);
+        arrs.push({ id: aid, kind: 'locatedIn', src_id: id, dst_id: fileId, attrs: '{}' });
       }
     }
 
     for (const rawArrow of extracted.arrows) {
-      const srcId = nameToId.get(rawArrow.srcName);
-      const dstId = nameToId.get(rawArrow.dstName);
-      if (srcId && dstId) {
-        arrs.push({
-          id: arrowId(srcId, rawArrow.kind, dstId),
-          kind: rawArrow.kind,
-          src_id: srcId,
-          dst_id: dstId,
-          attrs: JSON.stringify(rawArrow.attrs),
-        });
+      const arrowKindStr = rawArrow.kind as string;
+
+      if (arrowKindStr === 'importsFrom') {
+        const srcId = (nameToId.get(rawArrow.srcName) ?? [])[0];
+        const moduleStr = (rawArrow.attrs as Record<string, string>).module ?? rawArrow.dstModule;
+        const moduleId = `module:${moduleStr}`;
+
+        if (srcId) {
+          if (!createdModuleIds.has(moduleId)) {
+            createdModuleIds.add(moduleId);
+            elems.push({
+              id: moduleId,
+              kind: 'module',
+              name: moduleStr,
+              module: moduleStr,
+              span: null,
+              attrs: '{}',
+            });
+          }
+
+          const aid = arrowId(srcId, 'importsFrom', moduleId);
+          if (!seenArrowIds.has(aid)) {
+            seenArrowIds.add(aid);
+            arrs.push({ id: aid, kind: 'importsFrom', src_id: srcId, dst_id: moduleId, attrs: JSON.stringify(rawArrow.attrs) });
+          }
+        }
+      } else {
+        const srcId = (nameToId.get(rawArrow.srcName) ?? [])[0];
+        const dstId = (nameToId.get(rawArrow.dstName) ?? [])[0];
+        if (srcId && dstId) {
+          const aid = arrowId(srcId, rawArrow.kind, dstId);
+          if (!seenArrowIds.has(aid)) {
+            seenArrowIds.add(aid);
+            arrs.push({
+              id: aid,
+              kind: rawArrow.kind,
+              src_id: srcId,
+              dst_id: dstId,
+              attrs: JSON.stringify(rawArrow.attrs),
+            });
+          }
+        }
       }
     }
 
@@ -198,13 +270,38 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
         const line = coords?.startLine ?? 1;
         const col = coords?.startCol ?? 1;
         const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
-        arrs.push({
-          id: arrowId(fileId, 'imports', id),
-          kind: 'imports',
-          src_id: fileId,
-          dst_id: id,
-          attrs: '{}',
-        });
+        const aid = arrowId(fileId, 'imports', id);
+        if (!seenArrowIds.has(aid)) {
+          seenArrowIds.add(aid);
+          arrs.push({
+            id: aid,
+            kind: 'imports',
+            src_id: fileId,
+            dst_id: id,
+            attrs: '{}',
+          });
+        }
+
+        const sourceModule = (rawElem.attrs as Record<string, string>).sourceModule;
+        if (sourceModule) {
+          const moduleId = `module:${sourceModule}`;
+          if (!createdModuleIds.has(moduleId)) {
+            createdModuleIds.add(moduleId);
+            elems.push({
+              id: moduleId,
+              kind: 'module',
+              name: sourceModule,
+              module: sourceModule,
+              span: null,
+              attrs: '{}',
+            });
+          }
+          const ifAid = arrowId(id, 'importsFrom', moduleId);
+          if (!seenArrowIds.has(ifAid)) {
+            seenArrowIds.add(ifAid);
+            arrs.push({ id: ifAid, kind: 'importsFrom', src_id: id, dst_id: moduleId, attrs: JSON.stringify({ module: sourceModule }) });
+          }
+        }
       }
     }
 

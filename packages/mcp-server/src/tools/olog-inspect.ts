@@ -33,11 +33,25 @@ export function registerOlogInspect(server: McpServer, store: OlogStore): void {
         const outgoing = store.outgoing(id);
         const incoming = store.incoming(id);
 
+        const prov = store.getProvenance(id);
+        const provenance = prov ? [prov] : [];
+
+        const equations = store.getEquationsForObject(id);
+
+        const allConstraints = store.getConstraints();
+        const elemKind = element.kind;
+        const elemModule = element.module ?? '';
+        const constraints = allConstraints.filter(c => {
+          if (!c.config || Object.keys(c.config).length === 0) return true;
+          const configStr = JSON.stringify(c.config);
+          return configStr.includes(elemKind) || configStr.includes(elemModule);
+        });
+
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ element, outgoing, incoming }, null, 2),
+              text: JSON.stringify({ element, outgoing, incoming, provenance, equations, constraints }, null, 2),
             },
           ],
         };

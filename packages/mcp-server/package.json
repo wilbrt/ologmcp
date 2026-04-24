@@ -23,7 +23,7 @@
     "tsup": "^8.3.5"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && cp ../core/src/schema.sql dist/ && rm -rf dist/queries && cp -r ../core/src/ingest/queries dist/queries",
     "typecheck": "tsc --noEmit",
     "test": "echo \"No tests yet\""
   }

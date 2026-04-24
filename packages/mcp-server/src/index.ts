@@ -7,6 +7,10 @@ import { registerOlogQuery } from './tools/olog-query.js';
 import { registerOlogInspect } from './tools/olog-inspect.js';
 import { registerOlogDump } from './tools/olog-dump.js';
 import { registerOlogReindex } from './tools/olog-reindex.js';
+import { registerOlogApply } from './tools/olog-apply.js';
+import { registerOlogPlan } from './tools/olog-plan.js';
+import { registerOlogValidate } from './tools/olog-validate.js';
+import { registerOlogProposeSchema } from './tools/olog-propose-schema.js';
 
 const projectRoot = process.env.OLOG_ROOT || process.cwd();
 
@@ -41,7 +45,7 @@ try {
 const server = new McpServer(
   { name: 'olog-mcp', version: '0.0.1' },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Use olog_query to search for elements by kind/name/module. Use olog_inspect to get details and connections for a specific element. Use olog_dump for an overview. Use olog_reindex to refresh after code changes. The name and module parameters in olog_query accept JavaScript regex patterns.`,
+    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans). The name and module parameters accept JavaScript regex patterns.`,
     capabilities: { logging: {} },
   }
 );
@@ -50,6 +54,10 @@ registerOlogQuery(server, store);
 registerOlogInspect(server, store);
 registerOlogDump(server, store);
 registerOlogReindex(server, store, projectRoot);
+registerOlogProposeSchema(server, store);
+registerOlogPlan(server, store);
+registerOlogValidate(server, store);
+registerOlogApply(server, store);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

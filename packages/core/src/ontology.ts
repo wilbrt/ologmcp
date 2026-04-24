@@ -38,6 +38,13 @@ export type ArrowKind =
   | 'param'
   | 'typeof'
   | 'instanceof'
+  | 'definedIn'
+  | 'inModule'
+  | 'memberOf'
+  | 'callerOf'
+  | 'calleeOf'
+  | 'importsFrom'
+  | 'locatedIn'
   | 'other';
 
 /**
@@ -128,4 +135,104 @@ export interface RawArrow {
   dstModule: string;
   dstName: string;
   attrs: Record<string, unknown>;
+}
+
+export type ConfidenceLevel = 'resolved' | 'unresolved' | 'tentative';
+
+/**
+ * A path through the olog graph: a sequence of arrows from src to tgt.
+ */
+export interface Path {
+  src: string;
+  tgt: string;
+  arrows: string[];
+}
+
+/**
+ * A path equation asserting that two paths are equivalent.
+ */
+export interface PathEquation {
+  id: string;
+  name: string;
+  humanMessage: string;
+  lhs: Path;
+  rhs: Path;
+  provenance: Provenance | null;
+}
+
+export type ConstraintKind = 'existence' | 'layering' | 'monotonicity' | 'totality';
+
+/**
+ * An integrity constraint on the olog graph.
+ */
+export interface IntegrityConstraint {
+  id: string;
+  name: string;
+  kind: ConstraintKind;
+  message: string | null;
+  config: Record<string, unknown>;
+  provenance: Provenance | null;
+}
+
+/**
+ * Provenance information for an element, arrow, equation, or constraint.
+ */
+export interface Provenance {
+  source: string;
+  commitSha: string;
+  ingestedAt: number;
+  confidence: ConfidenceLevel;
+}
+
+/**
+ * A proposed change to the olog schema.
+ */
+export interface SchemaProposal {
+  description: string;
+  operations: PlanOperation[];
+}
+
+/**
+ * A single operation within a plan — rename, move, addSymbol, removeSymbol, addArrow, or removeArrow.
+ */
+export type PlanOperation =
+  | { kind: 'rename'; target: string; newName: string }
+  | { kind: 'move'; target: string; newModule: string }
+  | { kind: 'addSymbol'; module: string; name: string; symbolKind: string }
+  | { kind: 'removeSymbol'; target: string }
+  | { kind: 'addArrow'; arrowKind: string; src: string; dst: string }
+  | { kind: 'removeArrow'; arrowId: string };
+
+export interface Plan {
+  operations: PlanOperation[];
+  hash: string;
+  rationale: string;
+  invariants: {
+    equations: PathEquation[];
+    constraints: IntegrityConstraint[];
+  };
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * File edit instruction with position and replacement text.
+ */
+export interface ChangeInstruction {
+  path: string;
+  line: number;
+  column: number;
+  oldText: string;
+  newText: string;
+}
+
+export interface ApplyResult {
+  applied: number;
+  skipped: number;
+  errors: string[];
+  changes: ChangeInstruction[];
 }

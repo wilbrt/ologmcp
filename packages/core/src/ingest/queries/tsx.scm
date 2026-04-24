@@ -29,6 +29,13 @@
 
 (abstract_method_signature name: (_) @method.name) @method.abstract
 
+;; --- method inside class (for memberOf arrow) -----------------------------
+(class_declaration
+  name: (type_identifier) @memberof.class
+  body: (class_body
+    (method_definition
+      name: (_) @memberof.method))) @memberof
+
 ;; --- class_declaration ----------------------------------------------------
 (class_declaration
   name: (type_identifier) @class.name
