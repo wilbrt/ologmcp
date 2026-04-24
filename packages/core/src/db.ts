@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { DomainSessionStore } from './domain/session.js';
 import type {
   OlogElem,
   OlogArr,
@@ -65,6 +66,7 @@ const __dirname = dirname(__filename);
 
 export class OlogStore {
   private db: Database.Database;
+  private readonly _sessions: DomainSessionStore;
   private readonly getElemStmt: Database.Statement;
   private readonly outgoingStmt: Database.Statement;
   private readonly incomingStmt: Database.Statement;
@@ -113,7 +115,27 @@ export class OlogStore {
     // Migrate: add confidence column to olog_prov if missing
     const provCols = this.db.prepare("PRAGMA table_info(olog_prov)").all() as Array<{ name: string }>;
     if (!provCols.some(c => c.name === 'confidence')) {
-      this.db.exec("ALTER TABLE olog_prov ADD COLUMN confidence TEXT NOT NULL DEFAULT 'resolved' CHECK (confidence IN ('resolved','unresolved','tentative'))");
+      this.db.exec("ALTER TABLE olog_prov ADD COLUMN confidence TEXT NOT NULL DEFAULT 'resolved'");
+    }
+
+    // Migrate: remove CHECK (source IN ...) from olog_prov to allow new source values like 'llm'
+    const provTableDef = (this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='olog_prov'"
+    ).get() as { sql: string } | undefined)?.sql ?? '';
+    if (provTableDef.includes('CHECK (source IN')) {
+      this.db.exec(`CREATE TABLE olog_prov_new (
+        elem_id      TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        commit_sha   TEXT NOT NULL,
+        ingested_at  INTEGER NOT NULL,
+        confidence   TEXT NOT NULL DEFAULT 'resolved',
+        PRIMARY KEY (elem_id, source, commit_sha),
+        FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
+      ) STRICT, WITHOUT ROWID`);
+      this.db.exec('INSERT INTO olog_prov_new SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov');
+      this.db.exec('DROP TABLE olog_prov');
+      this.db.exec('ALTER TABLE olog_prov_new RENAME TO olog_prov');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)');
     }
 
     this.getElemStmt = this.db.prepare(
@@ -155,6 +177,12 @@ export class OlogStore {
     this.hasArrowKindStmt = this.db.prepare(
       "SELECT 1 FROM olog_arr WHERE kind = ? LIMIT 1"
     );
+
+    this._sessions = new DomainSessionStore(this.db);
+  }
+
+  get sessions(): DomainSessionStore {
+    return this._sessions;
   }
 
   commitSha(): string {
@@ -181,16 +209,17 @@ export class OlogStore {
     );
 
     const tx = this.db.transaction(() => {
+      // Preserve all non-tree-sitter elements (manual, llm, etc.) across re-indexing
       const manualElems = this.db.prepare(
-        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual'"
+        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter'"
       ).all() as ElemRow[];
 
       const manualArrs = this.db.prepare(
-        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual')"
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter')"
       ).all() as ArrRow[];
 
       const manualProvs = this.db.prepare(
-        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source = 'manual'"
+        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source != 'tree-sitter'"
       ).all() as ProvRow[];
 
       this.db.prepare("DELETE FROM olog_elem").run();

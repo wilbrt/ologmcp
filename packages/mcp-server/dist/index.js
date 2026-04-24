@@ -224,25 +224,20 @@ var OlogStore = class {
       "SELECT sql FROM sqlite_master WHERE type='table' AND name='olog_prov'"
     ).get()?.sql ?? "";
     if (provTableDef.includes("CHECK (source IN")) {
-      this.db.exec(`
-        CREATE TABLE olog_prov_new (
-          elem_id      TEXT NOT NULL,
-          source       TEXT NOT NULL,
-          commit_sha   TEXT NOT NULL,
-          ingested_at  INTEGER NOT NULL,
-          confidence   TEXT NOT NULL DEFAULT 'resolved',
-          PRIMARY KEY (elem_id, source, commit_sha),
-          FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
-        ) STRICT, WITHOUT ROWID
-      `);
-      this.db.exec(
-        "INSERT INTO olog_prov_new SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov"
-      );
+      this.db.exec(`CREATE TABLE olog_prov_new (
+        elem_id      TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        commit_sha   TEXT NOT NULL,
+        ingested_at  INTEGER NOT NULL,
+        confidence   TEXT NOT NULL DEFAULT 'resolved',
+        PRIMARY KEY (elem_id, source, commit_sha),
+        FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
+      ) STRICT, WITHOUT ROWID`);
+      this.db.exec("INSERT INTO olog_prov_new SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov");
       this.db.exec("DROP TABLE olog_prov");
       this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
     }
-    this._sessions = new DomainSessionStore(this.db);
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
     );
@@ -282,6 +277,7 @@ var OlogStore = class {
     this.hasArrowKindStmt = this.db.prepare(
       "SELECT 1 FROM olog_arr WHERE kind = ? LIMIT 1"
     );
+    this._sessions = new DomainSessionStore(this.db);
   }
   get sessions() {
     return this._sessions;
@@ -308,13 +304,13 @@ var OlogStore = class {
     );
     const tx = this.db.transaction(() => {
       const manualElems = this.db.prepare(
-        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual'"
+        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter'"
       ).all();
       const manualArrs = this.db.prepare(
-        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual')"
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter')"
       ).all();
       const manualProvs = this.db.prepare(
-        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source = 'manual'"
+        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source != 'tree-sitter'"
       ).all();
       this.db.prepare("DELETE FROM olog_elem").run();
       for (const e of elems) {
@@ -642,6 +638,33 @@ var OlogStore = class {
   hasArrowKind(kind) {
     const row = this.hasArrowKindStmt.get(kind);
     return !!row;
+  }
+  /**
+   * Get all distinct arrow kinds where either the source or destination element
+   * is of one of the given element kinds.
+   *
+   * This is useful for mining: when you want to restrict path enumeration to
+   * only arrow kinds that connect to domain objects (or any other element kind),
+   * this method returns the relevant arrow kinds.
+   *
+   * @param elementKinds - Array of element kinds to filter by (e.g., ['domain'])
+   * @returns Sorted array of distinct ArrowKind values
+   */
+  getArrowKindsForElementKinds(elementKinds) {
+    if (elementKinds.length === 0) return [];
+    const placeholders = elementKinds.map(() => "?").join(",");
+    const sql = `
+      SELECT DISTINCT a.kind
+      FROM olog_arr a
+      INNER JOIN olog_elem src ON a.src_id = src.id
+      INNER JOIN olog_elem dst ON a.dst_id = dst.id
+      WHERE src.kind IN (${placeholders})
+         OR dst.kind IN (${placeholders})
+      ORDER BY a.kind
+    `;
+    const params = [...elementKinds, ...elementKinds];
+    const rows = this.db.prepare(sql).all(...params);
+    return rows.map((r) => r.kind);
   }
   close() {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
@@ -3193,7 +3216,12 @@ var DEFAULT_ELEMENT_KINDS = [
 ];
 function mineEquations(store2, options = {}) {
   const opts = { ...DEFAULT_MINING_OPTIONS, ...options };
-  const arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store2.hasArrowKind(k));
+  let arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store2.hasArrowKind(k));
+  if (opts.touchingElementKinds && opts.touchingElementKinds.length > 0) {
+    const touchingKinds = store2.getArrowKindsForElementKinds(opts.touchingElementKinds);
+    const touchingSet = new Set(touchingKinds);
+    arrowKinds = arrowKinds.filter((k) => touchingSet.has(k));
+  }
   const elementKinds = opts.elementKinds ?? DEFAULT_ELEMENT_KINDS;
   const paths = enumeratePaths(arrowKinds, opts.maxDepth);
   annotatePathKinds(paths, store2, elementKinds, opts.sampleSize);
@@ -4602,7 +4630,10 @@ function registerOlogMineEquations(server2, store2) {
           "Restrict to these arrow kinds. Default: all arrow kinds in use."
         ),
         elementKinds: z11.array(z11.string()).optional().describe(
-          "Restrict seed elements to these kinds. Default: function, method, class, interface, type, import, module."
+          "Restrict seed elements to these kinds. Default: function, method, class, interface, type, import, module, domain, property."
+        ),
+        touchingElementKinds: z11.array(z11.string()).optional().describe(
+          'Restrict to arrow kinds that touch elements of these kinds (i.e., arrows whose source or destination element is of one of these kinds). Useful for focusing mining on domain-relevant arrows \u2014 e.g., passing ["domain"] will only consider arrows that connect to/from domain objects. Intersected with arrowKinds if both are specified.'
         ),
         maxCounterexamples: z11.number().int().min(0).max(20).default(5).describe(
           "Maximum number of counterexamples to include per equation. Counterexamples show elements where the equation fails."
@@ -4627,6 +4658,9 @@ function registerOlogMineEquations(server2, store2) {
         }
         if (params.elementKinds) {
           opts.elementKinds = params.elementKinds;
+        }
+        if (params.touchingElementKinds) {
+          opts.touchingElementKinds = params.touchingElementKinds;
         }
         const results = mineEquations(store2, opts);
         if (results.length === 0) {
@@ -4669,7 +4703,8 @@ function registerOlogMineEquations(server2, store2) {
                     maxDepth: params.maxDepth,
                     minCoverage: params.minCoverage,
                     arrowKinds: params.arrowKinds ?? "(all in use)",
-                    elementKinds: params.elementKinds ?? "(defaults)"
+                    elementKinds: params.elementKinds ?? "(defaults)",
+                    touchingElementKinds: params.touchingElementKinds ?? "(all)"
                   },
                   equations: formatted
                 },
@@ -4693,7 +4728,6 @@ function registerOlogMineEquations(server2, store2) {
 // src/tools/olog-domain-discover.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z12 } from "zod";
-import "crypto";
 function registerOlogDomainDiscover(server2, store2) {
   server2.registerTool(
     "olog_domain_discover",
