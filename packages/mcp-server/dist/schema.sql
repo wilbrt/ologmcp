@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS olog_arr (
   src_id TEXT NOT NULL,
   dst_id TEXT NOT NULL,
   attrs  TEXT NOT NULL DEFAULT '{}',
-  CHECK (kind IN (
+CHECK (kind IN (
     'extends','implements','calls','imports','exports',
     'references','contains','returns','param','typeof',
     'instanceof','definedIn','inModule','memberOf',

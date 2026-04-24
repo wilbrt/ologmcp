@@ -41,3 +41,15 @@ export {
   ingestProject,
   reindexProject,
 } from './ingest/project.js';
+export {
+  renderPlan,
+  renderAndApplyPlan,
+  type RenderResult,
+  type RenderAndApplyResult,
+  type SourceEdit,
+  type FileSnapshot,
+  applyEditsToString,
+  applySourceEdits,
+  rollback,
+  offsetAt,
+} from './render/index.js';

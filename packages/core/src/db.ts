@@ -180,6 +180,18 @@ export class OlogStore {
     );
 
     const tx = this.db.transaction(() => {
+      const manualElems = this.db.prepare(
+        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual'"
+      ).all() as ElemRow[];
+
+      const manualArrs = this.db.prepare(
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual')"
+      ).all() as ArrRow[];
+
+      const manualProvs = this.db.prepare(
+        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source = 'manual'"
+      ).all() as ProvRow[];
+
       this.db.prepare("DELETE FROM olog_elem").run();
 
       for (const e of elems) {
@@ -189,6 +201,18 @@ export class OlogStore {
 
       for (const a of arrs) {
         insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+      }
+
+      for (const e of manualElems) {
+        this.db.prepare(
+          "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
+      }
+      for (const a of manualArrs) {
+        insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+      }
+      for (const p of manualProvs) {
+        this.insertProvStmt.run(p.elem_id, p.source, p.commit_sha, p.ingested_at, p.confidence ?? 'resolved');
       }
 
       updateMeta.run(sha);

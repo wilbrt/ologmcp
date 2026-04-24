@@ -19,6 +19,39 @@ const IGNORE_PATTERNS = [
 
 const ONE_MB = 1024 * 1024;
 
+const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
+
+function resolveImportSpecifier(
+  specifier: string,
+  importingFileRelativePath: string,
+): string {
+  if (
+    !specifier.startsWith('./') &&
+    !specifier.startsWith('../')
+  ) {
+    return specifier;
+  }
+
+  const importingDir = dirname(importingFileRelativePath);
+  const joined = importingDir + '/' + specifier.replace(/^\.\//, '');
+  const normalized = normalizePath(joined);
+
+  return normalized.replace(/\.(js|cjs|mjs|jsx)$/, '.ts');
+}
+
+function normalizePath(path: string): string {
+  const parts = path.split('/');
+  const result: string[] = [];
+  for (const part of parts) {
+    if (part === '..') {
+      result.pop();
+    } else if (part !== '.' && part !== '') {
+      result.push(part);
+    }
+  }
+  return result.join('/');
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const TS_QUERY_PATH = resolve(__dirname, 'queries', 'ts.scm');
@@ -223,8 +256,9 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
 
       if (arrowKindStr === 'importsFrom') {
         const srcId = (nameToId.get(rawArrow.srcName) ?? [])[0];
-        const moduleStr = (rawArrow.attrs as Record<string, string>).module ?? rawArrow.dstModule;
-        const moduleId = `module:${moduleStr}`;
+        const rawModule = (rawArrow.attrs as Record<string, string>).module ?? rawArrow.dstModule;
+        const resolvedModule = resolveImportSpecifier(rawModule, relativePath);
+        const moduleId = `module:${resolvedModule}`;
 
         if (srcId) {
           if (!createdModuleIds.has(moduleId)) {
@@ -232,8 +266,8 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
             elems.push({
               id: moduleId,
               kind: 'module',
-              name: moduleStr,
-              module: moduleStr,
+              name: resolvedModule,
+              module: resolvedModule,
               span: null,
               attrs: '{}',
             });
@@ -284,14 +318,15 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
 
         const sourceModule = (rawElem.attrs as Record<string, string>).sourceModule;
         if (sourceModule) {
-          const moduleId = `module:${sourceModule}`;
+          const resolvedSourceModule = resolveImportSpecifier(sourceModule, relativePath);
+          const moduleId = `module:${resolvedSourceModule}`;
           if (!createdModuleIds.has(moduleId)) {
             createdModuleIds.add(moduleId);
             elems.push({
               id: moduleId,
               kind: 'module',
-              name: sourceModule,
-              module: sourceModule,
+              name: resolvedSourceModule,
+              module: resolvedSourceModule,
               span: null,
               attrs: '{}',
             });
@@ -299,7 +334,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
           const ifAid = arrowId(id, 'importsFrom', moduleId);
           if (!seenArrowIds.has(ifAid)) {
             seenArrowIds.add(ifAid);
-            arrs.push({ id: ifAid, kind: 'importsFrom', src_id: id, dst_id: moduleId, attrs: JSON.stringify({ module: sourceModule }) });
+            arrs.push({ id: ifAid, kind: 'importsFrom', src_id: id, dst_id: moduleId, attrs: JSON.stringify({ module: resolvedSourceModule }) });
           }
         }
       }

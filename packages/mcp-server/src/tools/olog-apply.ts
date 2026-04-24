@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, type PlanOperation } from '@olog/core';
+import { OlogStore, type PlanOperation, renderPlan, applySourceEdits, rollback } from '@olog/core';
+import { reindexProject } from '@olog/core';
 import { planStore } from './olog-plan.js';
 
 const planOperationSchema = z.union([
@@ -18,15 +19,16 @@ const planSchema = z.object({
   rationale: z.string(),
 });
 
-export function registerOlogApply(server: McpServer, store: OlogStore): void {
+export function registerOlogApply(server: McpServer, store: OlogStore, projectRoot?: string): void {
   server.registerTool(
     'olog_apply',
     {
       description:
-        'Apply a validated plan to the olog graph. The plan must have been created by olog_plan and the hash must match. Returns a summary of applied operations and change instructions.',
+        'Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match.',
       inputSchema: z.object({
         plan: planSchema.describe('The plan object to apply, including its hash.'),
         planHash: z.string().describe('The expected hash of the plan. Must match plan.hash.'),
+        render: z.boolean().default(false).describe('When true, also render source-file edits and apply them to disk, then re-ingest.'),
       }),
       annotations: {
         readOnlyHint: false,
@@ -34,7 +36,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore): void {
         destructiveHint: false,
       },
     },
-    async ({ plan, planHash }) => {
+    async ({ plan, planHash, render }) => {
       try {
         const storedPlan = planStore.get(planHash);
         if (!storedPlan) {
@@ -61,17 +63,123 @@ export function registerOlogApply(server: McpServer, store: OlogStore): void {
 
         const result = store.applyPlan(plan.operations as unknown as PlanOperation[]);
 
-        if (result.errors.length > 0) {
+        if (!render || !projectRoot) {
+          if (result.errors.length > 0) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify({ ok: false, reason: result.errors.join('; ') }, null, 2),
+                },
+              ],
+            };
+          }
+
           return {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ ok: false, reason: result.errors.join('; ') }, null, 2),
+                text: JSON.stringify(
+                  {
+                    ok: true,
+                    summary: `Applied ${result.applied} operations, skipped ${result.skipped}`,
+                    changes: result.changes,
+                  },
+                  null,
+                  2
+                ),
               },
             ],
           };
         }
 
+        // Render mode: compute source edits and apply them
+        const renderResult = renderPlan(store, plan.operations as unknown as PlanOperation[], projectRoot);
+
+        if (renderResult.edits.length > 0) {
+          const applyResult = await applySourceEdits(renderResult.edits, projectRoot);
+
+          if (applyResult.errors.length > 0) {
+            // Roll back
+            await rollback(applyResult.snapshots, projectRoot);
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    {
+                      ok: false,
+                      reason: 'Source edit errors, rolled back',
+                      dbResult: result,
+                      editErrors: applyResult.errors,
+                      renderWarnings: renderResult.warnings,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
+          // Re-ingest to verify
+          try {
+            reindexProject(projectRoot, store);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    {
+                      ok: true,
+                      summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
+                      dbChanges: result.changes,
+                      sourceEdits: renderResult.edits.map(e => ({
+                        file: e.filePath,
+                        label: e.label,
+                        oldText: e.oldText,
+                        newText: e.newText,
+                      })),
+                      warnings: renderResult.warnings,
+                      reingestWarning: `Re-ingest failed: ${msg}`,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    ok: true,
+                    summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
+                    dbChanges: result.changes,
+                    sourceEdits: renderResult.edits.map(e => ({
+                      file: e.filePath,
+                      label: e.label,
+                      oldText: e.oldText,
+                      newText: e.newText,
+                    })),
+                    warnings: renderResult.warnings,
+                    affectedFiles: applyResult.affectedFiles,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        // No source edits needed
         return {
           content: [
             {
@@ -79,8 +187,9 @@ export function registerOlogApply(server: McpServer, store: OlogStore): void {
               text: JSON.stringify(
                 {
                   ok: true,
-                  summary: `Applied ${result.applied} operations, skipped ${result.skipped}`,
-                  changes: result.changes,
+                  summary: `Applied ${result.applied} DB operations (no source edits needed)`,
+                  dbChanges: result.changes,
+                  warnings: renderResult.warnings,
                 },
                 null,
                 2

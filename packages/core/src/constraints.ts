@@ -223,6 +223,16 @@ export function evaluatePathEquations(
   return { valid: violations.length === 0, violations };
 }
 
+function isSchemaElement(elem: OlogElem): string | null {
+  const schemaKind = (elem.attrs as Record<string, unknown> | null)?.schemaKind;
+  if (typeof schemaKind === 'string') return schemaKind;
+  if (elem.kind === 'other' && elem.module === null && elem.span === null) {
+    const match = elem.name.match(/^(?:a|an)\s+(\S+)/);
+    if (match?.[1]) return match[1].toLowerCase();
+  }
+  return null;
+}
+
 export function evaluateEquation(
   eq: PathEquation,
   store: OlogStore,
@@ -245,6 +255,55 @@ export function evaluateEquation(
     };
   }
 
+  const lhsSchemaKind = isSchemaElement(lhsSrc);
+  if (lhsSchemaKind) {
+    return evaluateSchemaEquation(eq, store, lhsSchemaKind);
+  }
+
+  return evaluateConcreteEquation(eq, store, lhsSrc.id);
+}
+
+function evaluateSchemaEquation(
+  eq: PathEquation,
+  store: OlogStore,
+  schemaKind: string,
+): { valid: boolean; involved: string[]; message: string } {
+  const concreteElems = store.queryElements({ kind: schemaKind, limit: 50000 });
+  if (concreteElems.length === 0) {
+    return {
+      valid: true,
+      involved: [],
+      message: `Equation "${eq.name}": no concrete elements of kind "${schemaKind}" found; skipping schema-level check`,
+    };
+  }
+
+  const allInvolved: string[] = [];
+  const allMessages: string[] = [];
+
+  for (const elem of concreteElems) {
+    const result = evaluateConcreteEquation(eq, store, elem.id);
+    if (!result.valid) {
+      allInvolved.push(...result.involved);
+      allMessages.push(`  at "${elem.name}" (${elem.module ?? 'unknown'}): ${result.message}`);
+    }
+  }
+
+  if (allMessages.length === 0) {
+    return { valid: true, involved: [], message: '' };
+  }
+
+  return {
+    valid: false,
+    involved: [...new Set(allInvolved)],
+    message: `Equation "${eq.name}" violated for kind "${schemaKind}":\n${allMessages.join('\n')}`,
+  };
+}
+
+function evaluateConcreteEquation(
+  eq: PathEquation,
+  store: OlogStore,
+  startId: string,
+): { valid: boolean; involved: string[]; message: string } {
   const lhsSteps = eq.lhs.arrows.map((kind) => ({
     kind,
     direction: 'out' as const,
@@ -254,8 +313,8 @@ export function evaluateEquation(
     direction: 'out' as const,
   }));
 
-  const lhsReached = followPath(store, eq.lhs.src, lhsSteps);
-  const rhsReached = followPath(store, eq.rhs.src, rhsSteps);
+  const lhsReached = followPath(store, startId, lhsSteps);
+  const rhsReached = followPath(store, startId, rhsSteps);
 
   const lhsIds = new Set(lhsReached.map((e) => e.id));
   const rhsIds = new Set(rhsReached.map((e) => e.id));
@@ -275,12 +334,12 @@ export function evaluateEquation(
     .filter((e) => !lhsIds.has(e.id))
     .map((e) => e.name);
 
-  let message = `Equation "${eq.name}" violated:`;
+  let message = '';
   if (lhsNames.length > 0) {
-    message += ` LHS reaches [${lhsNames.join(', ')}] but RHS does not.`;
+    message += `LHS reaches [${lhsNames.join(', ')}] but RHS does not.`;
   }
   if (rhsNames.length > 0) {
-    message += ` RHS reaches [${rhsNames.join(', ')}] but LHS does not.`;
+    message += `RHS reaches [${rhsNames.join(', ')}] but LHS does not.`;
   }
 
   return { valid: false, involved, message };
@@ -296,6 +355,33 @@ function followPath(
     return elem ? [elem] : [];
   }
 
-  const result = store.traverse({ startId, steps });
-  return result.elements;
+  let currentIds = new Set<string>([startId]);
+
+  for (const step of steps) {
+    if (currentIds.size === 0) return [];
+
+    const nextIds = new Set<string>();
+    for (const id of currentIds) {
+      const arrows =
+        step.direction === 'out'
+          ? store.outgoing(id)
+          : store.incoming(id);
+
+      for (const arr of arrows) {
+        if (arr.kind !== step.kind) continue;
+        const reachedId = step.direction === 'out' ? arr.dstId : arr.srcId;
+        nextIds.add(reachedId);
+      }
+    }
+
+    currentIds = nextIds;
+  }
+
+  // Only the final-step elements are relevant for equation checking.
+  const result: OlogElem[] = [];
+  for (const id of currentIds) {
+    const elem = store.getElem(id);
+    if (elem) result.push(elem);
+  }
+  return result;
 }

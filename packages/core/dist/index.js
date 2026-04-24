@@ -1,18 +1,10 @@
-#!/usr/bin/env node
-
-// src/index.ts
-import { mkdirSync } from "fs";
-import { join as join3 } from "path";
-import { McpServer as McpServer10 } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-
-// ../core/src/db.ts
+// src/db.ts
 import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 
-// ../core/src/traverse.ts
+// src/traverse.ts
 function rowToElem(row) {
   return {
     id: row.id,
@@ -87,7 +79,7 @@ function traverse(db, opts) {
   };
 }
 
-// ../core/src/db.ts
+// src/db.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var OlogStore = class {
@@ -195,6 +187,15 @@ var OlogStore = class {
       "INSERT INTO olog_meta (key, value) VALUES ('commit_sha', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
     );
     const tx = this.db.transaction(() => {
+      const manualElems = this.db.prepare(
+        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual'"
+      ).all();
+      const manualArrs = this.db.prepare(
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual')"
+      ).all();
+      const manualProvs = this.db.prepare(
+        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source = 'manual'"
+      ).all();
       this.db.prepare("DELETE FROM olog_elem").run();
       for (const e of elems) {
         insertElem.run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
@@ -202,6 +203,17 @@ var OlogStore = class {
       }
       for (const a of arrs) {
         insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+      }
+      for (const e of manualElems) {
+        this.db.prepare(
+          "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
+      }
+      for (const a of manualArrs) {
+        insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+      }
+      for (const p of manualProvs) {
+        this.insertProvStmt.run(p.elem_id, p.source, p.commit_sha, p.ingested_at, p.confidence ?? "resolved");
       }
       updateMeta.run(sha);
     });
@@ -318,8 +330,8 @@ var OlogStore = class {
       params.push(opts.minConfidence);
     }
     const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
-    const join4 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
-    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join4} ${where} ORDER BY e.module, e.name LIMIT ?`;
+    const join3 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
+    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join3} ${where} ORDER BY e.module, e.name LIMIT ?`;
     params.push(opts.limit);
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => this.rowToElem(r));
@@ -556,39 +568,39 @@ var OlogStore = class {
   }
 };
 
-// ../core/src/constraints.ts
+// src/constraints.ts
 import { randomUUID } from "crypto";
 var CONFIDENCE_RANK = {
   tentative: 0,
   unresolved: 1,
   resolved: 2
 };
-function evaluateConstraints(store2, _operations) {
+function evaluateConstraints(store, _operations) {
   const violations = [];
-  const constraints = store2.getConstraints();
+  const constraints = store.getConstraints();
   for (const constraint of constraints) {
-    violations.push(...evaluateConstraint(store2, constraint));
+    violations.push(...evaluateConstraint(store, constraint));
   }
   return { valid: violations.length === 0, violations };
 }
-function evaluateConstraint(store2, constraint) {
+function evaluateConstraint(store, constraint) {
   switch (constraint.kind) {
     case "existence":
-      return evaluateExistence(store2, constraint);
+      return evaluateExistence(store, constraint);
     case "layering":
-      return evaluateLayering(store2, constraint);
+      return evaluateLayering(store, constraint);
     case "monotonicity":
-      return evaluateMonotonicity(store2, constraint);
+      return evaluateMonotonicity(store, constraint);
     case "totality":
-      return evaluateTotality(store2, constraint);
+      return evaluateTotality(store, constraint);
     default:
       return [];
   }
 }
-function evaluateExistence(store2, constraint) {
+function evaluateExistence(store, constraint) {
   const kind = constraint.config.kind;
   if (!kind) return [];
-  const elements = store2.queryElements({ kind, limit: 1 });
+  const elements = store.queryElements({ kind, limit: 1 });
   if (elements.length > 0) return [];
   return [
     {
@@ -599,7 +611,7 @@ function evaluateExistence(store2, constraint) {
     }
   ];
 }
-function evaluateLayering(store2, constraint) {
+function evaluateLayering(store, constraint) {
   const rawLayers = constraint.config.layers;
   if (!rawLayers || rawLayers.length === 0) return [];
   const layers = rawLayers;
@@ -615,13 +627,13 @@ function evaluateLayering(store2, constraint) {
     }
     return null;
   }
-  const allElems = store2.queryElements({ kind: "any", limit: 5e4 });
+  const allElems = store.queryElements({ kind: "any", limit: 5e4 });
   for (const elem of allElems) {
     const srcLayer = layerIndexOf(elem.module);
     if (srcLayer === null) continue;
-    const outgoing = store2.outgoing(elem.id);
+    const outgoing = store.outgoing(elem.id);
     for (const arr of outgoing) {
-      const dstElem = store2.getElem(arr.dstId);
+      const dstElem = store.getElem(arr.dstId);
       if (!dstElem) continue;
       const dstLayer = layerIndexOf(dstElem.module);
       if (dstLayer === null) continue;
@@ -637,18 +649,18 @@ function evaluateLayering(store2, constraint) {
   }
   return violations;
 }
-function evaluateMonotonicity(store2, constraint) {
+function evaluateMonotonicity(store, constraint) {
   const violations = [];
-  const allElems = store2.queryElements({ kind: "any", limit: 5e4 });
+  const allElems = store.queryElements({ kind: "any", limit: 5e4 });
   for (const elem of allElems) {
-    const srcProv = store2.getProvenance(elem.id);
+    const srcProv = store.getProvenance(elem.id);
     if (!srcProv) continue;
-    const outgoing = store2.outgoing(elem.id);
+    const outgoing = store.outgoing(elem.id);
     for (const arr of outgoing) {
-      const dstProv = store2.getProvenance(arr.dstId);
+      const dstProv = store.getProvenance(arr.dstId);
       if (!dstProv) continue;
       if (CONFIDENCE_RANK[dstProv.confidence] > CONFIDENCE_RANK[srcProv.confidence]) {
-        const dstElem = store2.getElem(arr.dstId);
+        const dstElem = store.getElem(arr.dstId);
         violations.push({
           id: randomUUID(),
           kind: "integrity",
@@ -660,14 +672,14 @@ function evaluateMonotonicity(store2, constraint) {
   }
   return violations;
 }
-function evaluateTotality(store2, constraint) {
+function evaluateTotality(store, constraint) {
   const arrowKind = constraint.config.arrowKind;
   const domainKind = constraint.config.domainKind;
   if (!arrowKind || !domainKind) return [];
   const violations = [];
-  const domainElems = store2.queryElements({ kind: domainKind, limit: 5e4 });
+  const domainElems = store.queryElements({ kind: domainKind, limit: 5e4 });
   for (const elem of domainElems) {
-    const outgoing = store2.outgoing(elem.id);
+    const outgoing = store.outgoing(elem.id);
     const matching = outgoing.filter((a) => a.kind === arrowKind);
     if (matching.length === 0) {
       violations.push({
@@ -687,11 +699,11 @@ function evaluateTotality(store2, constraint) {
   }
   return violations;
 }
-function evaluatePathEquations(store2, _operations) {
+function evaluatePathEquations(store, _operations) {
   const violations = [];
-  const equations = store2.getEquations();
+  const equations = store.getEquations();
   for (const eq of equations) {
-    const result = evaluateEquation(eq, store2);
+    const result = evaluateEquation(eq, store);
     if (!result.valid) {
       violations.push({
         id: randomUUID(),
@@ -712,8 +724,8 @@ function isSchemaElement(elem) {
   }
   return null;
 }
-function evaluateEquation(eq, store2) {
-  const lhsSrc = store2.getElem(eq.lhs.src);
+function evaluateEquation(eq, store) {
+  const lhsSrc = store.getElem(eq.lhs.src);
   if (!lhsSrc) {
     return {
       valid: true,
@@ -721,7 +733,7 @@ function evaluateEquation(eq, store2) {
       message: `Equation "${eq.name}": source "${eq.lhs.src}" not in store, skipping`
     };
   }
-  const rhsSrc = store2.getElem(eq.rhs.src);
+  const rhsSrc = store.getElem(eq.rhs.src);
   if (!rhsSrc) {
     return {
       valid: true,
@@ -731,12 +743,12 @@ function evaluateEquation(eq, store2) {
   }
   const lhsSchemaKind = isSchemaElement(lhsSrc);
   if (lhsSchemaKind) {
-    return evaluateSchemaEquation(eq, store2, lhsSchemaKind);
+    return evaluateSchemaEquation(eq, store, lhsSchemaKind);
   }
-  return evaluateConcreteEquation(eq, store2, lhsSrc.id);
+  return evaluateConcreteEquation(eq, store, lhsSrc.id);
 }
-function evaluateSchemaEquation(eq, store2, schemaKind) {
-  const concreteElems = store2.queryElements({ kind: schemaKind, limit: 5e4 });
+function evaluateSchemaEquation(eq, store, schemaKind) {
+  const concreteElems = store.queryElements({ kind: schemaKind, limit: 5e4 });
   if (concreteElems.length === 0) {
     return {
       valid: true,
@@ -747,7 +759,7 @@ function evaluateSchemaEquation(eq, store2, schemaKind) {
   const allInvolved = [];
   const allMessages = [];
   for (const elem of concreteElems) {
-    const result = evaluateConcreteEquation(eq, store2, elem.id);
+    const result = evaluateConcreteEquation(eq, store, elem.id);
     if (!result.valid) {
       allInvolved.push(...result.involved);
       allMessages.push(`  at "${elem.name}" (${elem.module ?? "unknown"}): ${result.message}`);
@@ -763,7 +775,7 @@ function evaluateSchemaEquation(eq, store2, schemaKind) {
 ${allMessages.join("\n")}`
   };
 }
-function evaluateConcreteEquation(eq, store2, startId) {
+function evaluateConcreteEquation(eq, store, startId) {
   const lhsSteps = eq.lhs.arrows.map((kind) => ({
     kind,
     direction: "out"
@@ -772,8 +784,8 @@ function evaluateConcreteEquation(eq, store2, startId) {
     kind,
     direction: "out"
   }));
-  const lhsReached = followPath(store2, startId, lhsSteps);
-  const rhsReached = followPath(store2, startId, rhsSteps);
+  const lhsReached = followPath(store, startId, lhsSteps);
+  const rhsReached = followPath(store, startId, rhsSteps);
   const lhsIds = new Set(lhsReached.map((e) => e.id));
   const rhsIds = new Set(rhsReached.map((e) => e.id));
   const lhsOnly = [...lhsIds].filter((id) => !rhsIds.has(id));
@@ -793,9 +805,9 @@ function evaluateConcreteEquation(eq, store2, startId) {
   }
   return { valid: false, involved, message };
 }
-function followPath(store2, startId, steps) {
+function followPath(store, startId, steps) {
   if (steps.length === 0) {
-    const elem = store2.getElem(startId);
+    const elem = store.getElem(startId);
     return elem ? [elem] : [];
   }
   let currentIds = /* @__PURE__ */ new Set([startId]);
@@ -803,7 +815,7 @@ function followPath(store2, startId, steps) {
     if (currentIds.size === 0) return [];
     const nextIds = /* @__PURE__ */ new Set();
     for (const id of currentIds) {
-      const arrows = step.direction === "out" ? store2.outgoing(id) : store2.incoming(id);
+      const arrows = step.direction === "out" ? store.outgoing(id) : store.incoming(id);
       for (const arr of arrows) {
         if (arr.kind !== step.kind) continue;
         const reachedId = step.direction === "out" ? arr.dstId : arr.srcId;
@@ -814,19 +826,19 @@ function followPath(store2, startId, steps) {
   }
   const result = [];
   for (const id of currentIds) {
-    const elem = store2.getElem(id);
+    const elem = store.getElem(id);
     if (elem) result.push(elem);
   }
   return result;
 }
 
-// ../core/src/equations.ts
+// src/equations.ts
 function isNounPhrase(name) {
   const trimmed = name.trim();
   const withoutPrefix = trimmed.replace(/^(a|an|the)\s+/i, "");
   return /^[A-Z]/.test(withoutPrefix);
 }
-function validateEquation(eq, store2, proposedArrowKinds) {
+function validateEquation(eq, store, proposedArrowKinds) {
   const errors = [];
   if (eq.lhs.src !== eq.rhs.src) {
     errors.push(
@@ -842,7 +854,7 @@ function validateEquation(eq, store2, proposedArrowKinds) {
   const allArrowKinds = /* @__PURE__ */ new Set([...eq.lhs.arrows, ...eq.rhs.arrows]);
   for (const kind of allArrowKinds) {
     if (proposedSet.has(kind)) continue;
-    if (!store2.hasArrowKind(kind)) {
+    if (!store.hasArrowKind(kind)) {
       errors.push(
         `Equation "${eq.name}": arrow kind "${kind}" does not exist in the database or concurrent proposal`
       );
@@ -851,7 +863,7 @@ function validateEquation(eq, store2, proposedArrowKinds) {
   return { valid: errors.length === 0, errors };
 }
 
-// ../core/src/ingest/ids.ts
+// src/ingest/ids.ts
 function elemId(module, line, col, kind, name) {
   return `module:${module}:${line}:${col}:${kind}:${name}`;
 }
@@ -865,14 +877,14 @@ function formatSpan(relativePath, startLine, startCol, endLine, endCol) {
   return `${relativePath}:${startLine}:${startCol}-${endLine}:${endCol}`;
 }
 
-// ../core/src/ingest/project.ts
+// src/ingest/project.ts
 import { globSync } from "glob";
 import { readFileSync as readFileSync2, statSync } from "fs";
 import { resolve as resolve2, relative, basename, dirname as dirname2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import { execSync } from "child_process";
 
-// ../core/src/ingest/treesitter.ts
+// src/ingest/treesitter.ts
 import Parser from "tree-sitter";
 import TS from "tree-sitter-typescript";
 import fs from "fs";
@@ -1061,7 +1073,7 @@ function extractFromFile(parser, source, queryPath) {
   return { elements, arrows };
 }
 
-// ../core/src/ingest/project.ts
+// src/ingest/project.ts
 var IGNORE_PATTERNS = [
   "**/node_modules/**",
   "**/dist/**",
@@ -1096,45 +1108,45 @@ var __filename2 = fileURLToPath2(import.meta.url);
 var __dirname2 = dirname2(__filename2);
 var TS_QUERY_PATH = resolve2(__dirname2, "queries", "ts.scm");
 var TSX_QUERY_PATH = resolve2(__dirname2, "queries", "tsx.scm");
-function discoverTsFiles(projectRoot2) {
+function discoverTsFiles(projectRoot) {
   return globSync("**/*.{ts,tsx,mts,cts}", {
-    cwd: projectRoot2,
+    cwd: projectRoot,
     ignore: IGNORE_PATTERNS,
     absolute: true
   });
 }
-function ingestProject(projectRoot2, store2) {
-  const start2 = Date.now();
+function ingestProject(projectRoot, store) {
+  const start = Date.now();
   let head;
   try {
-    head = execSync("git rev-parse HEAD", { cwd: projectRoot2, encoding: "utf8" }).trim();
+    head = execSync("git rev-parse HEAD", { cwd: projectRoot, encoding: "utf8" }).trim();
   } catch {
     head = "nogit";
   }
-  if (head !== "nogit" && store2.isFresh(head)) {
+  if (head !== "nogit" && store.isFresh(head)) {
     return {
       filesProcessed: 0,
       elementsCreated: 0,
       arrowsCreated: 0,
-      durationMs: Date.now() - start2
+      durationMs: Date.now() - start
     };
   }
-  const result = runIngestion(projectRoot2, store2, head);
-  return { ...result, durationMs: Date.now() - start2 };
+  const result = runIngestion(projectRoot, store, head);
+  return { ...result, durationMs: Date.now() - start };
 }
-function reindexProject(projectRoot2, store2) {
-  const start2 = Date.now();
+function reindexProject(projectRoot, store) {
+  const start = Date.now();
   let head;
   try {
-    head = execSync("git rev-parse HEAD", { cwd: projectRoot2, encoding: "utf8" }).trim();
+    head = execSync("git rev-parse HEAD", { cwd: projectRoot, encoding: "utf8" }).trim();
   } catch {
     head = "nogit";
   }
-  const result = runIngestion(projectRoot2, store2, head);
-  return { ...result, durationMs: Date.now() - start2 };
+  const result = runIngestion(projectRoot, store, head);
+  return { ...result, durationMs: Date.now() - start };
 }
-function runIngestion(projectRoot2, store2, head) {
-  const files = discoverTsFiles(projectRoot2);
+function runIngestion(projectRoot, store, head) {
+  const files = discoverTsFiles(projectRoot);
   const elems = [];
   const arrs = [];
   let filesProcessed = 0;
@@ -1162,7 +1174,7 @@ function runIngestion(projectRoot2, store2, head) {
       );
       continue;
     }
-    const relativePath = relative(projectRoot2, absolutePath);
+    const relativePath = relative(projectRoot, absolutePath);
     const parser = parserFor(absolutePath);
     const queryPath = absolutePath.endsWith(".tsx") ? TSX_QUERY_PATH : TS_QUERY_PATH;
     let extracted;
@@ -1327,7 +1339,7 @@ function runIngestion(projectRoot2, store2, head) {
     }
     filesProcessed++;
   }
-  store2.ingestFull(elems, arrs, head);
+  store.ingestFull(elems, arrs, head);
   return {
     filesProcessed,
     elementsCreated: elems.length,
@@ -1345,11 +1357,11 @@ function parseTreeSitterSpan(span) {
   };
 }
 
-// ../core/src/render/index.ts
+// src/render/index.ts
 import { readFileSync as readFileSync4 } from "fs";
 import { join as join2 } from "path";
 
-// ../core/src/render/edit.ts
+// src/render/edit.ts
 function offsetAt(source, line, col) {
   let currentLine = 1;
   let offset = 0;
@@ -1385,11 +1397,11 @@ function applyEditsToString(source, edits) {
   }
   return result;
 }
-async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
+async function applySourceEdits(edits, projectRoot, readFile, writeFile) {
   const { readFile: fsReadFile, writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join4 } = await import("path");
-  const readFn = readFile ?? (async (p) => fsReadFile(join4(projectRoot2, p), "utf8"));
-  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join4(projectRoot2, p), c, "utf8"));
+  const { join: join3 } = await import("path");
+  const readFn = readFile ?? (async (p) => fsReadFile(join3(projectRoot, p), "utf8"));
+  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join3(projectRoot, p), c, "utf8"));
   let applied = 0;
   let skipped = 0;
   const errors = [];
@@ -1433,22 +1445,22 @@ async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
   }
   return { applied, skipped, errors, snapshots, affectedFiles: Array.from(affectedFiles) };
 }
-async function rollback(snapshots, projectRoot2) {
+async function rollback(snapshots, projectRoot) {
   const { writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join4 } = await import("path");
+  const { join: join3 } = await import("path");
   for (const snapshot of snapshots) {
     try {
-      await fsWriteFile(join4(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
+      await fsWriteFile(join3(projectRoot, snapshot.filePath), snapshot.originalContent, "utf8");
     } catch {
     }
   }
 }
 
-// ../core/src/render/strategies/rename.ts
-function computeRenameEdits(store2, elementId, newName, readFile) {
+// src/render/strategies/rename.ts
+function computeRenameEdits(store, elementId, newName, readFile) {
   let edits = [];
   const warnings = [];
-  const elem = store2.getElem(elementId);
+  const elem = store.getElem(elementId);
   if (!elem) {
     warnings.push(`Element not found: ${elementId}`);
     return { edits, warnings };
@@ -1468,7 +1480,7 @@ function computeRenameEdits(store2, elementId, newName, readFile) {
       });
     }
   }
-  const importElements = findImportReferences(store2, elem);
+  const importElements = findImportReferences(store, elem);
   for (const importElem of importElements) {
     if (importElem.span) {
       const parsedSpan = parseSpan(importElem.span);
@@ -1486,7 +1498,7 @@ function computeRenameEdits(store2, elementId, newName, readFile) {
       }
     }
   }
-  const callSites = findCallReferences(store2, elem, elementId);
+  const callSites = findCallReferences(store, elem, elementId);
   for (const callElem of callSites) {
     if (callElem.span) {
       const parsedSpan = parseSpan(callElem.span);
@@ -1513,16 +1525,16 @@ function computeRenameEdits(store2, elementId, newName, readFile) {
   });
   return { edits, warnings };
 }
-function findImportReferences(store2, elem) {
+function findImportReferences(store, elem) {
   const results = [];
-  const candidates = store2.queryElements({ nameRegex: `^${escapeRegex(elem.name)}$`, kind: "import", limit: 500 });
+  const candidates = store.queryElements({ nameRegex: `^${escapeRegex(elem.name)}$`, kind: "import", limit: 500 });
   for (const candidate of candidates) {
     if (candidate.id === elem.id) continue;
     if (candidate.module === elem.module) continue;
-    const incoming = store2.incoming(candidate.id);
+    const incoming = store.incoming(candidate.id);
     for (const arr of incoming) {
       if (arr.kind === "contains") {
-        const outgoing = store2.outgoing(candidate.id);
+        const outgoing = store.outgoing(candidate.id);
         for (const oarr of outgoing) {
           if (oarr.kind === "importsFrom") {
             results.push(candidate);
@@ -1534,19 +1546,19 @@ function findImportReferences(store2, elem) {
   }
   return [...new Map(results.map((e) => [e.id, e])).values()];
 }
-function findCallReferences(store2, elem, elementId) {
+function findCallReferences(store, elem, elementId) {
   const results = [];
-  const incoming = store2.incoming(elementId);
+  const incoming = store.incoming(elementId);
   for (const arr of incoming) {
     if (arr.kind === "callerOf" || arr.kind === "calleeOf") {
-      const caller = store2.getElem(arr.srcId);
+      const caller = store.getElem(arr.srcId);
       if (caller) results.push(caller);
     }
   }
-  const outgoing = store2.outgoing(elementId);
+  const outgoing = store.outgoing(elementId);
   for (const arr of outgoing) {
     if (arr.kind === "callerOf") {
-      const callee = store2.getElem(arr.dstId);
+      const callee = store.getElem(arr.dstId);
       if (callee) results.push(callee);
     }
   }
@@ -1566,7 +1578,7 @@ function parseSpan(span) {
   };
 }
 
-// ../core/src/render/declaration.ts
+// src/render/declaration.ts
 import "tree-sitter";
 import "fs";
 import { resolve as resolve3, dirname as dirname3 } from "path";
@@ -1649,7 +1661,7 @@ function findImportStatement(source, startLine) {
   };
 }
 
-// ../core/src/render/imports.ts
+// src/render/imports.ts
 var IMPORT_REGEX = /^import\s+(type\s+)?/;
 function parseImports(source) {
   const lines = source.split("\n");
@@ -1785,11 +1797,11 @@ function formatNamedImport(names, sourcePath, isType) {
   return `import ${typePrefix}{ ${nameParts.join(", ")} } from '${sourcePath}'`;
 }
 
-// ../core/src/render/strategies/remove-symbol.ts
-function computeRemoveSymbolEdits(store2, elementId, readFile) {
+// src/render/strategies/remove-symbol.ts
+function computeRemoveSymbolEdits(store, elementId, readFile) {
   const edits = [];
   const warnings = [];
-  const elem = store2.getElem(elementId);
+  const elem = store.getElem(elementId);
   if (!elem) {
     warnings.push(`Element not found: ${elementId}`);
     return { edits, warnings };
@@ -1834,21 +1846,21 @@ function computeRemoveSymbolEdits(store2, elementId, readFile) {
   if (elem.module && elem.kind !== "import") {
     const source = readFile(elem.module);
     if (source) {
-      const fileElem = store2.getElem(`file:${elem.module}`);
+      const fileElem = store.getElem(`file:${elem.module}`);
       if (fileElem) {
-        const contained = store2.outgoing(fileElem.id).filter((a) => a.kind === "contains").map((a) => store2.getElem(a.dstId)).filter((e) => e !== null && e.kind === "import");
+        const contained = store.outgoing(fileElem.id).filter((a) => a.kind === "contains").map((a) => store.getElem(a.dstId)).filter((e) => e !== null && e.kind === "import");
         for (const imp of contained) {
           if (imp.name === elem.name || imp.id === elementId) continue;
-          const incoming2 = store2.incoming(imp.id);
+          const incoming2 = store.incoming(imp.id);
           const importsFrom = incoming2.filter((a) => a.kind === "imports");
         }
       }
     }
   }
-  const incoming = store2.incoming(elementId);
+  const incoming = store.incoming(elementId);
   const callers = incoming.filter((a) => a.kind === "callerOf" || a.kind === "calleeOf").map((a) => {
     const otherId = a.srcId === elementId ? a.dstId : a.srcId;
-    return store2.getElem(otherId);
+    return store.getElem(otherId);
   }).filter((e) => e !== null);
   for (const caller of callers) {
     warnings.push(
@@ -1858,7 +1870,7 @@ function computeRemoveSymbolEdits(store2, elementId, readFile) {
   return { edits, warnings };
 }
 
-// ../core/src/render/paths.ts
+// src/render/paths.ts
 import { dirname as dirname4, relative as relative2 } from "path";
 function computeRelativeImportPath(fromFile, toModule) {
   const fromDir = dirname4(fromFile);
@@ -1872,7 +1884,7 @@ function filePathToModule(filePath) {
   return filePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "");
 }
 
-// ../core/src/render/strategies/add-symbol.ts
+// src/render/strategies/add-symbol.ts
 var STUB_TEMPLATES = {
   function: (name) => `export function ${name}() {
   // TODO: implement
@@ -1901,7 +1913,7 @@ var STUB_TEMPLATES = {
   var: (name) => `export var ${name}: unknown;
 `
 };
-function computeAddSymbolEdits(store2, module, name, symbolKind, readFile) {
+function computeAddSymbolEdits(store, module, name, symbolKind, readFile) {
   const edits = [];
   const warnings = [];
   const templateFn = STUB_TEMPLATES[symbolKind];
@@ -1945,11 +1957,11 @@ function computeAddSymbolEdits(store2, module, name, symbolKind, readFile) {
   return { edits, warnings };
 }
 
-// ../core/src/render/strategies/move.ts
-function computeMoveEdits(store2, elementId, newModule, readFile) {
+// src/render/strategies/move.ts
+function computeMoveEdits(store, elementId, newModule, readFile) {
   const edits = [];
   const warnings = [];
-  const elem = store2.getElem(elementId);
+  const elem = store.getElem(elementId);
   if (!elem) {
     warnings.push(`Element not found: ${elementId}`);
     return { edits, warnings };
@@ -2032,7 +2044,7 @@ function computeMoveEdits(store2, elementId, newModule, readFile) {
       endCol: 1
     });
   }
-  const importElements = store2.queryElements({
+  const importElements = store.queryElements({
     nameRegex: `^${elem.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
     kind: "import",
     limit: 500
@@ -2062,17 +2074,17 @@ function computeMoveEdits(store2, elementId, newModule, readFile) {
   return { edits, warnings };
 }
 
-// ../core/src/render/expand.ts
-function expandOperation(store2, operation, readFile) {
+// src/render/expand.ts
+function expandOperation(store, operation, readFile) {
   switch (operation.kind) {
     case "rename":
-      return computeRenameEdits(store2, operation.target, operation.newName, readFile);
+      return computeRenameEdits(store, operation.target, operation.newName, readFile);
     case "move":
-      return computeMoveEdits(store2, operation.target, operation.newModule, readFile);
+      return computeMoveEdits(store, operation.target, operation.newModule, readFile);
     case "addSymbol":
-      return computeAddSymbolEdits(store2, operation.module, operation.name, operation.symbolKind, readFile);
+      return computeAddSymbolEdits(store, operation.module, operation.name, operation.symbolKind, readFile);
     case "removeSymbol":
-      return computeRemoveSymbolEdits(store2, operation.target, readFile);
+      return computeRemoveSymbolEdits(store, operation.target, readFile);
     case "addArrow": {
       return { edits: [], warnings: [`addArrow: ${operation.arrowKind} arrows do not currently affect source files`] };
     }
@@ -2083,18 +2095,18 @@ function expandOperation(store2, operation, readFile) {
       return { edits: [], warnings: [`Unknown operation kind: ${operation.kind}`] };
   }
 }
-function expandAllOperations(store2, operations, readFile) {
+function expandAllOperations(store, operations, readFile) {
   const allEdits = [];
   const allWarnings = [];
   for (const op of operations) {
-    const result = expandOperation(store2, op, readFile);
+    const result = expandOperation(store, op, readFile);
     allEdits.push(...result.edits);
     allWarnings.push(...result.warnings);
   }
   return { edits: allEdits, warnings: allWarnings };
 }
 
-// ../core/src/render/order.ts
+// src/render/order.ts
 function orderAndDetectConflicts(edits) {
   const conflicts = [];
   const byFile = /* @__PURE__ */ new Map();
@@ -2134,16 +2146,16 @@ function rangesOverlap(a, b) {
   return aStart < bEnd && bStart < aEnd;
 }
 
-// ../core/src/render/index.ts
-function renderPlan(store2, operations, projectRoot2) {
+// src/render/index.ts
+function renderPlan(store, operations, projectRoot) {
   const readFile = (filePath) => {
     try {
-      return readFileSync4(join2(projectRoot2, filePath), "utf8");
+      return readFileSync4(join2(projectRoot, filePath), "utf8");
     } catch {
       return null;
     }
   };
-  const { edits, warnings } = expandAllOperations(store2, operations, readFile);
+  const { edits, warnings } = expandAllOperations(store, operations, readFile);
   const { ordered, conflicts } = orderAndDetectConflicts(edits);
   const conflictEditIds = /* @__PURE__ */ new Set();
   for (const conflict of conflicts) {
@@ -2159,1122 +2171,100 @@ function renderPlan(store2, operations, projectRoot2) {
     affectedFiles
   };
 }
-
-// src/tools/olog-query.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
-function registerOlogQuery(server2, store2) {
-  const elemKindEnum = [
-    "file",
-    "module",
-    "symbol",
-    "callsite",
-    "import",
-    "type",
-    "interface",
-    "class",
-    "enum",
-    "function",
-    "method",
-    "const",
-    "var",
-    "namespace",
-    "other"
-  ];
-  const arrowKindEnum = [
-    "extends",
-    "implements",
-    "calls",
-    "imports",
-    "exports",
-    "references",
-    "contains",
-    "returns",
-    "param",
-    "typeof",
-    "instanceof",
-    "definedIn",
-    "inModule",
-    "memberOf",
-    "callerOf",
-    "calleeOf",
-    "importsFrom",
-    "locatedIn",
-    "other"
-  ];
-  const startByIdSchema = z.object({
-    id: z.string().describe("Element ID to start from")
-  });
-  const startByFilterSchema = z.object({
-    kind: z.enum(elemKindEnum).optional().describe("Element kind to filter by. Omit to match all kinds."),
-    name: z.string().optional().describe(
-      "Regex pattern matched against element name. Examples: '^handle', 'User', 'Button$'"
-    ),
-    module: z.string().optional().describe(
-      "Regex pattern matched against module (relative file path). Examples: 'src/components', 'utils/'"
-    )
-  });
-  server2.registerTool(
-    "olog_query",
-    {
-      description: "Query the ontology log for structural elements matching filters, or traverse the graph via multi-hop arrow following. Returns elements with their kind, name, module (file path), and span (location). Traversal returns both reached elements and the arrows traversed.",
-      inputSchema: z.object({
-        start: z.union([startByIdSchema, startByFilterSchema]).optional().describe(
-          "Start element specification: either an exact element ID, or a filter (kind/name/module) to find starting element(s). When omitted, falls back to the top-level kind/name/module parameters."
-        ),
-        kind: z.enum([
-          "file",
-          "module",
-          "symbol",
-          "callsite",
-          "import",
-          "type",
-          "interface",
-          "class",
-          "enum",
-          "function",
-          "method",
-          "const",
-          "var",
-          "namespace",
-          "any"
-        ]).default("any").describe("Element kind to filter by. Use 'any' to match all kinds."),
-        name: z.string().optional().describe(
-          "Regex pattern matched against element name. Examples: '^handle', 'User', 'Button$'"
-        ),
-        module: z.string().optional().describe(
-          "Regex pattern matched against module (relative file path). Examples: 'src/components', 'utils/'"
-        ),
-        arrows: z.array(z.enum(arrowKindEnum)).optional().describe(
-          "Ordered array of arrow kinds to traverse multi-hop. When provided, the tool performs graph traversal instead of a simple filter query."
-        ),
-        direction: z.enum(["out", "in"]).default("out").describe(
-          'Direction for all arrow hops in a traversal. "out" follows natural direction (src -> dst); "in" reverses it (dst -> src).'
-        ),
-        minConfidence: z.enum(["resolved", "unresolved", "tentative"]).optional().describe(
-          "Minimum provenance confidence level. For filter queries, requires an exact match. For traversals, filters arrows by exact confidence match."
-        ),
-        limit: z.number().int().min(1).max(500).default(50).describe("Maximum number of results to return")
-      }),
-      annotations: { readOnlyHint: true, idempotentHint: true }
-    },
-    async (args) => {
-      try {
-        if (args.arrows && args.arrows.length > 0) {
-          let startIds;
-          if (args.start && "id" in args.start) {
-            startIds = [args.start.id];
-          } else {
-            const filter2 = args.start && "kind" in args.start ? args.start : { kind: args.kind, name: args.name, module: args.module };
-            const queryOpts = { limit: args.limit };
-            if (filter2.kind && filter2.kind !== "any") {
-              queryOpts.kind = filter2.kind;
-            }
-            if (filter2.name !== void 0) {
-              queryOpts.nameRegex = filter2.name;
-            }
-            if (filter2.module !== void 0) {
-              queryOpts.moduleRegex = filter2.module;
-            }
-            const elems = store2.queryElements(queryOpts);
-            if (elems.length === 0) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "No elements found matching start criteria"
-                  }
-                ]
-              };
-            }
-            startIds = elems.map((e) => e.id);
-          }
-          const steps = args.arrows.map((kind) => ({
-            kind,
-            direction: args.direction
-          }));
-          const allElements = /* @__PURE__ */ new Map();
-          const allArrows = /* @__PURE__ */ new Map();
-          for (const startId of startIds) {
-            const traverseOpts = {
-              startId,
-              steps
-            };
-            if (args.minConfidence) {
-              traverseOpts.minConfidence = args.minConfidence;
-            }
-            const result = store2.traverse(traverseOpts);
-            for (const elem of result.elements) {
-              allElements.set(elem.id, elem);
-            }
-            for (const arr of result.arrows) {
-              allArrows.set(arr.id, arr);
-            }
-          }
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    elements: Array.from(allElements.values()),
-                    arrows: Array.from(allArrows.values())
-                  },
-                  null,
-                  2
-                )
-              }
-            ]
-          };
-        }
-        if (args.start && "id" in args.start) {
-          const elem = store2.getElem(args.start.id);
-          if (!elem) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "Element not found"
-                }
-              ]
-            };
-          }
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(elem, null, 2)
-              }
-            ]
-          };
-        }
-        const filter = args.start && "kind" in args.start ? args.start : { kind: args.kind, name: args.name, module: args.module };
-        const opts = { limit: args.limit };
-        if (filter.kind && filter.kind !== "any") {
-          opts.kind = filter.kind;
-        }
-        if (filter.name !== void 0) {
-          opts.nameRegex = filter.name;
-        }
-        if (filter.module !== void 0) {
-          opts.moduleRegex = filter.module;
-        }
-        let rows;
-        if (args.minConfidence) {
-          rows = store2.queryElementsWithConfidence({
-            ...opts,
-            minConfidence: args.minConfidence
-          });
-        } else {
-          rows = store2.queryElements(opts);
-        }
-        if (rows.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No elements found matching criteria"
-              }
-            ]
-          };
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(rows, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-inspect.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z2 } from "zod";
-function registerOlogInspect(server2, store2) {
-  server2.registerTool(
-    "olog_inspect",
-    {
-      description: "Get detailed information about a specific element by ID, including all its outgoing and incoming arrows (connections to other elements).",
-      inputSchema: z2.object({
-        id: z2.string().describe("Element ID to inspect. Get IDs from olog_query results.")
-      }),
-      annotations: { readOnlyHint: true, idempotentHint: true }
-    },
-    async ({ id }) => {
-      try {
-        const element = store2.getElem(id);
-        if (!element) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Element not found: ${id}`
-              }
-            ],
-            isError: true
-          };
-        }
-        const outgoing = store2.outgoing(id);
-        const incoming = store2.incoming(id);
-        const prov = store2.getProvenance(id);
-        const provenance = prov ? [prov] : [];
-        const equations = store2.getEquationsForObject(id);
-        const allConstraints = store2.getConstraints();
-        const elemKind = element.kind;
-        const elemModule = element.module ?? "";
-        const constraints = allConstraints.filter((c) => {
-          if (!c.config || Object.keys(c.config).length === 0) return true;
-          const configStr = JSON.stringify(c.config);
-          return configStr.includes(elemKind) || configStr.includes(elemModule);
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ element, outgoing, incoming, provenance, equations, constraints }, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-dump.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z3 } from "zod";
-function registerOlogDump(server2, store2) {
-  server2.registerTool(
-    "olog_dump",
-    {
-      description: "Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, and total counts. Useful for understanding what the olog knows about the codebase.",
-      inputSchema: z3.object({}),
-      annotations: { readOnlyHint: true, idempotentHint: true }
-    },
-    async () => {
-      try {
-        const counts = store2.dumpCounts();
-        const commitSha = store2.commitSha();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ commitSha, ...counts }, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-reindex.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z4 } from "zod";
-function registerOlogReindex(server2, store2, projectRoot2) {
-  server2.registerTool(
-    "olog_reindex",
-    {
-      description: "Force a full re-ingestion of the TypeScript codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.",
-      inputSchema: z4.object({}),
-      annotations: {
-        readOnlyHint: false,
-        idempotentHint: false,
-        destructiveHint: false
-      }
-    },
-    async () => {
-      try {
-        const result = reindexProject(projectRoot2, store2);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [
-            { type: "text", text: `Reindex failed: ${message}` }
-          ],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-apply.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z6 } from "zod";
-
-// src/tools/olog-plan.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z5 } from "zod";
-import { createHash } from "crypto";
-var operationSchema = z5.union([
-  z5.object({
-    kind: z5.literal("rename"),
-    target: z5.string(),
-    newName: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("move"),
-    target: z5.string(),
-    newModule: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("addSymbol"),
-    module: z5.string(),
-    name: z5.string(),
-    symbolKind: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("removeSymbol"),
-    target: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("addArrow"),
-    arrowKind: z5.string(),
-    src: z5.string(),
-    dst: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("removeArrow"),
-    arrowId: z5.string()
-  })
-]);
-var planStore = /* @__PURE__ */ new Map();
-function registerOlogPlan(server2, store2) {
-  server2.registerTool(
-    "olog_plan",
-    {
-      description: "Describe a set of structural changes as a plan with invariants. The plan is stored in-memory keyed by its hash for later validation and application.",
-      inputSchema: z5.object({
-        operations: z5.array(operationSchema).describe("List of planned structural operations"),
-        rationale: z5.string().describe("Human-readable rationale for the plan")
-      }),
-      annotations: { readOnlyHint: false, idempotentHint: false }
-    },
-    async ({ operations, rationale }) => {
-      try {
-        const hash = createHash("sha256").update(JSON.stringify(operations)).digest("hex");
-        const targetElementIds = /* @__PURE__ */ new Set();
-        const targetKinds = /* @__PURE__ */ new Set();
-        const targetModules = /* @__PURE__ */ new Set();
-        for (const op of operations) {
-          switch (op.kind) {
-            case "rename":
-            case "move":
-            case "removeSymbol":
-              targetElementIds.add(op.target);
-              break;
-            case "addSymbol":
-              targetModules.add(op.module);
-              targetKinds.add(op.symbolKind);
-              break;
-            case "addArrow":
-              targetElementIds.add(op.src);
-              targetElementIds.add(op.dst);
-              break;
-            case "removeArrow":
-              break;
-          }
-        }
-        for (const id of targetElementIds) {
-          const elem = store2.getElem(id);
-          if (elem) {
-            targetKinds.add(elem.kind);
-            if (elem.module) {
-              targetModules.add(elem.module);
-            }
-          }
-        }
-        const equationsById = /* @__PURE__ */ new Map();
-        for (const id of targetElementIds) {
-          for (const eq of store2.getEquationsForObject(id)) {
-            equationsById.set(eq.id, eq);
-          }
-        }
-        const constraintsById = /* @__PURE__ */ new Map();
-        for (const constraint of store2.getConstraints()) {
-          const configStr = JSON.stringify(constraint.config);
-          let matched = false;
-          for (const kind of targetKinds) {
-            if (configStr.includes(kind)) {
-              matched = true;
-              break;
-            }
-          }
-          if (!matched) {
-            for (const mod of targetModules) {
-              if (configStr.includes(mod)) {
-                matched = true;
-                break;
-              }
-            }
-          }
-          if (matched) {
-            constraintsById.set(constraint.id, constraint);
-          }
-        }
-        const invariants = {
-          equations: Array.from(equationsById.values()),
-          constraints: Array.from(constraintsById.values())
-        };
-        const plan = {
-          operations,
-          hash,
-          rationale,
-          invariants
-        };
-        planStore.set(hash, plan);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                { ok: true, plan: { operations, hash, invariants } },
-                null,
-                2
-              )
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-apply.ts
-var planOperationSchema = z6.union([
-  z6.object({ kind: z6.literal("rename"), target: z6.string(), newName: z6.string() }),
-  z6.object({ kind: z6.literal("move"), target: z6.string(), newModule: z6.string() }),
-  z6.object({ kind: z6.literal("addSymbol"), module: z6.string(), name: z6.string(), symbolKind: z6.string() }),
-  z6.object({ kind: z6.literal("removeSymbol"), target: z6.string() }),
-  z6.object({ kind: z6.literal("addArrow"), arrowKind: z6.string(), src: z6.string(), dst: z6.string() }),
-  z6.object({ kind: z6.literal("removeArrow"), arrowId: z6.string() })
-]);
-var planSchema = z6.object({
-  operations: z6.array(planOperationSchema),
-  hash: z6.string(),
-  rationale: z6.string()
-});
-function registerOlogApply(server2, store2, projectRoot2) {
-  server2.registerTool(
-    "olog_apply",
-    {
-      description: "Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match.",
-      inputSchema: z6.object({
-        plan: planSchema.describe("The plan object to apply, including its hash."),
-        planHash: z6.string().describe("The expected hash of the plan. Must match plan.hash."),
-        render: z6.boolean().default(false).describe("When true, also render source-file edits and apply them to disk, then re-ingest.")
-      }),
-      annotations: {
-        readOnlyHint: false,
-        idempotentHint: false,
-        destructiveHint: false
-      }
-    },
-    async ({ plan, planHash, render }) => {
-      try {
-        const storedPlan = planStore.get(planHash);
-        if (!storedPlan) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ ok: false, reason: "Plan not found" }, null, 2)
-              }
-            ]
-          };
-        }
-        if (planHash !== plan.hash) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ ok: false, reason: "Hash mismatch" }, null, 2)
-              }
-            ]
-          };
-        }
-        const result = store2.applyPlan(plan.operations);
-        if (!render || !projectRoot2) {
-          if (result.errors.length > 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({ ok: false, reason: result.errors.join("; ") }, null, 2)
-                }
-              ]
-            };
-          }
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    ok: true,
-                    summary: `Applied ${result.applied} operations, skipped ${result.skipped}`,
-                    changes: result.changes
-                  },
-                  null,
-                  2
-                )
-              }
-            ]
-          };
-        }
-        const renderResult = renderPlan(store2, plan.operations, projectRoot2);
-        if (renderResult.edits.length > 0) {
-          const applyResult = await applySourceEdits(renderResult.edits, projectRoot2);
-          if (applyResult.errors.length > 0) {
-            await rollback(applyResult.snapshots, projectRoot2);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(
-                    {
-                      ok: false,
-                      reason: "Source edit errors, rolled back",
-                      dbResult: result,
-                      editErrors: applyResult.errors,
-                      renderWarnings: renderResult.warnings
-                    },
-                    null,
-                    2
-                  )
-                }
-              ]
-            };
-          }
-          try {
-            reindexProject(projectRoot2, store2);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(
-                    {
-                      ok: true,
-                      summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
-                      dbChanges: result.changes,
-                      sourceEdits: renderResult.edits.map((e) => ({
-                        file: e.filePath,
-                        label: e.label,
-                        oldText: e.oldText,
-                        newText: e.newText
-                      })),
-                      warnings: renderResult.warnings,
-                      reingestWarning: `Re-ingest failed: ${msg}`
-                    },
-                    null,
-                    2
-                  )
-                }
-              ]
-            };
-          }
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    ok: true,
-                    summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
-                    dbChanges: result.changes,
-                    sourceEdits: renderResult.edits.map((e) => ({
-                      file: e.filePath,
-                      label: e.label,
-                      oldText: e.oldText,
-                      newText: e.newText
-                    })),
-                    warnings: renderResult.warnings,
-                    affectedFiles: applyResult.affectedFiles
-                  },
-                  null,
-                  2
-                )
-              }
-            ]
-          };
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  ok: true,
-                  summary: `Applied ${result.applied} DB operations (no source edits needed)`,
-                  dbChanges: result.changes,
-                  warnings: renderResult.warnings
-                },
-                null,
-                2
-              )
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ ok: false, reason: message }, null, 2)
-            }
-          ],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-validate.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z7 } from "zod";
-function escapeRegex2(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function registerOlogValidate(server2, store2) {
-  server2.registerTool(
-    "olog_validate",
-    {
-      description: "Validate a plan against constraints. Returns {ok: true, plan} on success, or {ok: false, violations} on failure. Checks name uniqueness, referential integrity, path equations, and integrity constraints.",
-      inputSchema: z7.object({
-        planHash: z7.string().describe("Hash of the plan to validate (as returned by olog_plan)")
-      }),
-      annotations: { readOnlyHint: true, idempotentHint: true }
-    },
-    async ({ planHash }) => {
-      try {
-        const plan = planStore.get(planHash);
-        if (!plan) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Plan not found: ${planHash}. Use olog_plan to create a plan first.`
-              }
-            ],
-            isError: true
-          };
-        }
-        const violations = [];
-        for (const op of plan.operations) {
-          if (op.kind === "rename") {
-            const existing = store2.getElem(op.target);
-            if (existing) {
-              const candidates = store2.queryElements({
-                nameRegex: `^${escapeRegex2(op.newName)}$`,
-                limit: 100
-              });
-              const conflicting = candidates.filter(
-                (e) => e.id !== op.target && e.name === op.newName && e.module === existing.module
-              );
-              if (conflicting.length > 0) {
-                violations.push({
-                  id: crypto.randomUUID(),
-                  kind: "uniqueness",
-                  humanMessage: `Rename would create duplicate: "${op.newName}" already exists in module "${existing.module ?? "(root)"}"`,
-                  involved: [op.target, ...conflicting.map((e) => e.id)]
-                });
-              }
-            }
-          }
-        }
-        for (const op of plan.operations) {
-          if (op.kind === "removeSymbol") {
-            const outgoing = store2.outgoing(op.target);
-            const incoming = store2.incoming(op.target);
-            const allArrows = [...outgoing, ...incoming];
-            if (allArrows.length > 0) {
-              violations.push({
-                id: crypto.randomUUID(),
-                kind: "referential",
-                humanMessage: `Removing element "${op.target}" would orphan ${allArrows.length} arrow(s)`,
-                involved: [op.target, ...allArrows.map((a) => a.id)]
-              });
-            }
-          }
-        }
-        const equationResult = evaluatePathEquations(store2, plan.operations);
-        violations.push(...equationResult.violations);
-        const constraintResult = evaluateConstraints(store2, plan.operations);
-        violations.push(...constraintResult.violations);
-        if (violations.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ ok: true, plan }, null, 2)
-              }
-            ]
-          };
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ ok: false, violations }, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-propose-schema.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z8 } from "zod";
-import { randomUUID as randomUUID2 } from "crypto";
-var objectSchema = z8.object({
-  kind: z8.string().describe("Element kind"),
-  name: z8.string().describe("Element name (noun phrase)"),
-  module: z8.string().optional().describe("Optional module path")
-});
-var arrowSchema = z8.object({
-  name: z8.string().describe("Arrow kind/name"),
-  domain: z8.string().describe("Domain element name"),
-  codomain: z8.string().describe("Codomain element name"),
-  total: z8.boolean().describe("Whether this is a total function")
-});
-var pathSchema = z8.object({
-  src: z8.string().describe("Source element ID or name"),
-  tgt: z8.string().describe("Target element ID or name"),
-  arrows: z8.array(z8.string()).describe("Sequence of arrow kinds")
-});
-var equationSchema = z8.object({
-  id: z8.string(),
-  name: z8.string(),
-  humanMessage: z8.string(),
-  lhs: pathSchema,
-  rhs: pathSchema
-});
-var provenanceSchema = z8.object({
-  source: z8.enum(["tree-sitter", "lsp", "manual", "heuristic", "other"]),
-  commitSha: z8.string(),
-  ingestedAt: z8.number().optional(),
-  confidence: z8.enum(["resolved", "unresolved", "tentative"])
-});
-var STANDARD_KINDS = [
-  "file",
-  "module",
-  "symbol",
-  "callsite",
-  "import",
-  "type",
-  "interface",
-  "class",
-  "enum",
-  "function",
-  "method",
-  "const",
-  "var",
-  "namespace",
-  "other"
-];
-function registerOlogProposeSchema(server2, store2) {
-  server2.registerTool(
-    "olog_propose_schema",
-    {
-      description: "Propose a new schema fragment to the olog. Validates noun phrases for objects, total-function semantics for arrows, and path equation composability. Stores accepted objects in olog_elem, arrows in olog_arr, equations in olog_equation, and provenance in olog_prov.",
-      inputSchema: z8.object({
-        objects: z8.array(objectSchema).optional().describe("Objects to add to the schema"),
-        arrows: z8.array(arrowSchema).optional().describe("Arrows to add to the schema"),
-        equations: z8.array(equationSchema).optional().describe("Path equations to add"),
-        provenance: provenanceSchema.describe("Provenance metadata for all proposed items")
-      }),
-      annotations: { readOnlyHint: false, idempotentHint: false }
-    },
-    async ({ objects, arrows, equations, provenance }) => {
-      try {
-        const errors = [];
-        const added = { objects: 0, arrows: 0, equations: 0 };
-        const objectMap = /* @__PURE__ */ new Map();
-        for (const obj of objects ?? []) {
-          if (!isNounPhrase(obj.name)) {
-            errors.push(
-              `Object "${obj.name}" is not a valid noun phrase (must start with uppercase after optional "a"/"an"/"the")`
-            );
-          }
-          objectMap.set(obj.name, obj);
-        }
-        const arrowList = [];
-        const proposedArrowKinds = /* @__PURE__ */ new Set();
-        for (const arrow of arrows ?? []) {
-          if (!arrow.total) {
-            errors.push(
-              `Arrow "${arrow.name}" is not total. Many-valued relationships must be reified before proposing.`
-            );
-            continue;
-          }
-          const domainElems = store2.queryElements({ nameRegex: `^${arrow.domain}$`, limit: 1 });
-          const domainExists = domainElems.length > 0 || objectMap.has(arrow.domain);
-          if (!domainExists) {
-            errors.push(`Arrow "${arrow.name}": domain "${arrow.domain}" does not exist`);
-            continue;
-          }
-          const codomainElems = store2.queryElements({ nameRegex: `^${arrow.codomain}$`, limit: 1 });
-          const codomainExists = codomainElems.length > 0 || objectMap.has(arrow.codomain);
-          if (!codomainExists) {
-            errors.push(`Arrow "${arrow.name}": codomain "${arrow.codomain}" does not exist`);
-            continue;
-          }
-          arrowList.push(arrow);
-          proposedArrowKinds.add(arrow.name);
-        }
-        for (const eq of equations ?? []) {
-          const result = validateEquation(eq, store2, Array.from(proposedArrowKinds));
-          errors.push(...result.errors);
-        }
-        if (errors.length > 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ ok: false, errors }, null, 2)
-              }
-            ]
-          };
-        }
-        const createdElemIds = /* @__PURE__ */ new Map();
-        for (const obj of objects ?? []) {
-          const id = randomUUID2();
-          createdElemIds.set(obj.name, id);
-          const kind = STANDARD_KINDS.includes(obj.kind) ? obj.kind : "other";
-          const elem = {
-            id,
-            kind,
-            name: obj.name,
-            module: obj.module ?? null,
-            span: null,
-            attrs: {}
-          };
-          store2.addElement(elem);
-          store2.addProvenance(id, {
-            source: provenance.source,
-            commitSha: provenance.commitSha,
-            ingestedAt: provenance.ingestedAt ?? Date.now(),
-            confidence: provenance.confidence
-          });
-          added.objects++;
-        }
-        for (const arrow of arrowList) {
-          const domainId = createdElemIds.get(arrow.domain) ?? store2.queryElements({ nameRegex: `^${arrow.domain}$`, limit: 1 })[0]?.id;
-          const codomainId = createdElemIds.get(arrow.codomain) ?? store2.queryElements({ nameRegex: `^${arrow.codomain}$`, limit: 1 })[0]?.id;
-          if (!domainId || !codomainId) {
-            errors.push(`Arrow "${arrow.name}": failed to resolve domain/codomain IDs`);
-            continue;
-          }
-          const arr = {
-            id: arrowId(domainId, arrow.name, codomainId),
-            kind: arrow.name,
-            srcId: domainId,
-            dstId: codomainId,
-            attrs: {}
-          };
-          store2.addArrow(arr);
-          added.arrows++;
-        }
-        if (errors.length > 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ ok: false, errors }, null, 2)
-              }
-            ]
-          };
-        }
-        for (const eq of equations ?? []) {
-          const eqWithProv = {
-            id: eq.id,
-            name: eq.name,
-            humanMessage: eq.humanMessage,
-            lhs: eq.lhs,
-            rhs: eq.rhs,
-            provenance: {
-              source: provenance.source,
-              commitSha: provenance.commitSha,
-              ingestedAt: provenance.ingestedAt ?? Date.now(),
-              confidence: provenance.confidence
-            }
-          };
-          store2.addEquation(eqWithProv);
-          added.equations++;
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ ok: true, added }, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ ok: false, errors: [message] }, null, 2)
-            }
-          ],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/tools/olog-render.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z9 } from "zod";
-function registerOlogRender(server2, store2, projectRoot2) {
-  server2.registerTool(
-    "olog_render",
-    {
-      description: "Preview the source-file edits that a validated plan would produce, without writing to disk. Returns SourceEdits grouped by file, with warnings for operations needing manual review.",
-      inputSchema: z9.object({
-        planHash: z9.string().describe("Hash of the validated plan to render (as returned by olog_plan)")
-      }),
-      annotations: { readOnlyHint: true, idempotentHint: true }
-    },
-    async ({ planHash }) => {
-      try {
-        const plan = planStore.get(planHash);
-        if (!plan) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Plan not found: ${planHash}. Use olog_plan to create a plan first.`
-              }
-            ],
-            isError: true
-          };
-        }
-        const result = renderPlan(store2, plan.operations, projectRoot2);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result, null, 2)
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
-}
-
-// src/index.ts
-var projectRoot = process.env.OLOG_ROOT || process.cwd();
-var ologDir = join3(projectRoot, ".olog");
-try {
-  mkdirSync(ologDir, { recursive: true });
-} catch (err) {
-  console.error(
-    `[olog] Failed to create ${ologDir}: ${err instanceof Error ? err.message : String(err)}`
-  );
-  process.exit(1);
-}
-var dbPath = join3(ologDir, "olog.sqlite");
-var store = new OlogStore(dbPath);
-console.error(`[olog] Starting ingestion for ${projectRoot}...`);
-var start = Date.now();
-try {
-  const result = ingestProject(projectRoot, store);
-  console.error(
-    `[olog] Ingestion complete in ${Date.now() - start}ms: ${result.filesProcessed} files, ${result.elementsCreated} elements, ${result.arrowsCreated} arrows`
-  );
-} catch (err) {
-  console.error(
-    `[olog] Ingestion failed: ${err instanceof Error ? err.message : String(err)}`
-  );
-  store.close();
-  process.exit(1);
-}
-var server = new McpServer10(
-  { name: "olog-mcp", version: "0.0.1" },
-  {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits). The name and module parameters accept JavaScript regex patterns.`,
-    capabilities: { logging: {} }
+async function renderAndApplyPlan(store, operations, projectRoot, reingestFn) {
+  const renderResult = renderPlan(store, operations, projectRoot);
+  if (renderResult.edits.length === 0) {
+    return {
+      ...renderResult,
+      applyResult: null,
+      verificationDiscrepancies: []
+    };
   }
-);
-registerOlogQuery(server, store);
-registerOlogInspect(server, store);
-registerOlogDump(server, store);
-registerOlogReindex(server, store, projectRoot);
-registerOlogProposeSchema(server, store);
-registerOlogPlan(server, store);
-registerOlogValidate(server, store);
-registerOlogApply(server, store, projectRoot);
-registerOlogRender(server, store, projectRoot);
-var transport = new StdioServerTransport();
-await server.connect(transport);
-console.error("[olog] MCP server connected on stdio");
-var cleanup = () => {
+  let applyResult;
   try {
-    store.close();
-  } catch {
+    applyResult = await applySourceEdits(renderResult.edits, projectRoot);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    renderResult.warnings.push(`Failed to apply edits: ${msg}`);
+    return {
+      ...renderResult,
+      applyResult: null,
+      verificationDiscrepancies: [msg]
+    };
   }
-  process.exit(0);
+  let verificationDiscrepancies = [];
+  if (reingestFn) {
+    try {
+      reingestFn(projectRoot, store);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      verificationDiscrepancies.push(`Re-ingestion failed: ${msg}`);
+    }
+    for (const op of operations) {
+      verificationDiscrepancies.push(...verifyOperation(store, op));
+    }
+  }
+  return {
+    ...renderResult,
+    applyResult,
+    verificationDiscrepancies
+  };
+}
+function verifyOperation(store, op) {
+  const discrepancies = [];
+  switch (op.kind) {
+    case "rename": {
+      const elem = store.getElem(op.target);
+      if (elem && elem.name !== op.newName) {
+        discrepancies.push(`rename: expected name "${op.newName}", got "${elem.name}"`);
+      }
+      break;
+    }
+    case "move": {
+      const elem = store.getElem(op.target);
+      if (elem && elem.module !== op.newModule) {
+        discrepancies.push(`move: expected module "${op.newModule}", got "${elem.module}"`);
+      }
+      break;
+    }
+    case "addSymbol": {
+      const found = store.queryElements({
+        kind: op.symbolKind,
+        nameRegex: `^${op.name}$`,
+        moduleRegex: `^${op.module.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        limit: 1
+      });
+      if (found.length === 0) {
+        discrepancies.push(`addSymbol: "${op.name}" not found in "${op.module}" after render`);
+      }
+      break;
+    }
+    case "removeSymbol": {
+      const elem = store.getElem(op.target);
+      if (elem) {
+        discrepancies.push(`removeSymbol: "${op.target}" still exists after render`);
+      }
+      break;
+    }
+  }
+  return discrepancies;
+}
+export {
+  OlogStore,
+  applyEditsToString,
+  applySourceEdits,
+  arrowId,
+  discoverTsFiles,
+  evaluateConstraints,
+  evaluateEquation,
+  evaluatePathEquations,
+  ingestProject,
+  isNounPhrase,
+  offsetAt,
+  reindexProject,
+  renderAndApplyPlan,
+  renderPlan,
+  rollback,
+  traverse,
+  validateEquation
 };
-process.on("SIGINT", cleanup);
-process.on("SIGTERM", cleanup);
-//# sourceMappingURL=index.js.map
