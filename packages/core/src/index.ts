@@ -53,3 +53,18 @@ export {
   rollback,
   offsetAt,
 } from './render/index.js';
+export {
+  assembleBrief,
+  type DelegationBrief,
+  type DelegationTask,
+  type ContextOverrides,
+} from './delegate/index.js';
+export { SourceResolver } from './delegate/resolve.js';
+export type { AnalogueCandidate } from './delegate/analogues.js';
+export type {
+  MustCallEntry,
+  MustImplementEntry,
+  UsedByEntry,
+  ImportEntry,
+  StructuralContext,
+} from './delegate/context.js';

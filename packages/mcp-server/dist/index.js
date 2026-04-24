@@ -2,8 +2,8 @@
 
 // src/index.ts
 import { mkdirSync } from "fs";
-import { join as join3 } from "path";
-import { McpServer as McpServer10 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { join as join4 } from "path";
+import { McpServer as McpServer11 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // ../core/src/db.ts
@@ -165,7 +165,7 @@ var OlogStore = class {
       "INSERT INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
     );
     this.insertArrStmt = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
     );
     this.insertProvStmt = this.db.prepare(
       "INSERT INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, ?, ?, ?, ?)"
@@ -186,7 +186,7 @@ var OlogStore = class {
       "INSERT INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
     );
     const insertArr = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
     );
     const insertProv = this.db.prepare(
       "INSERT INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, 'tree-sitter', ?, ?, 'resolved')"
@@ -195,6 +195,15 @@ var OlogStore = class {
       "INSERT INTO olog_meta (key, value) VALUES ('commit_sha', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
     );
     const tx = this.db.transaction(() => {
+      const manualElems = this.db.prepare(
+        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual'"
+      ).all();
+      const manualArrs = this.db.prepare(
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual')"
+      ).all();
+      const manualProvs = this.db.prepare(
+        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source = 'manual'"
+      ).all();
       this.db.prepare("DELETE FROM olog_elem").run();
       for (const e of elems) {
         insertElem.run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
@@ -202,6 +211,17 @@ var OlogStore = class {
       }
       for (const a of arrs) {
         insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+      }
+      for (const e of manualElems) {
+        this.db.prepare(
+          "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
+      }
+      for (const a of manualArrs) {
+        insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+      }
+      for (const p of manualProvs) {
+        this.insertProvStmt.run(p.elem_id, p.source, p.commit_sha, p.ingested_at, p.confidence ?? "resolved");
       }
       updateMeta.run(sha);
     });
@@ -318,8 +338,8 @@ var OlogStore = class {
       params.push(opts.minConfidence);
     }
     const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
-    const join4 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
-    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join4} ${where} ORDER BY e.module, e.name LIMIT ?`;
+    const join5 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
+    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join5} ${where} ORDER BY e.module, e.name LIMIT ?`;
     params.push(opts.limit);
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => this.rowToElem(r));
@@ -352,7 +372,7 @@ var OlogStore = class {
       "INSERT INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
     );
     const insertArr = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
     );
     const deleteElem = this.db.prepare(
       "DELETE FROM olog_elem WHERE id = ?"
@@ -1387,9 +1407,9 @@ function applyEditsToString(source, edits) {
 }
 async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
   const { readFile: fsReadFile, writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join4 } = await import("path");
-  const readFn = readFile ?? (async (p) => fsReadFile(join4(projectRoot2, p), "utf8"));
-  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join4(projectRoot2, p), c, "utf8"));
+  const { join: join5 } = await import("path");
+  const readFn = readFile ?? (async (p) => fsReadFile(join5(projectRoot2, p), "utf8"));
+  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join5(projectRoot2, p), c, "utf8"));
   let applied = 0;
   let skipped = 0;
   const errors = [];
@@ -1435,10 +1455,10 @@ async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
 }
 async function rollback(snapshots, projectRoot2) {
   const { writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join4 } = await import("path");
+  const { join: join5 } = await import("path");
   for (const snapshot of snapshots) {
     try {
-      await fsWriteFile(join4(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
+      await fsWriteFile(join5(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
     } catch {
     }
   }
@@ -1871,6 +1891,9 @@ function computeRelativeImportPath(fromFile, toModule) {
 function filePathToModule(filePath) {
   return filePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "");
 }
+function moduleToFilePath(moduleId) {
+  return moduleId + ".ts";
+}
 
 // ../core/src/render/strategies/add-symbol.ts
 var STUB_TEMPLATES = {
@@ -2158,6 +2181,511 @@ function renderPlan(store2, operations, projectRoot2) {
     conflicts,
     affectedFiles
   };
+}
+
+// ../core/src/delegate/context.ts
+function gatherMustCall(store2, targetId) {
+  const incoming = store2.incoming(targetId);
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  const callees = [];
+  for (const arrow of callerOfArrows) {
+    const callSiteOutgoing = store2.outgoing(arrow.srcId);
+    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
+    if (calleeOfArrow) {
+      const calleeElem = store2.getElem(calleeOfArrow.dstId);
+      if (calleeElem) {
+        callees.push({
+          id: calleeElem.id,
+          name: calleeElem.name,
+          kind: calleeElem.kind,
+          module: calleeElem.module,
+          span: calleeElem.span,
+          attrs: calleeElem.attrs
+        });
+      }
+    }
+  }
+  return callees;
+}
+function gatherMustImplement(store2, targetId) {
+  const outgoing = store2.outgoing(targetId);
+  const implementsArrows = outgoing.filter((a) => a.kind === "implements");
+  const interfaces = [];
+  for (const arrow of implementsArrows) {
+    const iface = store2.getElem(arrow.dstId);
+    if (iface) {
+      interfaces.push({
+        id: iface.id,
+        name: iface.name,
+        kind: iface.kind,
+        module: iface.module,
+        span: iface.span
+      });
+    }
+  }
+  const incoming = store2.incoming(targetId);
+  const implementsIncoming = incoming.filter((a) => a.kind === "implements");
+  for (const arrow of implementsIncoming) {
+    const iface = store2.getElem(arrow.srcId);
+    if (iface) {
+      interfaces.push({
+        id: iface.id,
+        name: iface.name,
+        kind: iface.kind,
+        module: iface.module,
+        span: iface.span
+      });
+    }
+  }
+  return interfaces;
+}
+function gatherUsedBy(store2, targetId) {
+  const incoming = store2.incoming(targetId);
+  const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
+  const callers = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const arrow of calleeOfArrows) {
+    const callSiteOutgoing = store2.outgoing(arrow.srcId);
+    const callerOfArrow = callSiteOutgoing.find((a) => a.kind === "callerOf");
+    if (callerOfArrow) {
+      const callerElem = store2.getElem(callerOfArrow.dstId);
+      if (callerElem && !seen.has(callerElem.id)) {
+        seen.add(callerElem.id);
+        callers.push({
+          id: callerElem.id,
+          name: callerElem.name,
+          kind: callerElem.kind,
+          module: callerElem.module,
+          span: callerElem.span
+        });
+      }
+    }
+  }
+  return callers;
+}
+function gatherImports(store2, targetModule) {
+  const imports = [];
+  const moduleElems = store2.queryElements({
+    kind: "import",
+    moduleRegex: `^${escapeRegex2(targetModule)}$`,
+    limit: 200
+  });
+  for (const imp of moduleElems) {
+    const outgoing = store2.outgoing(imp.id);
+    const importsFromArrow = outgoing.find((a) => a.kind === "importsFrom");
+    imports.push({
+      name: imp.name,
+      sourceModule: importsFromArrow ? importsFromArrow.attrs?.sourceModule ?? null : null,
+      targetModule: imp.module
+    });
+  }
+  return imports;
+}
+function getModuleElement(store2, modulePath) {
+  const results = store2.queryElements({
+    kind: "module",
+    nameRegex: `^${escapeRegex2(modulePath)}$`,
+    limit: 1
+  });
+  return results[0] ?? null;
+}
+function getModuleFilePath(store2, modulePath) {
+  const modElem = getModuleElement(store2, modulePath);
+  if (!modElem) return null;
+  const outgoing = store2.outgoing(modElem.id);
+  const locatedIn = outgoing.find((a) => a.kind === "locatedIn");
+  if (locatedIn) {
+    const fileElem = store2.getElem(locatedIn.dstId);
+    if (fileElem) return fileElem.name;
+  }
+  return modulePath;
+}
+function escapeRegex2(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ../core/src/delegate/resolve.ts
+import { readFileSync as readFileSync5 } from "fs";
+import { join as join3 } from "path";
+var SourceResolver = class {
+  constructor(projectRoot2) {
+    this.projectRoot = projectRoot2;
+  }
+  projectRoot;
+  fileCache = /* @__PURE__ */ new Map();
+  readSpan(filePath, span) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split("\n");
+    const start2 = Math.max(0, parsed.startLine - 1);
+    const end = Math.min(lines.length, parsed.endLine);
+    return lines.slice(start2, end).join("\n");
+  }
+  readContext(filePath, span, contextLines = 2) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split("\n");
+    const start2 = Math.max(0, parsed.startLine - 1 - contextLines);
+    const end = Math.min(lines.length, parsed.endLine + contextLines);
+    return lines.slice(start2, end).join("\n");
+  }
+  readDeclaration(filePath, span, kind) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    if (kind === "import") {
+      const range2 = findImportStatement(source, parsed.startLine);
+      return range2?.text ?? null;
+    }
+    const range = findEnclosingDeclaration(
+      source,
+      filePath,
+      parsed.startLine,
+      parsed.startCol,
+      kind
+    );
+    return range?.text ?? null;
+  }
+  readSignature(filePath, span, kind) {
+    const declaration = this.readDeclaration(filePath, span, kind);
+    if (!declaration) return null;
+    const firstBrace = declaration.indexOf("{");
+    const firstSemicolon = declaration.indexOf(";");
+    if (firstBrace >= 0 && (firstSemicolon < 0 || firstBrace < firstSemicolon)) {
+      return declaration.slice(0, firstBrace).trim();
+    }
+    if (firstSemicolon >= 0) {
+      return declaration.slice(0, firstSemicolon + 1).trim();
+    }
+    const firstNewline = declaration.indexOf("\n");
+    if (firstNewline >= 0) {
+      return declaration.slice(0, firstNewline).trim();
+    }
+    return declaration.trim();
+  }
+  readBody(filePath, span, kind, maxLines = 50) {
+    const declaration = this.readDeclaration(filePath, span, kind);
+    if (!declaration) return null;
+    const firstBrace = declaration.indexOf("{");
+    if (firstBrace < 0) return null;
+    const body = declaration.slice(firstBrace);
+    const lines = body.split("\n");
+    if (lines.length <= maxLines) return body;
+    return lines.slice(0, maxLines).join("\n") + "\n  // ... (truncated)";
+  }
+  readImportBlock(filePath) {
+    const source = this.readFile(filePath);
+    if (source === null) return [];
+    const imports = parseImports(source);
+    return imports.map((imp) => imp.fullText.trim());
+  }
+  computeImportStatement(symbolName, symbolModule, targetModule) {
+    const fromFile = moduleToFilePath(targetModule);
+    const relativePath = computeRelativeImportPath(fromFile, symbolModule);
+    return `import { ${symbolName} } from '${relativePath}'`;
+  }
+  readFileContent(filePath, maxLines = 500) {
+    const content = this.readFile(filePath);
+    if (content === null) return null;
+    const lines = content.split("\n");
+    if (lines.length <= maxLines) return content;
+    return lines.slice(0, maxLines).join("\n") + "\n// ... (truncated)";
+  }
+  readFile(filePath) {
+    const cached = this.fileCache.get(filePath);
+    if (cached !== void 0) return cached;
+    try {
+      const content = readFileSync5(join3(this.projectRoot, filePath), "utf8");
+      this.fileCache.set(filePath, content);
+      return content;
+    } catch {
+      this.fileCache.set(filePath, null);
+      return null;
+    }
+  }
+};
+function parseSpan2(span) {
+  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+  if (!m) return null;
+  return {
+    startLine: parseInt(m[1], 10),
+    startCol: parseInt(m[2], 10),
+    endLine: parseInt(m[3], 10),
+    endCol: parseInt(m[4], 10)
+  };
+}
+
+// ../core/src/delegate/analogues.ts
+function findAnalogues(store2, target, limit = 3) {
+  const targetCallees = getCalleeSet(store2, target);
+  const candidates = store2.queryElements({
+    kind: target.kind,
+    limit: 200
+  });
+  const scored = [];
+  for (const candidate of candidates) {
+    if (candidate.id === target.id) continue;
+    if (candidate.module === target.module) continue;
+    const candidateCallees = getCalleeSet(store2, candidate);
+    const intersectionSize = countIntersection(targetCallees, candidateCallees);
+    const unionSize = targetCallees.size + candidateCallees.size - intersectionSize;
+    const similarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    if (similarity > 0) {
+      scored.push({
+        id: candidate.id,
+        name: candidate.name,
+        kind: candidate.kind,
+        module: candidate.module,
+        span: candidate.span,
+        similarity
+      });
+    }
+  }
+  scored.sort((a, b) => b.similarity - a.similarity);
+  return scored.slice(0, limit);
+}
+function getCalleeSet(store2, elem) {
+  const result = /* @__PURE__ */ new Set();
+  const incoming = store2.incoming(elem.id);
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  for (const arrow of callerOfArrows) {
+    const callSiteOutgoing = store2.outgoing(arrow.srcId);
+    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
+    if (calleeOfArrow) {
+      result.add(calleeOfArrow.dstId);
+    }
+  }
+  const directCalls = store2.outgoing(elem.id).filter((a) => a.kind === "calls");
+  for (const arrow of directCalls) {
+    result.add(arrow.dstId);
+  }
+  return result;
+}
+function countIntersection(a, b) {
+  let count = 0;
+  for (const item of a) {
+    if (b.has(item)) count++;
+  }
+  return count;
+}
+
+// ../core/src/delegate/index.ts
+var TASK_CRITERIA = {
+  write_function_body: [
+    "Must compile without type errors.",
+    "Must call every function listed in mustCall.",
+    "Must return a value matching the signature.",
+    "Must not change the function signature or exports.",
+    "Must follow the coding patterns in the provided analogues."
+  ],
+  write_test: [
+    "Must compile.",
+    "Must import the target function.",
+    "Must have at least one test case for each mustCall function.",
+    "Must follow the test framework patterns in the analogues.",
+    "Must be in a .test.ts or .spec.ts file."
+  ],
+  write_migration: [
+    "Must compile.",
+    "Must be idempotent (safe to run twice).",
+    "Must use the project's database client (see analogues).",
+    "Must include both up and down migrations if the framework requires it."
+  ],
+  rewrite_body: [
+    "Must compile.",
+    "Must preserve the existing signature and exports.",
+    "Must call every function in mustCall.",
+    "Must not introduce new dependencies not listed in the acceptance criteria.",
+    "Must be strictly better than the current body per the criteria."
+  ],
+  write_documentation: [
+    "Must be valid JSDoc/TSDoc.",
+    "Must document all parameters.",
+    "Must include @returns with type.",
+    "Must include at least one @example if any analogue has examples.",
+    "Must describe thrown errors."
+  ]
+};
+function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria) {
+  const target = store2.getElem(targetId);
+  if (!target) {
+    return { ok: false, error: `Element not found: ${targetId}` };
+  }
+  const targetModule = target.module;
+  if (!targetModule) {
+    return { ok: false, error: `Element has no module: ${targetId}` };
+  }
+  const resolver = new SourceResolver(projectRoot2);
+  const filePath = getModuleFilePath(store2, targetModule) ?? localModuleToFilePath(targetModule);
+  const targetSignature = resolver.readSignature(filePath, target.span ?? "", target.kind) ?? target.name;
+  const targetDeclaration = resolver.readDeclaration(filePath, target.span ?? "", target.kind) ?? "";
+  const bodyPlaceholder = extractBodyPlaceholder(targetDeclaration);
+  const parsedSpan = target.span ? parseSpanSimple(target.span) : null;
+  const mustCallEntries = overrides?.mustCall ? resolveElementList(store2, overrides.mustCall) : gatherMustCall(store2, targetId);
+  const mustImplementEntries = overrides?.mustImplement ? resolveElementList(store2, overrides.mustImplement) : gatherMustImplement(store2, targetId);
+  const usedByEntries = gatherUsedBy(store2, targetId);
+  const importEntries = gatherImports(store2, targetModule);
+  const analogueCandidates = overrides?.analogues ? resolveAnalogueList(store2, overrides.analogues) : findAnalogues(store2, target, maxAnalogues);
+  const resolvedMustCall = mustCallEntries.map((entry) => {
+    const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    return {
+      name: entry.name,
+      signature: resolver.readSignature(entryFilePath, entry.span ?? "", entry.kind) ?? entry.name,
+      importStatement: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule),
+      calleeBodySnippet: resolver.readBody(entryFilePath, entry.span ?? "", entry.kind, snippetLines) ?? ""
+    };
+  });
+  const resolvedMustImplement = mustImplementEntries.map((entry) => {
+    const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    return {
+      name: entry.name,
+      fullDeclaration: resolver.readDeclaration(entryFilePath, entry.span ?? "", entry.kind) ?? entry.name,
+      importStatement: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule)
+    };
+  });
+  const resolvedUsedBy = usedByEntries.map((entry) => {
+    const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    const incoming = store2.incoming(targetId);
+    const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
+    let callSiteSnippet = "";
+    for (const arrow of calleeOfArrows) {
+      const csOutgoing = store2.outgoing(arrow.srcId);
+      const callerOfArrow = csOutgoing.find((a) => a.kind === "callerOf");
+      if (callerOfArrow?.dstId === entry.id) {
+        const csElem = store2.getElem(arrow.srcId);
+        if (csElem?.span) {
+          callSiteSnippet = resolver.readContext(entryFilePath, csElem.span, 2) ?? "";
+          break;
+        }
+      }
+    }
+    return {
+      name: entry.name,
+      callSiteSnippet
+    };
+  });
+  const resolvedImports = importEntries.map((imp) => {
+    if (imp.sourceModule) {
+      return `import { ${imp.name} } from '${imp.sourceModule}'`;
+    }
+    return `import { ${imp.name} } from '...'`;
+  });
+  const resolvedAnalogues = analogueCandidates.map((candidate) => {
+    const candidateFilePath = getModuleFilePath(store2, candidate.module ?? "") ?? localModuleToFilePath(candidate.module ?? "");
+    const analogueCallees = getCalleeNames(store2, candidate.id);
+    return {
+      name: candidate.name,
+      similarity: candidate.similarity,
+      fullSource: resolver.readDeclaration(candidateFilePath, candidate.span ?? "", candidate.kind) ?? "",
+      callees: analogueCallees,
+      modulePath: candidate.module ?? ""
+    };
+  });
+  const targetFileContent = resolver.readFileContent(filePath, 500) ?? "";
+  const defaultCriteria = TASK_CRITERIA[task] ?? [];
+  const acceptanceCriteria = [...defaultCriteria, ...extraCriteria ?? []];
+  const commitSha = store2.commitSha();
+  const provenanceConfidence = determineConfidence(store2, targetId);
+  return {
+    task,
+    target: {
+      id: target.id,
+      name: target.name,
+      kind: target.kind,
+      module: targetModule,
+      signature: targetSignature,
+      bodyPlaceholder,
+      filePath,
+      lineRange: parsedSpan ?? { start: 1, end: 1 }
+    },
+    mustCall: resolvedMustCall,
+    mustImplement: resolvedMustImplement,
+    usedBy: resolvedUsedBy,
+    importsInTargetFile: resolver.readImportBlock(filePath),
+    analogues: resolvedAnalogues,
+    targetFileContent,
+    acceptanceCriteria,
+    provenance: {
+      ologCommitSha: commitSha,
+      confidence: provenanceConfidence,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }
+  };
+}
+function extractBodyPlaceholder(declaration) {
+  const firstBrace = declaration.indexOf("{");
+  if (firstBrace < 0) return "";
+  const lastBrace = declaration.lastIndexOf("}");
+  if (lastBrace < 0) return declaration.slice(firstBrace);
+  return declaration.slice(firstBrace, lastBrace + 1);
+}
+function resolveElementList(store2, ids) {
+  const results = [];
+  for (const id of ids) {
+    const elem = store2.getElem(id);
+    if (elem) {
+      results.push({
+        id: elem.id,
+        name: elem.name,
+        kind: elem.kind,
+        module: elem.module,
+        span: elem.span,
+        attrs: elem.attrs
+      });
+    }
+  }
+  return results;
+}
+function resolveAnalogueList(store2, ids) {
+  const results = [];
+  for (const id of ids) {
+    const elem = store2.getElem(id);
+    if (elem) {
+      results.push({
+        id: elem.id,
+        name: elem.name,
+        kind: elem.kind,
+        module: elem.module,
+        span: elem.span,
+        similarity: 1
+        // manually overridden, max similarity
+      });
+    }
+  }
+  return results;
+}
+function getCalleeNames(store2, elemId2) {
+  const names = [];
+  const incoming = store2.incoming(elemId2);
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  for (const arrow of callerOfArrows) {
+    const csOutgoing = store2.outgoing(arrow.srcId);
+    const calleeOfArrow = csOutgoing.find((a) => a.kind === "calleeOf");
+    if (calleeOfArrow) {
+      const callee = store2.getElem(calleeOfArrow.dstId);
+      if (callee) names.push(callee.name);
+    }
+  }
+  return names;
+}
+function determineConfidence(store2, targetId) {
+  const prov = store2.getProvenance(targetId);
+  if (!prov) return "unresolved";
+  if (prov.confidence === "resolved") return "resolved";
+  return "mixed";
+}
+function localModuleToFilePath(modulePath) {
+  return modulePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "") + ".ts";
+}
+function parseSpanSimple(span) {
+  const m = span.match(/^(\d+):\d+-(\d+):\d+$/);
+  if (!m) return null;
+  return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
 }
 
 // src/tools/olog-query.ts
@@ -2873,7 +3401,7 @@ function registerOlogApply(server2, store2, projectRoot2) {
 // src/tools/olog-validate.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z7 } from "zod";
-function escapeRegex2(str) {
+function escapeRegex3(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function registerOlogValidate(server2, store2) {
@@ -2906,7 +3434,7 @@ function registerOlogValidate(server2, store2) {
             const existing = store2.getElem(op.target);
             if (existing) {
               const candidates = store2.queryElements({
-                nameRegex: `^${escapeRegex2(op.newName)}$`,
+                nameRegex: `^${escapeRegex3(op.newName)}$`,
                 limit: 100
               });
               const conflicting = candidates.filter(
@@ -3222,9 +3750,108 @@ function registerOlogRender(server2, store2, projectRoot2) {
   );
 }
 
+// src/tools/olog-delegate.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z10 } from "zod";
+var TASK_TYPES = [
+  "write_function_body",
+  "write_test",
+  "write_migration",
+  "rewrite_body",
+  "write_documentation"
+];
+function registerOlogDelegate(server2, store2, projectRoot2) {
+  server2.registerTool(
+    "olog_delegate",
+    {
+      description: "Assemble a fully-resolved structural brief for a text-generation subagent. Traverses the olog to collect signatures, call graphs, interface contracts, import paths, and analogue source code. Returns a self-contained brief that requires NO further olog queries \u2014 designed for consumption by a smaller/cheaper model that will write the actual code.",
+      inputSchema: z10.object({
+        task: z10.enum(TASK_TYPES).describe(
+          "The type of text-generation task."
+        ),
+        target: z10.string().describe(
+          'Element ID of the target entity (e.g., "symbol:src/auth.verifyJwt"). Use olog_query or olog_inspect to find the ID.'
+        ),
+        contextOverrides: z10.object({
+          mustCall: z10.array(z10.string()).optional().describe(
+            "Element IDs the implementation must call. Replaces automatically derived context."
+          ),
+          mustImplement: z10.array(z10.string()).optional().describe(
+            "Element IDs of interfaces this implementation must satisfy. Replaces derived context."
+          ),
+          analogues: z10.array(z10.string()).optional().describe(
+            "Element IDs of similar existing implementations. Replaces automatic discovery."
+          )
+        }).optional().describe(
+          "Manual overrides for structural context. When provided, these REPLACE the automatically derived values (not merge)."
+        ),
+        acceptanceCriteria: z10.array(z10.string()).optional().describe(
+          "Additional acceptance criteria, merged with task-type defaults."
+        ),
+        maxAnalogues: z10.number().int().min(0).max(5).default(3).describe(
+          "Maximum number of analogue implementations to include."
+        ),
+        snippetLines: z10.number().int().min(10).max(200).default(50).describe(
+          "Maximum lines of source code per snippet."
+        )
+      }),
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines }) => {
+      try {
+        const overrides = contextOverrides ? {
+          ...contextOverrides.mustCall ? { mustCall: contextOverrides.mustCall } : {},
+          ...contextOverrides.mustImplement ? { mustImplement: contextOverrides.mustImplement } : {},
+          ...contextOverrides.analogues ? { analogues: contextOverrides.analogues } : {}
+        } : void 0;
+        const result = assembleBrief(
+          store2,
+          projectRoot2,
+          task,
+          target,
+          overrides,
+          maxAnalogues,
+          snippetLines,
+          acceptanceCriteria
+        );
+        if ("ok" in result && result.ok === false) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result, null, 2)
+              }
+            ],
+            isError: true
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ ok: false, error: message }, null, 2)
+            }
+          ],
+          isError: true
+        };
+      }
+    }
+  );
+}
+
 // src/index.ts
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
-var ologDir = join3(projectRoot, ".olog");
+var ologDir = join4(projectRoot, ".olog");
 try {
   mkdirSync(ologDir, { recursive: true });
 } catch (err) {
@@ -3233,7 +3860,7 @@ try {
   );
   process.exit(1);
 }
-var dbPath = join3(ologDir, "olog.sqlite");
+var dbPath = join4(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 var start = Date.now();
@@ -3249,7 +3876,7 @@ try {
   store.close();
   process.exit(1);
 }
-var server = new McpServer10(
+var server = new McpServer11(
   { name: "olog-mcp", version: "0.0.1" },
   {
     instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits). The name and module parameters accept JavaScript regex patterns.`,
@@ -3265,6 +3892,7 @@ registerOlogPlan(server, store);
 registerOlogValidate(server, store);
 registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
+registerOlogDelegate(server, store, projectRoot);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("[olog] MCP server connected on stdio");

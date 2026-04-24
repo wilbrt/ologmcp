@@ -1,0 +1,49 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "olog": {
+
+      "type": "local",
+      "command": ["./run-olog-mcp.sh"],
+      "enabled": true
+    }
+  },
+  "agent": {
+    "build": {
+      "mode": "primary",
+      "model": "opencode-go/glm-5.1",
+      "prompt": "{file:./prompts/prompt.txt}",
+      "description": "Primary agent with full tools. Uses the olog for structural reasoning and delegates text generation to the code-writer subagent.",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "*": "allow"
+        },
+        "webfetch": "allow",
+        "task": {
+          "*": "allow"
+        }
+      }
+    },
+    "code-writer": {
+      "mode": "subagent",
+      "model": "opencode-go/minimax-m2.7",
+      "prompt": "{file:./prompts/code-writer.txt}",
+      "description": "Writes code from a fully-resolved DelegationBrief. Receives all context as concrete text — no olog access needed. Follows analogue patterns, satisfies acceptance criteria, produces file edits.",
+      "steps": 15,
+      "hidden": true,
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "*": "deny",
+          "npx tsc --noEmit *": "allow",
+          "npx vitest run *": "allow"
+        },
+        "webfetch": "deny",
+        "task": {
+          "*": "deny"
+        }
+      }
+    }
+  }
+}

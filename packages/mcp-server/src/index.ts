@@ -12,6 +12,7 @@ import { registerOlogPlan } from './tools/olog-plan.js';
 import { registerOlogValidate } from './tools/olog-validate.js';
 import { registerOlogProposeSchema } from './tools/olog-propose-schema.js';
 import { registerOlogRender } from './tools/olog-render.js';
+import { registerOlogDelegate } from './tools/olog-delegate.js';
 
 const projectRoot = process.env.OLOG_ROOT || process.cwd();
 
@@ -60,6 +61,7 @@ registerOlogPlan(server, store);
 registerOlogValidate(server, store);
 registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
+registerOlogDelegate(server, store, projectRoot);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

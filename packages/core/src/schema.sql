@@ -13,11 +13,6 @@ CREATE TABLE IF NOT EXISTS olog_elem (
   module TEXT,
   span   TEXT,
   attrs  TEXT NOT NULL DEFAULT '{}',
-  CHECK (kind IN (
-    'file','module','symbol','callsite','import','type',
-    'interface','class','enum','function','method','const',
-    'var','namespace','other'
-  )),
   CHECK (json_valid(attrs))
 ) STRICT;
 
@@ -27,13 +22,7 @@ CREATE TABLE IF NOT EXISTS olog_arr (
   src_id TEXT NOT NULL,
   dst_id TEXT NOT NULL,
   attrs  TEXT NOT NULL DEFAULT '{}',
-CHECK (kind IN (
-    'extends','implements','calls','imports','exports',
-    'references','contains','returns','param','typeof',
-    'instanceof','definedIn','inModule','memberOf',
-    'callerOf','calleeOf','importsFrom','locatedIn','other'
-  )),
-  CHECK (json_valid(attrs)),
+CHECK (json_valid(attrs)),
   FOREIGN KEY (src_id) REFERENCES olog_elem(id) ON DELETE CASCADE,
   FOREIGN KEY (dst_id) REFERENCES olog_elem(id) ON DELETE CASCADE
 ) STRICT;

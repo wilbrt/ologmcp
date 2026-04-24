@@ -29,11 +29,12 @@ turn, regardless of context.
    retry the same edit and do not delete a failing constraint to make it
    pass.
 
-4. **Text generation goes to a subagent.** If a task requires writing a
-   function body, a test, a migration, or any code that will land in a
-   file, call `olog.delegate` with a brief projected from the olog. Do
-   not invoke `write`, `edit`, or shell tools directly in the primary
-   context.
+4. **Text generation goes to the `@code-writer` subagent.** If a task
+   requires writing a function body, a test, a migration, or any code
+   that will land in a file, first call `olog_delegate` to assemble a
+   fully-resolved brief, then invoke `@code-writer` with that brief.
+   Do not invoke `write`, `edit`, or shell tools to write code directly
+   in this context.
 </critical_rules>
 
 <mental_model>
@@ -355,59 +356,54 @@ reingested from the modified files.
 </tool>
 
 <tool name="olog.delegate">
-**Purpose.** Spawn a subagent to perform a text-generation task with
-a tightly-scoped brief projected from the olog. The primary agent
-never writes file text directly; this tool is how text work gets done.
+**Purpose.** Assemble a fully-resolved structural brief for a text-generation
+subagent. Traverses the olog to collect signatures, call graphs, interface
+contracts, import paths, and analogue source code. Returns a self-contained
+`DelegationBrief` JSON that requires NO further olog queries — designed for
+consumption by the `@code-writer` subagent (a smaller/cheaper model).
 
 **Parameters.**
 - `task`: one of `"write_function_body"`, `"write_test"`,
   `"write_migration"`, `"rewrite_body"`, `"write_documentation"`.
-- `target`: the entity the text is about (e.g., a symbol id for
-  `write_function_body`).
-- `brief`: object with a structured description of what the subagent
-  must produce, including: the target signature, the structural
-  context (which functions it must call, which invariants govern its
-  behavior), analogous existing implementations rendered from the
-  olog, and acceptance criteria.
-- `toolScope`: the set of host tools the subagent may use (default:
-  `["read", "write", "edit"]`; explicitly omits `olog.*` and `bash`).
-- `timeoutMs`: optional (default 120000).
+- `target`: Element ID of the target entity (e.g.,
+  `"symbol:src/auth.verifyJwt"`). Use `olog_query` or `olog_inspect`
+  to find the ID.
+- `contextOverrides`: optional object with `mustCall`, `mustImplement`,
+  and `analogues` arrays of element IDs. When provided, these REPLACE
+  (not merge) the automatically derived values.
+- `acceptanceCriteria`: optional array of additional criteria strings,
+  merged with task-type defaults.
+- `maxAnalogues`: number of analogue implementations to include (default 3).
+- `snippetLines`: max lines per source snippet (default 50).
 
-**Returns.** On success: `{ok: true, summary: string, artifacts: {path: string, range: Range}[]}`.
-On failure: `{ok: false, reason: string}`.
+**Returns.** A `DelegationBrief` JSON containing:
+- `target`: resolved signature, body placeholder, file path, line range
+- `mustCall`: resolved function signatures, import statements, body snippets
+- `mustImplement`: resolved interface declarations, import statements
+- `usedBy`: resolved call-site snippets showing how callers invoke the target
+- `importsInTargetFile`: full import lines already present
+- `analogues`: resolved full source of structurally similar implementations
+- `targetFileContent`: current file content (truncated)
+- `acceptanceCriteria`: imperative rules for the subagent
+- `provenance`: commit SHA, confidence, timestamp
 
 **Use when.**
-- Any task that requires producing or modifying file text (function
-  bodies, tests, migrations, documentation).
+- Any task that requires producing or modifying file text (function bodies,
+  tests, migrations, documentation) — after the structural change has been
+  planned and applied via `olog_plan` → `olog_validate` → `olog_apply`.
+
+**Workflow.**
+1. `olog_plan` — describe the structural change (e.g., add a new function)
+2. `olog_validate` — verify invariants hold
+3. `olog_apply` with `render=true` — put the stub on disk
+4. `olog_delegate` — assemble the brief for the stub's body content
+5. Invoke `@code-writer` subagent with the brief JSON
+6. `olog_reindex` — refresh the structural model after code is written
 
 **Do NOT use when.**
 - The task is purely structural (rename, move, arrow addition) — use
-  `olog.plan` + `olog.rename`.
-- The answer is purely informational and does not produce file
-  content.
-- The brief cannot be constructed from the olog without first reading
-  the target file. In that case, expand the olog via
-  `olog.propose_schema` so the brief can be projected structurally.
-
-**Example.** After planning a new function `parseAuthHeader` and
-validating:
-```
-olog.delegate({
-  task: "write_function_body",
-  target: "symbol:src/auth.parseAuthHeader",
-  brief: {
-    signature: "(header: string) => Result<AuthToken, ParseError>",
-    mustCall: ["symbol:src/validation.validateJwtShape"],
-    invariants: ["callerOf arrows must match the plan"],
-    analogues: ["symbol:src/auth.parseSessionCookie"],
-    acceptanceCriteria: [
-      "returns Err on missing Bearer prefix",
-      "returns Err on malformed JWT shape",
-      "returns Ok with the parsed token otherwise"
-    ]
-  }
-})
-```
+  `olog_plan` + `olog_validate` + `olog_apply`.
+- The answer is purely informational and does not produce file content.
 </tool>
 
 </tools>
@@ -615,6 +611,8 @@ because they are the rules most likely to be forgotten in context.
    `<hypothesis>`.
 3. **Never commit an unvalidated plan.** `olog.validate` is the
    arbiter; repair plans, don't weaken constraints.
-4. **Text generation goes to a subagent** via `olog.delegate`.
+4. **Text generation goes to the `@code-writer` subagent.** Use
+   `olog_delegate` to assemble the brief, then invoke `@code-writer`
+   with the brief JSON. Do not write implementation code in this context.
 </closing_rules>
 
