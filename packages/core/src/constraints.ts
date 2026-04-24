@@ -224,6 +224,8 @@ export function evaluatePathEquations(
 }
 
 function isSchemaElement(elem: OlogElem): string | null {
+  if (elem.kind === 'domain') return 'domain';
+  if (elem.kind === 'property') return 'property';
   const schemaKind = (elem.attrs as Record<string, unknown> | null)?.schemaKind;
   if (typeof schemaKind === 'string') return schemaKind;
   if (elem.kind === 'other' && elem.module === null && elem.span === null) {

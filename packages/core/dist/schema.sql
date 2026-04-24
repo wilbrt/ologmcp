@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS olog_elem (
   CHECK (kind IN (
     'file','module','symbol','callsite','import','type',
     'interface','class','enum','function','method','const',
-    'var','namespace','other'
+    'var','namespace','property','domain','other'
   )),
   CHECK (json_valid(attrs))
 ) STRICT;
@@ -31,7 +31,8 @@ CHECK (kind IN (
     'extends','implements','calls','imports','exports',
     'references','contains','returns','param','typeof',
     'instanceof','definedIn','inModule','memberOf',
-    'callerOf','calleeOf','importsFrom','locatedIn','other'
+    'callerOf','calleeOf','importsFrom','locatedIn',
+    'hasProperty','hasType','implementedAs','other'
   )),
   CHECK (json_valid(attrs)),
   FOREIGN KEY (src_id) REFERENCES olog_elem(id) ON DELETE CASCADE,

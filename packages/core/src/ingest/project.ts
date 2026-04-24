@@ -4,7 +4,7 @@ import { resolve, relative, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { OlogStore } from '../db.js';
-import { parserFor, extractFromFile } from './treesitter.js';
+import { parserFor, extractFromFile, extractPropertiesFromFile } from './treesitter.js';
 import { elemId, arrowId, fileElemId, formatSpan } from './ids.js';
 import type { IngestResult, RawElement, RawArrow } from '../ontology.js';
 
@@ -106,6 +106,13 @@ interface IngestCounts {
   arrowsCreated: number;
 }
 
+interface FileForPropertyExtraction {
+  relativePath: string;
+  source: string;
+  parser: ReturnType<typeof parserFor>;
+  nameToId: Map<string, string[]>;
+}
+
 function runIngestion(projectRoot: string, store: OlogStore, head: string): IngestCounts {
   const files = discoverTsFiles(projectRoot);
 
@@ -128,6 +135,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
 
   let filesProcessed = 0;
   const createdModuleIds = new Set<string>();
+  const filesToExtract: FileForPropertyExtraction[] = [];
 
   for (const absolutePath of files) {
     let stats;
@@ -340,7 +348,83 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
       }
     }
 
+    // Record files that may have interface/type/class properties to extract
+    const hasStructuredTypes = extracted.elements.some(
+      e => e.kind === 'interface' || e.kind === 'type' || e.kind === 'class',
+    );
+    if (hasStructuredTypes) {
+      filesToExtract.push({ relativePath, source, parser, nameToId });
+    }
+
     filesProcessed++;
+  }
+
+  // --- Property extraction pass ---
+  // Build a global name→id index for cross-file type resolution
+  const globalNameToId = new Map<string, string>();
+  for (const e of elems) {
+    if (!globalNameToId.has(e.name)) {
+      globalNameToId.set(e.name, e.id);
+    }
+  }
+
+  const seenPropArrowIds = new Set<string>();
+
+  for (const { relativePath, source, parser: fileParser, nameToId: fileNameToId } of filesToExtract) {
+    let properties;
+    try {
+      properties = extractPropertiesFromFile(fileParser, source, relativePath);
+    } catch (err) {
+      console.error(
+        `[olog] Failed to extract properties from ${relativePath}: ${err instanceof Error ? err.message : String(err)}`
+      );
+      continue;
+    }
+
+    for (const prop of properties) {
+      const parentIds = fileNameToId.get(prop.parentName);
+      const parentId = parentIds?.[0];
+      if (!parentId) continue;
+
+      // Parse span to get line/col
+      const coords = parseTreeSitterSpan(prop.span);
+      const line = coords?.startLine ?? 1;
+      const col = coords?.startCol ?? 1;
+
+      const propId = elemId(relativePath, line, col, 'property', `${prop.parentName}.${prop.name}`);
+      const fullSpan = coords
+        ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol)
+        : prop.span;
+
+      elems.push({
+        id: propId,
+        kind: 'property',
+        name: `${prop.parentName}.${prop.name}`,
+        module: relativePath,
+        span: fullSpan,
+        attrs: JSON.stringify({ typeText: prop.typeText, optional: prop.optional, readonly: prop.readonly }),
+      });
+
+      // hasProperty arrow: parent → property
+      const hpId = arrowId(parentId, 'hasProperty', propId);
+      if (!seenPropArrowIds.has(hpId)) {
+        seenPropArrowIds.add(hpId);
+        arrs.push({ id: hpId, kind: 'hasProperty', src_id: parentId, dst_id: propId, attrs: '{}' });
+      }
+
+      // hasType arrows: property → referenced type element
+      for (const typeRef of prop.typeRefs) {
+        // Prefer same-file resolution
+        const typeId = (fileNameToId.get(typeRef) ?? [])[0] ?? globalNameToId.get(typeRef);
+        if (typeId && typeId !== propId) {
+          const htId = arrowId(propId, 'hasType', typeId);
+          if (!seenPropArrowIds.has(htId)) {
+            seenPropArrowIds.add(htId);
+            arrs.push({ id: htId, kind: 'hasType', src_id: propId, dst_id: typeId, attrs: '{}' });
+          }
+        }
+      }
+    }
   }
 
   store.ingestFull(elems, arrs, head);

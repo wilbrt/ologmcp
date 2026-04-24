@@ -73,6 +73,16 @@ export {
   type MiningOptions,
   type ArrowPath,
 } from './mining/index.js';
+export { discoverDomainCandidates, toNounPhrase, isExternalModule } from './domain/discover.js';
+export type {
+  DomainCandidate,
+  ArrowProposal,
+  DomainSessionData,
+  ProposedEquation,
+  DiscoveryOptions,
+} from './domain/types.js';
+export { DomainSessionStore } from './domain/session.js';
+export { extractPropertiesFromFile, type PropertyExtract } from './ingest/treesitter.js';
 export { enumeratePaths, getArrowKindsInUse } from './mining/paths.js';
 export {
   annotatePathKinds,

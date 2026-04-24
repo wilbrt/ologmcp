@@ -3,7 +3,7 @@
 // src/index.ts
 import { mkdirSync } from "fs";
 import { join as join4 } from "path";
-import { McpServer as McpServer12 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer as McpServer13 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // ../core/src/db.ts
@@ -11,6 +11,91 @@ import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
+
+// ../core/src/domain/session.ts
+import { randomUUID } from "crypto";
+var DomainSessionStore = class {
+  constructor(db) {
+    this.db = db;
+    this.insertStmt = this.db.prepare(
+      `INSERT INTO olog_domain_session
+         (id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.getStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
+       FROM olog_domain_session WHERE id = ?`
+    );
+    this.listStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
+       FROM olog_domain_session ORDER BY created_at DESC`
+    );
+    this.updateStmt = this.db.prepare(
+      `UPDATE olog_domain_session
+       SET status = ?, scope_regex = ?, candidates_json = ?, equations_json = ?, updated_at = ?
+       WHERE id = ?`
+    );
+    this.deleteStmt = this.db.prepare(`DELETE FROM olog_domain_session WHERE id = ?`);
+  }
+  db;
+  insertStmt;
+  getStmt;
+  listStmt;
+  updateStmt;
+  deleteStmt;
+  create(data) {
+    const id = randomUUID();
+    const now = Date.now();
+    this.insertStmt.run(
+      id,
+      "active",
+      data.scopeRegex ?? null,
+      JSON.stringify(data.candidates),
+      JSON.stringify(data.equations),
+      data.commitSha,
+      now,
+      now
+    );
+    return id;
+  }
+  get(id) {
+    const row = this.getStmt.get(id);
+    if (!row) return null;
+    return this.rowToSession(row);
+  }
+  list() {
+    const rows = this.listStmt.all();
+    return rows.map((r) => this.rowToSession(r));
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Domain session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(
+      merged.status,
+      merged.scopeRegex,
+      JSON.stringify(merged.candidates),
+      JSON.stringify(merged.equations),
+      Date.now(),
+      id
+    );
+  }
+  delete(id) {
+    this.deleteStmt.run(id);
+  }
+  rowToSession(row) {
+    return {
+      id: row.id,
+      status: row.status,
+      scopeRegex: row.scope_regex,
+      candidates: JSON.parse(row.candidates_json),
+      equations: row.equations_json ? JSON.parse(row.equations_json) : [],
+      commitSha: row.commit_sha,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+};
 
 // ../core/src/traverse.ts
 function rowToElem(row) {
@@ -92,6 +177,7 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var OlogStore = class {
   db;
+  _sessions;
   getElemStmt;
   outgoingStmt;
   incomingStmt;
@@ -132,8 +218,31 @@ var OlogStore = class {
     }
     const provCols = this.db.prepare("PRAGMA table_info(olog_prov)").all();
     if (!provCols.some((c) => c.name === "confidence")) {
-      this.db.exec("ALTER TABLE olog_prov ADD COLUMN confidence TEXT NOT NULL DEFAULT 'resolved' CHECK (confidence IN ('resolved','unresolved','tentative'))");
+      this.db.exec("ALTER TABLE olog_prov ADD COLUMN confidence TEXT NOT NULL DEFAULT 'resolved'");
     }
+    const provTableDef = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='olog_prov'"
+    ).get()?.sql ?? "";
+    if (provTableDef.includes("CHECK (source IN")) {
+      this.db.exec(`
+        CREATE TABLE olog_prov_new (
+          elem_id      TEXT NOT NULL,
+          source       TEXT NOT NULL,
+          commit_sha   TEXT NOT NULL,
+          ingested_at  INTEGER NOT NULL,
+          confidence   TEXT NOT NULL DEFAULT 'resolved',
+          PRIMARY KEY (elem_id, source, commit_sha),
+          FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
+        ) STRICT, WITHOUT ROWID
+      `);
+      this.db.exec(
+        "INSERT INTO olog_prov_new SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov"
+      );
+      this.db.exec("DROP TABLE olog_prov");
+      this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
+    }
+    this._sessions = new DomainSessionStore(this.db);
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
     );
@@ -173,6 +282,9 @@ var OlogStore = class {
     this.hasArrowKindStmt = this.db.prepare(
       "SELECT 1 FROM olog_arr WHERE kind = ? LIMIT 1"
     );
+  }
+  get sessions() {
+    return this._sessions;
   }
   commitSha() {
     const row = this.db.prepare("SELECT value FROM olog_meta WHERE key = 'commit_sha'").get();
@@ -577,7 +689,7 @@ var OlogStore = class {
 };
 
 // ../core/src/constraints.ts
-import { randomUUID } from "crypto";
+import { randomUUID as randomUUID2 } from "crypto";
 var CONFIDENCE_RANK = {
   tentative: 0,
   unresolved: 1,
@@ -612,7 +724,7 @@ function evaluateExistence(store2, constraint) {
   if (elements.length > 0) return [];
   return [
     {
-      id: randomUUID(),
+      id: randomUUID2(),
       kind: "integrity",
       humanMessage: constraint.message ?? `Existence constraint "${constraint.name}" violated: no elements of kind "${kind}" exist`,
       involved: []
@@ -647,7 +759,7 @@ function evaluateLayering(store2, constraint) {
       if (dstLayer === null) continue;
       if (srcLayer < dstLayer) {
         violations.push({
-          id: randomUUID(),
+          id: randomUUID2(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Layering constraint "${constraint.name}" violated: "${elem.name}" (layer ${srcLayer}) references "${dstElem.name}" (layer ${dstLayer})`,
           involved: [elem.id, dstElem.id]
@@ -670,7 +782,7 @@ function evaluateMonotonicity(store2, constraint) {
       if (CONFIDENCE_RANK[dstProv.confidence] > CONFIDENCE_RANK[srcProv.confidence]) {
         const dstElem = store2.getElem(arr.dstId);
         violations.push({
-          id: randomUUID(),
+          id: randomUUID2(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Monotonicity constraint "${constraint.name}" violated: "${elem.name}" (${srcProv.confidence}) \u2192 "${dstElem?.name ?? arr.dstId}" (${dstProv.confidence})`,
           involved: [elem.id, arr.dstId]
@@ -691,14 +803,14 @@ function evaluateTotality(store2, constraint) {
     const matching = outgoing.filter((a) => a.kind === arrowKind);
     if (matching.length === 0) {
       violations.push({
-        id: randomUUID(),
+        id: randomUUID2(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has no outgoing "${arrowKind}" arrow`,
         involved: [elem.id]
       });
     } else if (matching.length > 1) {
       violations.push({
-        id: randomUUID(),
+        id: randomUUID2(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has ${matching.length} outgoing "${arrowKind}" arrows (expected exactly 1)`,
         involved: [elem.id, ...matching.map((a) => a.id)]
@@ -714,7 +826,7 @@ function evaluatePathEquations(store2, _operations) {
     const result = evaluateEquation(eq, store2);
     if (!result.valid) {
       violations.push({
-        id: randomUUID(),
+        id: randomUUID2(),
         kind: "equation",
         humanMessage: result.message,
         involved: result.involved
@@ -724,6 +836,8 @@ function evaluatePathEquations(store2, _operations) {
   return { valid: violations.length === 0, violations };
 }
 function isSchemaElement(elem) {
+  if (elem.kind === "domain") return "domain";
+  if (elem.kind === "property") return "property";
   const schemaKind = elem.attrs?.schemaKind;
   if (typeof schemaKind === "string") return schemaKind;
   if (elem.kind === "other" && elem.module === null && elem.span === null) {
@@ -1080,6 +1194,83 @@ function extractFromFile(parser, source, queryPath) {
   }
   return { elements, arrows };
 }
+function collectTypeIdentifiers(node) {
+  const result = [];
+  if (node.type === "type_identifier") {
+    result.push(node.text);
+  }
+  for (const child of node.children) {
+    result.push(...collectTypeIdentifiers(child));
+  }
+  return result;
+}
+function walkDescendants(node, visitor) {
+  for (const child of node.children) {
+    visitor(child);
+    walkDescendants(child, visitor);
+  }
+}
+function extractPropertyFromNode(node, parentName, parentKind) {
+  const nameNode = node.childForFieldName("name");
+  if (!nameNode) return null;
+  const name = nameNode.text;
+  const optional = node.children.some((c) => c.type === "?");
+  const isReadonly = node.children.some((c) => c.type === "readonly");
+  const typeAnnotation = node.childForFieldName("type");
+  const typeText = typeAnnotation ? typeAnnotation.text : "";
+  const typeRefs = typeAnnotation ? collectTypeIdentifiers(typeAnnotation) : [];
+  const span = formatSpan2(nameNode);
+  return { name, span, typeText, optional, readonly: isReadonly, typeRefs, parentName, parentKind };
+}
+function extractPropertiesFromFile(parser, source, _moduleName) {
+  const tree = parser.parse(source);
+  const result = [];
+  walkDescendants(tree.rootNode, (node) => {
+    if (node.type === "interface_declaration") {
+      const nameNode = node.childForFieldName("name");
+      if (!nameNode) return;
+      const parentName = nameNode.text;
+      const body = node.children.find((c) => c.type === "object_type");
+      if (!body) return;
+      for (const child of body.children) {
+        if (child.type === "property_signature") {
+          const prop = extractPropertyFromNode(child, parentName, "interface");
+          if (prop) result.push(prop);
+        }
+      }
+    } else if (node.type === "type_alias_declaration") {
+      const nameNode = node.childForFieldName("name");
+      if (!nameNode) return;
+      const parentName = nameNode.text;
+      const typeNode = node.childForFieldName("type");
+      if (!typeNode) return;
+      if (typeNode.type === "object_type") {
+        for (const child of typeNode.children) {
+          if (child.type === "property_signature") {
+            const prop = extractPropertyFromNode(child, parentName, "type");
+            if (prop) result.push(prop);
+          }
+        }
+      }
+    } else if (node.type === "class_declaration") {
+      const nameNode = node.childForFieldName("name");
+      if (!nameNode) return;
+      const parentName = nameNode.text;
+      const body = node.children.find((c) => c.type === "class_body");
+      if (!body) return;
+      for (const child of body.children) {
+        if (child.type === "public_field_definition") {
+          const prop = extractPropertyFromNode(child, parentName, "class");
+          if (prop) result.push(prop);
+        }
+      }
+    }
+  });
+  if ("delete" in tree && typeof tree.delete === "function") {
+    tree.delete();
+  }
+  return result;
+}
 
 // ../core/src/ingest/project.ts
 var IGNORE_PATTERNS = [
@@ -1159,6 +1350,7 @@ function runIngestion(projectRoot2, store2, head) {
   const arrs = [];
   let filesProcessed = 0;
   const createdModuleIds = /* @__PURE__ */ new Set();
+  const filesToExtract = [];
   for (const absolutePath of files) {
     let stats;
     try {
@@ -1345,7 +1537,64 @@ function runIngestion(projectRoot2, store2, head) {
         }
       }
     }
+    const hasStructuredTypes = extracted.elements.some(
+      (e) => e.kind === "interface" || e.kind === "type" || e.kind === "class"
+    );
+    if (hasStructuredTypes) {
+      filesToExtract.push({ relativePath, source, parser, nameToId });
+    }
     filesProcessed++;
+  }
+  const globalNameToId = /* @__PURE__ */ new Map();
+  for (const e of elems) {
+    if (!globalNameToId.has(e.name)) {
+      globalNameToId.set(e.name, e.id);
+    }
+  }
+  const seenPropArrowIds = /* @__PURE__ */ new Set();
+  for (const { relativePath, source, parser: fileParser, nameToId: fileNameToId } of filesToExtract) {
+    let properties;
+    try {
+      properties = extractPropertiesFromFile(fileParser, source, relativePath);
+    } catch (err) {
+      console.error(
+        `[olog] Failed to extract properties from ${relativePath}: ${err instanceof Error ? err.message : String(err)}`
+      );
+      continue;
+    }
+    for (const prop of properties) {
+      const parentIds = fileNameToId.get(prop.parentName);
+      const parentId = parentIds?.[0];
+      if (!parentId) continue;
+      const coords = parseTreeSitterSpan(prop.span);
+      const line = coords?.startLine ?? 1;
+      const col = coords?.startCol ?? 1;
+      const propId = elemId(relativePath, line, col, "property", `${prop.parentName}.${prop.name}`);
+      const fullSpan = coords ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : prop.span;
+      elems.push({
+        id: propId,
+        kind: "property",
+        name: `${prop.parentName}.${prop.name}`,
+        module: relativePath,
+        span: fullSpan,
+        attrs: JSON.stringify({ typeText: prop.typeText, optional: prop.optional, readonly: prop.readonly })
+      });
+      const hpId = arrowId(parentId, "hasProperty", propId);
+      if (!seenPropArrowIds.has(hpId)) {
+        seenPropArrowIds.add(hpId);
+        arrs.push({ id: hpId, kind: "hasProperty", src_id: parentId, dst_id: propId, attrs: "{}" });
+      }
+      for (const typeRef of prop.typeRefs) {
+        const typeId = (fileNameToId.get(typeRef) ?? [])[0] ?? globalNameToId.get(typeRef);
+        if (typeId && typeId !== propId) {
+          const htId = arrowId(propId, "hasType", typeId);
+          if (!seenPropArrowIds.has(htId)) {
+            seenPropArrowIds.add(htId);
+            arrs.push({ id: htId, kind: "hasType", src_id: propId, dst_id: typeId, attrs: "{}" });
+          }
+        }
+      }
+    }
   }
   store2.ingestFull(elems, arrs, head);
   return {
@@ -2926,6 +3175,9 @@ var ALL_ARROW_KINDS = [
   "calleeOf",
   "importsFrom",
   "locatedIn",
+  "hasProperty",
+  "hasType",
+  "implementedAs",
   "other"
 ];
 var DEFAULT_ELEMENT_KINDS = [
@@ -2935,7 +3187,9 @@ var DEFAULT_ELEMENT_KINDS = [
   "interface",
   "type",
   "import",
-  "module"
+  "module",
+  "domain",
+  "property"
 ];
 function mineEquations(store2, options = {}) {
   const opts = { ...DEFAULT_MINING_OPTIONS, ...options };
@@ -3020,6 +3274,146 @@ function canonicalEquationKey(lhs, rhs) {
   return `${rhsKey}\u2261${lhsKey}`;
 }
 
+// ../core/src/domain/discover.ts
+import { randomUUID as randomUUID3 } from "crypto";
+var ABBREV_MAP = {
+  Elem: "Element",
+  Arr: "Arrow",
+  Prov: "Provenance",
+  Val: "Value",
+  Cfg: "Configuration",
+  Msg: "Message",
+  Err: "Error",
+  Req: "Request",
+  Res: "Response",
+  Impl: "Implementation",
+  Attr: "Attribute",
+  Prop: "Property",
+  Spec: "Specification",
+  Ctor: "Constructor",
+  Lhs: "Left-Hand Side",
+  Rhs: "Right-Hand Side",
+  Src: "Source",
+  Dst: "Destination",
+  Id: "ID"
+};
+function splitPascalCase(name) {
+  const spaced = name.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return spaced.split(" ").filter((s) => s.length > 0);
+}
+function toNounPhrase(pascalName) {
+  const words = splitPascalCase(pascalName).map((w) => ABBREV_MAP[w] ?? w);
+  const noun = words.join(" ");
+  const article = /^[aeiouAEIOU]/.test(noun) ? "an" : "a";
+  return `${article} ${noun}`;
+}
+function isExternalModule(module, excludeModules) {
+  if (module === null) return true;
+  if (module.startsWith("node:")) return true;
+  if (excludeModules) {
+    for (const pattern of excludeModules) {
+      if (new RegExp(pattern).test(module)) return true;
+    }
+  }
+  return false;
+}
+function discoverDomainCandidates(store2, options = {}) {
+  const elements = [
+    ...store2.queryElements({ kind: "interface", limit: 1e4 }),
+    ...store2.queryElements({ kind: "type", limit: 1e4 }),
+    ...store2.queryElements({ kind: "class", limit: 1e4 })
+  ];
+  const filtered = elements.filter((elem) => {
+    if (isExternalModule(elem.module, options.excludeModules)) return false;
+    if (options.scopeRegex) {
+      try {
+        if (!new RegExp(options.scopeRegex).test(elem.module ?? "")) return false;
+      } catch {
+      }
+    }
+    return true;
+  });
+  const candidates = filtered.map((elem) => {
+    const candidateId = randomUUID3();
+    const bridgeArrow = {
+      id: randomUUID3(),
+      name: "implemented as",
+      domainCandidateId: candidateId,
+      codomainName: elem.name,
+      codomainCandidateId: null,
+      total: true,
+      source: "field",
+      confidence: "resolved",
+      status: "proposed"
+    };
+    return {
+      id: candidateId,
+      codeElementId: elem.id,
+      proposedName: toNounPhrase(elem.name),
+      proposedArrows: [],
+      bridgeArrow,
+      questions: [],
+      status: "proposed"
+    };
+  });
+  const codeIdToCandidate = /* @__PURE__ */ new Map();
+  for (const c of candidates) {
+    codeIdToCandidate.set(c.codeElementId, c);
+  }
+  for (const candidate of candidates) {
+    const elem = store2.getElem(candidate.codeElementId);
+    if (!elem) continue;
+    const outgoing = store2.outgoing(candidate.codeElementId);
+    const propertyArrows = outgoing.filter((a) => a.kind === "hasProperty");
+    if (propertyArrows.length === 0 && elem.kind === "type") {
+      candidate.questions.push(
+        `"${elem.name}" appears to be a type alias. If it is a union of string literals, should it become a domain concept, or should each value be a separate domain object?`
+      );
+    }
+    for (const propArrow of propertyArrows) {
+      const propElem = store2.getElem(propArrow.dstId);
+      if (!propElem) continue;
+      const propAttrs = propElem.attrs;
+      const typeText = propAttrs.typeText ?? "";
+      const optional = propAttrs.optional === true;
+      const isArray = typeText.includes("[]") || typeText.includes("Array<");
+      const isRecord = typeText.includes("Record<") || typeText.startsWith("{") && !typeText.includes("null");
+      const propName = propElem.name.includes(".") ? propElem.name.split(".").slice(1).join(".") : propElem.name;
+      const propOutgoing = store2.outgoing(propArrow.dstId);
+      const typeArrows = propOutgoing.filter((a) => a.kind === "hasType");
+      for (const typeArrow of typeArrows) {
+        const typeElem = store2.getElem(typeArrow.dstId);
+        if (!typeElem) continue;
+        const targetCandidate = codeIdToCandidate.get(typeArrow.dstId);
+        const total = !optional && !isArray;
+        const proposal = {
+          id: randomUUID3(),
+          name: `has ${propName}`,
+          domainCandidateId: candidate.id,
+          codomainName: targetCandidate?.proposedName ?? typeElem.name,
+          codomainCandidateId: targetCandidate?.id ?? null,
+          total,
+          source: "field",
+          confidence: targetCandidate ? "resolved" : "unresolved",
+          status: "proposed"
+        };
+        if (optional) {
+          proposal.question = `The field "${propName}" is optional (nullable). Is this arrow total (every ${candidate.proposedName} must have one) or partial?`;
+        } else if (isArray) {
+          proposal.question = `The field "${propName}" is an array. The arrow "has ${propName}" would be many-valued. Should ${typeElem.name} be reified with a back-reference?`;
+        }
+        candidate.proposedArrows.push(proposal);
+      }
+      if (typeArrows.length === 0 && isRecord) {
+        candidate.questions.push(
+          `The field "${propName}" has a generic container type ("${typeText}"). Should individual attributes be modeled as separate domain arrows?`
+        );
+      }
+    }
+  }
+  return candidates;
+}
+
 // src/tools/olog-query.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -3039,6 +3433,8 @@ function registerOlogQuery(server2, store2) {
     "const",
     "var",
     "namespace",
+    "property",
+    "domain",
     "other"
   ];
   const arrowKindEnum = [
@@ -3060,6 +3456,9 @@ function registerOlogQuery(server2, store2) {
     "calleeOf",
     "importsFrom",
     "locatedIn",
+    "hasProperty",
+    "hasType",
+    "implementedAs",
     "other"
   ];
   const startByIdSchema = z.object({
@@ -3097,6 +3496,8 @@ function registerOlogQuery(server2, store2) {
           "const",
           "var",
           "namespace",
+          "property",
+          "domain",
           "any"
         ]).default("any").describe("Element kind to filter by. Use 'any' to match all kinds."),
         name: z.string().optional().describe(
@@ -3834,7 +4235,7 @@ function registerOlogValidate(server2, store2) {
 // src/tools/olog-propose-schema.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z8 } from "zod";
-import { randomUUID as randomUUID2 } from "crypto";
+import { randomUUID as randomUUID4 } from "crypto";
 var objectSchema = z8.object({
   kind: z8.string().describe("Element kind"),
   name: z8.string().describe("Element name (noun phrase)"),
@@ -3947,7 +4348,7 @@ function registerOlogProposeSchema(server2, store2) {
         }
         const createdElemIds = /* @__PURE__ */ new Map();
         for (const obj of objects ?? []) {
-          const id = randomUUID2();
+          const id = randomUUID4();
           createdElemIds.set(obj.name, id);
           const kind = STANDARD_KINDS.includes(obj.kind) ? obj.kind : "other";
           const elem = {
@@ -4289,6 +4690,334 @@ function registerOlogMineEquations(server2, store2) {
   );
 }
 
+// src/tools/olog-domain-discover.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z12 } from "zod";
+import "crypto";
+function registerOlogDomainDiscover(server2, store2) {
+  server2.registerTool(
+    "olog_domain_discover",
+    {
+      description: `Domain modeling session tool. Discovers domain concepts from the olog's interface/type/class elements and allows iterative refinement and commitment to the olog. Use action="start" to begin a session, "refine" to accept/reject candidates, "commit" to write accepted domain objects and arrows to the olog.`,
+      inputSchema: z12.discriminatedUnion("action", [
+        z12.object({
+          action: z12.literal("start"),
+          scopeRegex: z12.string().optional().describe('Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
+          excludeModules: z12.array(z12.string()).optional().describe("Module path patterns to exclude from discovery")
+        }),
+        z12.object({
+          action: z12.literal("refine"),
+          sessionId: z12.string().describe("Session ID returned by start"),
+          responses: z12.array(
+            z12.object({
+              candidateId: z12.string(),
+              status: z12.enum(["accepted", "rejected", "deferred"]),
+              nameOverride: z12.string().optional().describe("Override the proposed noun phrase name"),
+              arrowOverrides: z12.array(
+                z12.object({
+                  arrowId: z12.string(),
+                  status: z12.enum(["accepted", "rejected", "modified"]),
+                  newName: z12.string().optional(),
+                  totalOverride: z12.boolean().optional()
+                })
+              ).optional()
+            })
+          )
+        }),
+        z12.object({
+          action: z12.literal("commit"),
+          sessionId: z12.string().describe("Session ID returned by start"),
+          provenance: z12.object({
+            source: z12.enum(["manual", "llm"]),
+            commitSha: z12.string(),
+            confidence: z12.enum(["resolved", "unresolved", "tentative"])
+          })
+        }),
+        z12.object({
+          action: z12.literal("list")
+        }),
+        z12.object({
+          action: z12.literal("get"),
+          sessionId: z12.string()
+        })
+      ]),
+      annotations: { readOnlyHint: false, idempotentHint: false }
+    },
+    async (params) => {
+      try {
+        if (params.action === "start") {
+          const discoveryOpts = {
+            ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
+            ...params.excludeModules !== void 0 && { excludeModules: params.excludeModules }
+          };
+          const candidates = discoverDomainCandidates(store2, discoveryOpts);
+          const sessionId = store2.sessions.create({
+            ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
+            candidates,
+            equations: [],
+            commitSha: store2.commitSha()
+          });
+          const allQuestions = [];
+          for (const c of candidates) {
+            allQuestions.push(...c.questions);
+            for (const a of c.proposedArrows) {
+              if (a.question) allQuestions.push(a.question);
+            }
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId,
+                    candidateCount: candidates.length,
+                    arrowCount: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
+                    candidates: candidates.map((c) => ({
+                      id: c.id,
+                      proposedName: c.proposedName,
+                      codeElement: c.codeElementId,
+                      proposedArrows: c.proposedArrows.map((a) => ({
+                        id: a.id,
+                        name: a.name,
+                        codomain: a.codomainName,
+                        total: a.total,
+                        confidence: a.confidence,
+                        question: a.question
+                      })),
+                      bridgeArrow: { name: c.bridgeArrow.name, codomain: c.bridgeArrow.codomainName },
+                      questions: c.questions,
+                      status: c.status
+                    })),
+                    clarifyingQuestions: [...new Set(allQuestions)].slice(0, 10)
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "refine") {
+          const session = store2.sessions.get(params.sessionId);
+          if (!session) {
+            return {
+              content: [{ type: "text", text: `Session not found: ${params.sessionId}` }],
+              isError: true
+            };
+          }
+          for (const response of params.responses) {
+            const candidate = session.candidates.find((c) => c.id === response.candidateId);
+            if (!candidate) continue;
+            candidate.status = response.status;
+            if (response.nameOverride) {
+              candidate.proposedName = response.nameOverride;
+            }
+            if (response.arrowOverrides) {
+              for (const override of response.arrowOverrides) {
+                const arrow = candidate.proposedArrows.find((a) => a.id === override.arrowId);
+                if (!arrow) continue;
+                arrow.status = override.status;
+                if (override.newName) arrow.name = override.newName;
+                if (override.totalOverride !== void 0) arrow.total = override.totalOverride;
+              }
+            }
+          }
+          const rejectedIds = new Set(
+            session.candidates.filter((c) => c.status === "rejected").map((c) => c.id)
+          );
+          for (const candidate of session.candidates) {
+            candidate.proposedArrows = candidate.proposedArrows.filter(
+              (a) => !a.codomainCandidateId || !rejectedIds.has(a.codomainCandidateId)
+            );
+          }
+          store2.sessions.update(params.sessionId, { candidates: session.candidates });
+          const pending = session.candidates.filter((c) => c.status === "proposed");
+          const accepted = session.candidates.filter((c) => c.status === "accepted");
+          const rejected = session.candidates.filter((c) => c.status === "rejected");
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId: params.sessionId,
+                    summary: { accepted: accepted.length, rejected: rejected.length, pending: pending.length },
+                    pendingCandidates: pending.map((c) => ({
+                      id: c.id,
+                      proposedName: c.proposedName,
+                      questions: c.questions
+                    }))
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "commit") {
+          const session = store2.sessions.get(params.sessionId);
+          if (!session) {
+            return {
+              content: [{ type: "text", text: `Session not found: ${params.sessionId}` }],
+              isError: true
+            };
+          }
+          if (session.status !== "active") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session is already ${session.status}`
+                }
+              ],
+              isError: true
+            };
+          }
+          const accepted = session.candidates.filter((c) => c.status === "accepted");
+          if (accepted.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: 'No accepted candidates to commit. Use action="refine" to accept candidates first.'
+                }
+              ],
+              isError: true
+            };
+          }
+          const prov = {
+            source: params.provenance.source,
+            commitSha: params.provenance.commitSha,
+            ingestedAt: Date.now(),
+            confidence: params.provenance.confidence
+          };
+          const candidateToElemId = /* @__PURE__ */ new Map();
+          let addedObjects = 0;
+          let addedArrows = 0;
+          let addedBridges = 0;
+          for (const candidate of accepted) {
+            const elemId2 = `domain:${candidate.id}`;
+            candidateToElemId.set(candidate.id, elemId2);
+            store2.addElement({
+              id: elemId2,
+              kind: "domain",
+              name: candidate.proposedName,
+              module: null,
+              span: null,
+              attrs: { codeElementId: candidate.codeElementId }
+            });
+            store2.addProvenance(elemId2, prov);
+            addedObjects++;
+          }
+          for (const candidate of accepted) {
+            const srcId = candidateToElemId.get(candidate.id);
+            for (const arrow of candidate.proposedArrows) {
+              if (arrow.status === "rejected") continue;
+              let dstId;
+              if (arrow.codomainCandidateId) {
+                dstId = candidateToElemId.get(arrow.codomainCandidateId);
+              }
+              if (!dstId) continue;
+              const arrowId2 = `${srcId}:${arrow.name.replace(/\s+/g, "-")}:${dstId}`;
+              store2.addArrow({
+                id: arrowId2,
+                kind: "other",
+                srcId,
+                dstId,
+                attrs: { name: arrow.name, total: arrow.total }
+              });
+              addedArrows++;
+            }
+            const bridgeArrow = candidate.bridgeArrow;
+            if (bridgeArrow.status !== "rejected") {
+              const domElemId = candidateToElemId.get(candidate.id);
+              const bridgeId = `${domElemId}:implementedAs:${candidate.codeElementId}`;
+              store2.addArrow({
+                id: bridgeId,
+                kind: "implementedAs",
+                srcId: domElemId,
+                dstId: candidate.codeElementId,
+                attrs: {}
+              });
+              addedBridges++;
+            }
+          }
+          store2.sessions.update(params.sessionId, { status: "committed" });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId: params.sessionId,
+                    status: "committed",
+                    addedObjects,
+                    addedArrows,
+                    addedBridges
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "list") {
+          const sessions = store2.sessions.list();
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  sessions.map((s) => ({
+                    id: s.id,
+                    status: s.status,
+                    scopeRegex: s.scopeRegex,
+                    candidateCount: s.candidates.length,
+                    commitSha: s.commitSha,
+                    createdAt: new Date(s.createdAt).toISOString()
+                  })),
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "get") {
+          const session = store2.sessions.get(params.sessionId);
+          if (!session) {
+            return {
+              content: [{ type: "text", text: `Session not found: ${params.sessionId}` }],
+              isError: true
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(session, null, 2)
+              }
+            ]
+          };
+        }
+        return {
+          content: [{ type: "text", text: "Unknown action" }],
+          isError: true
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
+          isError: true
+        };
+      }
+    }
+  );
+}
+
 // src/index.ts
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
 var ologDir = join4(projectRoot, ".olog");
@@ -4316,10 +5045,10 @@ try {
   store.close();
   process.exit(1);
 }
-var server = new McpServer12(
+var server = new McpServer13(
   { name: "olog-mcp", version: "0.0.1" },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations). The name and module parameters accept JavaScript regex patterns.`,
+    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations), olog_domain_discover (domain modeling sessions: discover domain objects from code types, refine, and commit to olog). The name and module parameters accept JavaScript regex patterns.`,
     capabilities: { logging: {} }
   }
 );
@@ -4334,6 +5063,7 @@ registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
 registerOlogMineEquations(server, store);
+registerOlogDomainDiscover(server, store);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("[olog] MCP server connected on stdio");

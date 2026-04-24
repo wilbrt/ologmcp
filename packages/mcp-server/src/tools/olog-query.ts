@@ -18,6 +18,8 @@ export function registerOlogQuery(server: McpServer, store: OlogStore): void {
     'const',
     'var',
     'namespace',
+    'property',
+    'domain',
     'other',
   ] as const;
 
@@ -40,6 +42,9 @@ export function registerOlogQuery(server: McpServer, store: OlogStore): void {
     'calleeOf',
     'importsFrom',
     'locatedIn',
+    'hasProperty',
+    'hasType',
+    'implementedAs',
     'other',
   ] as const;
 
@@ -82,6 +87,8 @@ export function registerOlogQuery(server: McpServer, store: OlogStore): void {
             'const',
             'var',
             'namespace',
+            'property',
+            'domain',
             'any',
           ])
           .default('any')

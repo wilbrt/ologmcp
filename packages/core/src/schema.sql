@@ -40,9 +40,9 @@ CREATE TABLE IF NOT EXISTS olog_prov (
   source       TEXT NOT NULL,
   commit_sha   TEXT NOT NULL,
   ingested_at  INTEGER NOT NULL,
+  confidence   TEXT NOT NULL DEFAULT 'resolved',
   PRIMARY KEY (elem_id, source, commit_sha),
-  FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE,
-  CHECK (source IN ('tree-sitter','lsp','manual','heuristic','other'))
+  FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS olog_violation (
@@ -86,3 +86,16 @@ CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id);
 CREATE INDEX IF NOT EXISTS idx_violation_elem_id ON olog_violation(elem_id);
 CREATE INDEX IF NOT EXISTS idx_equation_name ON olog_equation(name);
 CREATE INDEX IF NOT EXISTS idx_constraint_kind ON olog_constraint(kind);
+
+CREATE TABLE IF NOT EXISTS olog_domain_session (
+  id              TEXT PRIMARY KEY,
+  status          TEXT NOT NULL CHECK (status IN ('active', 'committed', 'abandoned')),
+  scope_regex     TEXT,
+  candidates_json TEXT NOT NULL CHECK (json_valid(candidates_json)),
+  equations_json  TEXT CHECK (json_valid(equations_json)),
+  commit_sha      TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_domain_session_status ON olog_domain_session(status);

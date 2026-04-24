@@ -7,11 +7,11 @@ import Database from 'better-sqlite3';
 /**
  * Union of all element kinds in the ontology.
  */
-type OlogKind = 'file' | 'module' | 'symbol' | 'callsite' | 'import' | 'type' | 'interface' | 'class' | 'enum' | 'function' | 'method' | 'const' | 'var' | 'namespace' | 'other';
+type OlogKind = 'file' | 'module' | 'symbol' | 'callsite' | 'import' | 'type' | 'interface' | 'class' | 'enum' | 'function' | 'method' | 'const' | 'var' | 'namespace' | 'property' | 'domain' | 'other';
 /**
  * Union of all arrow kinds in the ontology.
  */
-type ArrowKind = 'extends' | 'implements' | 'calls' | 'imports' | 'exports' | 'references' | 'contains' | 'returns' | 'param' | 'typeof' | 'instanceof' | 'definedIn' | 'inModule' | 'memberOf' | 'callerOf' | 'calleeOf' | 'importsFrom' | 'locatedIn' | 'other';
+type ArrowKind = 'extends' | 'implements' | 'calls' | 'imports' | 'exports' | 'references' | 'contains' | 'returns' | 'param' | 'typeof' | 'instanceof' | 'definedIn' | 'inModule' | 'memberOf' | 'callerOf' | 'calleeOf' | 'importsFrom' | 'locatedIn' | 'hasProperty' | 'hasType' | 'implementedAs' | 'other';
 /**
  * Represents an element in the ontology.
  */

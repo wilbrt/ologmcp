@@ -48,7 +48,15 @@ export function registerOlogMineEquations(server: McpServer, store: OlogStore): 
           .array(z.string())
           .optional()
           .describe(
-            'Restrict seed elements to these kinds. Default: function, method, class, interface, type, import, module.',
+            'Restrict seed elements to these kinds. Default: function, method, class, interface, type, import, module, domain, property.',
+          ),
+        touchingElementKinds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Restrict to arrow kinds that touch elements of these kinds (i.e., arrows whose source or destination element is of one of these kinds). ' +
+            'Useful for focusing mining on domain-relevant arrows — e.g., passing ["domain"] will only consider arrows that connect to/from domain objects. ' +
+            'Intersected with arrowKinds if both are specified.',
           ),
         maxCounterexamples: z
           .number()
@@ -85,6 +93,9 @@ export function registerOlogMineEquations(server: McpServer, store: OlogStore): 
         }
         if (params.elementKinds) {
           opts.elementKinds = params.elementKinds;
+        }
+        if (params.touchingElementKinds) {
+          opts.touchingElementKinds = params.touchingElementKinds;
         }
 
         const results: EquationCandidate[] = mineEquationsCore(store, opts);
@@ -138,6 +149,7 @@ export function registerOlogMineEquations(server: McpServer, store: OlogStore): 
                     minCoverage: params.minCoverage,
                     arrowKinds: params.arrowKinds ?? '(all in use)',
                     elementKinds: params.elementKinds ?? '(defaults)',
+                    touchingElementKinds: params.touchingElementKinds ?? '(all)',
                   },
                   equations: formatted,
                 },

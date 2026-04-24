@@ -30,6 +30,16 @@ export interface MiningOptions {
   arrowKinds?: ArrowKind[];
   /** Restrict seed elements to these kinds (default: all major kinds). */
   elementKinds?: string[];
+  /**
+   * Restrict to arrow kinds that touch elements of these kinds.
+   * When specified, only arrow kinds that have at least one arrow whose
+   * source or destination element is of one of these kinds will be
+   * included in path enumeration. This is useful for focusing mining
+   * on domain-relevant arrows (e.g., passing ['domain'] will only
+   * consider arrows that connect to/from domain objects).
+   * Intersected with arrowKinds if both are specified.
+   */
+  touchingElementKinds?: string[];
   /** Maximum number of counterexamples per equation (default 5). */
   maxCounterexamples: number;
   /** Number of seed elements per kind to sample (default 100). */
@@ -63,6 +73,9 @@ const ALL_ARROW_KINDS: ArrowKind[] = [
   'calleeOf',
   'importsFrom',
   'locatedIn',
+  'hasProperty',
+  'hasType',
+  'implementedAs',
   'other',
 ];
 
@@ -74,6 +87,8 @@ const DEFAULT_ELEMENT_KINDS: string[] = [
   'type',
   'import',
   'module',
+  'domain',
+  'property',
 ];
 
 /**
@@ -93,7 +108,16 @@ export function mineEquations(
   const opts: MiningOptions = { ...DEFAULT_MINING_OPTIONS, ...options };
 
   // Determine which arrow kinds to use
-  const arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store.hasArrowKind(k));
+  let arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store.hasArrowKind(k));
+
+  // If touchingElementKinds is specified, intersect with arrow kinds that
+  // touch elements of those kinds. This scopes path enumeration to only
+  // arrows relevant to the specified element kinds (e.g., 'domain').
+  if (opts.touchingElementKinds && opts.touchingElementKinds.length > 0) {
+    const touchingKinds = store.getArrowKindsForElementKinds(opts.touchingElementKinds);
+    const touchingSet = new Set(touchingKinds);
+    arrowKinds = arrowKinds.filter((k) => touchingSet.has(k));
+  }
 
   // Determine which element kinds to seed from
   const elementKinds = opts.elementKinds ?? DEFAULT_ELEMENT_KINDS;

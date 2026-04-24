@@ -21,6 +21,8 @@ export type OlogKind =
   | 'const'
   | 'var'
   | 'namespace'
+  | 'property'
+  | 'domain'
   | 'other';
 
 /**
@@ -45,6 +47,9 @@ export type ArrowKind =
   | 'calleeOf'
   | 'importsFrom'
   | 'locatedIn'
+  | 'hasProperty'
+  | 'hasType'
+  | 'implementedAs'
   | 'other';
 
 /**

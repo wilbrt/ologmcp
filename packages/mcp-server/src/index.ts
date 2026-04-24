@@ -14,6 +14,7 @@ import { registerOlogProposeSchema } from './tools/olog-propose-schema.js';
 import { registerOlogRender } from './tools/olog-render.js';
 import { registerOlogDelegate } from './tools/olog-delegate.js';
 import { registerOlogMineEquations } from './tools/olog-mine-equations.js';
+import { registerOlogDomainDiscover } from './tools/olog-domain-discover.js';
 
 const projectRoot = process.env.OLOG_ROOT || process.cwd();
 
@@ -48,7 +49,7 @@ try {
 const server = new McpServer(
   { name: 'olog-mcp', version: '0.0.1' },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations). The name and module parameters accept JavaScript regex patterns.`,
+    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations), olog_domain_discover (domain modeling sessions: discover domain objects from code types, refine, and commit to olog). The name and module parameters accept JavaScript regex patterns.`,
     capabilities: { logging: {} },
   }
 );
@@ -64,6 +65,7 @@ registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
 registerOlogMineEquations(server, store);
+registerOlogDomainDiscover(server, store);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -13,6 +13,7 @@ import type {
   PlanOperation,
   ApplyResult,
   ChangeInstruction,
+  ArrowKind,
 } from './ontology.js';
 import { traverse as traverseGraph, type TraverseOptions } from './traverse.js';
 
@@ -562,6 +563,35 @@ export class OlogStore {
   hasArrowKind(kind: string): boolean {
     const row = this.hasArrowKindStmt.get(kind) as { 1: number } | undefined;
     return !!row;
+  }
+
+  /**
+   * Get all distinct arrow kinds where either the source or destination element
+   * is of one of the given element kinds.
+   *
+   * This is useful for mining: when you want to restrict path enumeration to
+   * only arrow kinds that connect to domain objects (or any other element kind),
+   * this method returns the relevant arrow kinds.
+   *
+   * @param elementKinds - Array of element kinds to filter by (e.g., ['domain'])
+   * @returns Sorted array of distinct ArrowKind values
+   */
+  getArrowKindsForElementKinds(elementKinds: string[]): ArrowKind[] {
+    if (elementKinds.length === 0) return [];
+
+    const placeholders = elementKinds.map(() => '?').join(',');
+    const sql = `
+      SELECT DISTINCT a.kind
+      FROM olog_arr a
+      INNER JOIN olog_elem src ON a.src_id = src.id
+      INNER JOIN olog_elem dst ON a.dst_id = dst.id
+      WHERE src.kind IN (${placeholders})
+         OR dst.kind IN (${placeholders})
+      ORDER BY a.kind
+    `;
+    const params = [...elementKinds, ...elementKinds];
+    const rows = this.db.prepare(sql).all(...params) as Array<{ kind: string }>;
+    return rows.map((r) => r.kind as ArrowKind);
   }
 
   close(): void {
