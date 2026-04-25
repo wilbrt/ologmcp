@@ -238,8 +238,18 @@ export class OlogStore {
           "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
         ).run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
       }
+
+      // Build the set of all element IDs that will exist after this transaction,
+      // so we can drop stale manual arrows whose endpoints shifted (e.g. line-number
+      // based IDs that moved due to code edits).
+      const allElemIds = new Set<string>();
+      for (const e of elems) allElemIds.add(e.id);
+      for (const e of manualElems) allElemIds.add(e.id);
+
       for (const a of manualArrs) {
-        insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        if (allElemIds.has(a.src_id) && allElemIds.has(a.dst_id)) {
+          insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        }
       }
       for (const p of manualProvs) {
         this.insertProvStmt.run(p.elem_id, p.source, p.commit_sha, p.ingested_at, p.confidence ?? 'resolved');
@@ -592,6 +602,29 @@ export class OlogStore {
   hasArrowKind(kind: string): boolean {
     const row = this.hasArrowKindStmt.get(kind) as { 1: number } | undefined;
     return !!row;
+  }
+
+  /**
+   * Load every arrow as lightweight {src_id, kind, dst_id} rows.
+   * Used to build the in-memory adjacency map for fast mining.
+   */
+  loadAllArrows(): Array<{ src_id: string; kind: string; dst_id: string }> {
+    return this.db
+      .prepare('SELECT src_id, kind, dst_id FROM olog_arr')
+      .all() as Array<{ src_id: string; kind: string; dst_id: string }>;
+  }
+
+  /**
+   * Load every element's id, kind, and name.
+   * Used for kind annotation and counterexample names during mining.
+   */
+  loadElemMeta(): Map<string, { kind: string; name: string }> {
+    const rows = this.db
+      .prepare('SELECT id, kind, name FROM olog_elem')
+      .all() as Array<{ id: string; kind: string; name: string }>;
+    const map = new Map<string, { kind: string; name: string }>();
+    for (const r of rows) map.set(r.id, { kind: r.kind, name: r.name });
+    return map;
   }
 
   /**

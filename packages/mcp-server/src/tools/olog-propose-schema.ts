@@ -32,7 +32,7 @@ const equationSchema = z.object({
 });
 
 const provenanceSchema = z.object({
-  source: z.enum(['tree-sitter', 'lsp', 'manual', 'heuristic', 'other']),
+  source: z.enum(['tree-sitter', 'lsp', 'manual', 'llm', 'heuristic', 'other']),
   commitSha: z.string(),
   ingestedAt: z.number().optional(),
   confidence: z.enum(['resolved', 'unresolved', 'tentative']),
@@ -53,6 +53,8 @@ const STANDARD_KINDS: string[] = [
   'const',
   'var',
   'namespace',
+  'domain',
+  'property',
   'other',
 ];
 
@@ -63,9 +65,18 @@ export function registerOlogProposeSchema(server: McpServer, store: OlogStore): 
       description:
         'Propose a new schema fragment to the olog. Validates noun phrases for objects, total-function semantics for arrows, and path equation composability. Stores accepted objects in olog_elem, arrows in olog_arr, equations in olog_equation, and provenance in olog_prov.',
       inputSchema: z.object({
-        objects: z.array(objectSchema).optional().describe('Objects to add to the schema'),
-        arrows: z.array(arrowSchema).optional().describe('Arrows to add to the schema'),
-        equations: z.array(equationSchema).optional().describe('Path equations to add'),
+        objects: z
+          .preprocess(v => typeof v === 'string' ? JSON.parse(v) : v, z.array(objectSchema))
+          .default([])
+          .describe('Objects to add to the schema. Omit or pass [] if adding only arrows/equations.'),
+        arrows: z
+          .preprocess(v => typeof v === 'string' ? JSON.parse(v) : v, z.array(arrowSchema))
+          .default([])
+          .describe('Arrows to add to the schema. Omit or pass [] if adding only objects/equations.'),
+        equations: z
+          .preprocess(v => typeof v === 'string' ? JSON.parse(v) : v, z.array(equationSchema))
+          .default([])
+          .describe('Path equations to add. Omit or pass [] if not adding equations.'),
         provenance: provenanceSchema.describe('Provenance metadata for all proposed items'),
       }),
       annotations: { readOnlyHint: false, idempotentHint: false },
@@ -76,7 +87,7 @@ export function registerOlogProposeSchema(server: McpServer, store: OlogStore): 
         const added = { objects: 0, arrows: 0, equations: 0 };
 
         const objectMap = new Map<string, { kind: string; name: string; module?: string | undefined }>();
-        for (const obj of objects ?? []) {
+        for (const obj of objects) {
           if (!isNounPhrase(obj.name)) {
             errors.push(
               `Object "${obj.name}" is not a valid noun phrase (must start with uppercase after optional "a"/"an"/"the")`,
@@ -87,7 +98,7 @@ export function registerOlogProposeSchema(server: McpServer, store: OlogStore): 
 
         const arrowList: Array<{ name: string; domain: string; codomain: string; total: boolean }> = [];
         const proposedArrowKinds = new Set<string>();
-        for (const arrow of arrows ?? []) {
+        for (const arrow of arrows) {
           if (!arrow.total) {
             errors.push(
               `Arrow "${arrow.name}" is not total. Many-valued relationships must be reified before proposing.`,
@@ -113,7 +124,7 @@ export function registerOlogProposeSchema(server: McpServer, store: OlogStore): 
           proposedArrowKinds.add(arrow.name);
         }
 
-        for (const eq of equations ?? []) {
+        for (const eq of equations) {
           const result = validateEquation(eq as PathEquation, store, Array.from(proposedArrowKinds));
           errors.push(...result.errors);
         }
@@ -131,7 +142,7 @@ export function registerOlogProposeSchema(server: McpServer, store: OlogStore): 
 
         const createdElemIds = new Map<string, string>();
 
-        for (const obj of objects ?? []) {
+        for (const obj of objects) {
           const id = randomUUID();
           createdElemIds.set(obj.name, id);
           const kind = STANDARD_KINDS.includes(obj.kind) ? obj.kind : 'other';
@@ -188,7 +199,7 @@ export function registerOlogProposeSchema(server: McpServer, store: OlogStore): 
           };
         }
 
-        for (const eq of equations ?? []) {
+        for (const eq of equations) {
           const eqWithProv: PathEquation = {
             id: eq.id,
             name: eq.name,

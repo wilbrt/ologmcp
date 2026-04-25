@@ -14,8 +14,9 @@
 import { OlogStore } from '../db.js';
 import type { ArrowKind, OlogElem } from '../ontology.js';
 import { enumeratePaths, getArrowKindsInUse, type ArrowPath } from './paths.js';
-import { annotatePathKinds, generateCandidatePairs, type CandidatePair } from './candidates.js';
-import { evaluateEquationCandidate, type EquationCandidate, type Counterexample } from './evaluate.js';
+import { generateCandidatePairs } from './candidates.js';
+import { type EquationCandidate, type Counterexample } from './evaluate.js';
+import { buildInMemoryGraph, precomputePathResults, pathKey } from './graph.js';
 
 export type { EquationCandidate, Counterexample };
 
@@ -110,70 +111,126 @@ export function mineEquations(
   // Determine which arrow kinds to use
   let arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store.hasArrowKind(k));
 
-  // If touchingElementKinds is specified, intersect with arrow kinds that
-  // touch elements of those kinds. This scopes path enumeration to only
-  // arrows relevant to the specified element kinds (e.g., 'domain').
   if (opts.touchingElementKinds && opts.touchingElementKinds.length > 0) {
     const touchingKinds = store.getArrowKindsForElementKinds(opts.touchingElementKinds);
     const touchingSet = new Set(touchingKinds);
     arrowKinds = arrowKinds.filter((k) => touchingSet.has(k));
   }
 
-  // Determine which element kinds to seed from
   const elementKinds = opts.elementKinds ?? DEFAULT_ELEMENT_KINDS;
 
   // Step 1: Enumerate paths
   const paths = enumeratePaths(arrowKinds, opts.maxDepth);
 
-  // Step 2: Annotate paths with domain/codomain kinds
-  annotatePathKinds(paths, store, elementKinds, opts.sampleSize);
+  // Step 2: Load full graph into memory and gather seeds (2 bulk SQL queries total)
+  const graph = buildInMemoryGraph(store);
 
-  // Step 3: Generate candidate pairs
-  const candidates = generateCandidatePairs(paths);
-
-  // Gather seed elements for evaluation
-  const seedElements: { kind: string; elements: OlogElem[] }[] = [];
+  const allSeeds: OlogElem[] = [];
   for (const kind of elementKinds) {
     const elems = store.queryElements({ kind, limit: opts.sampleSize });
-    if (elems.length > 0) {
-      seedElements.push({ kind, elements: elems });
-    }
+    allSeeds.push(...elems);
   }
 
-  // Step 4: Evaluate each candidate
+  // Step 3: Pre-compute every (path, seed) result in one pass — zero DB queries
+  const cache = precomputePathResults(graph, paths, allSeeds);
+
+  // Step 4: Annotate paths using pre-computed results
+  const seedKindMap = new Map(allSeeds.map(e => [e.id, e.kind]));
+  for (const path of paths) {
+    const key = pathKey(path.arrows);
+    const seedResults = cache.get(key) ?? new Map();
+    const domainKinds = new Set<string>();
+    const codomainKinds = new Set<string>();
+    for (const [seedId, reached] of seedResults) {
+      const dk = seedKindMap.get(seedId);
+      if (dk) domainKinds.add(dk);
+      for (const dstId of reached) {
+        const ck = graph.elems.get(dstId)?.kind;
+        if (ck) codomainKinds.add(ck);
+      }
+    }
+    path.domainKind = domainKinds.size === 1 ? [...domainKinds][0]! : null;
+    path.codomainKind = codomainKinds.size > 0 ? [...codomainKinds].sort().join(',') : null;
+  }
+
+  // Step 5: Generate candidate pairs
+  const candidates = generateCandidatePairs(paths);
+
+  // Step 6: Evaluate candidates using the pre-computed cache — pure in-memory
   const results: EquationCandidate[] = [];
   const seen = new Set<string>();
 
   for (const candidate of candidates) {
-    // Canonicalize: shorter path first, then lexicographic
     const key = canonicalEquationKey(candidate.lhs, candidate.rhs);
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // Evaluate against all seed kinds
-    const allSeeds: OlogElem[] = [];
-    for (const group of seedElements) {
-      allSeeds.push(...group.elements);
+    const lhsKey = pathKey(candidate.lhs);
+    const rhsKey = pathKey(candidate.rhs);
+    const lhsResults = cache.get(lhsKey) ?? new Map<string, Set<string>>();
+    const rhsResults = cache.get(rhsKey) ?? new Map<string, Set<string>>();
+
+    let support = 0;
+    let total = 0;
+    const counterexamples: Counterexample[] = [];
+    const kindCounts = new Map<string, number>();
+
+    for (const seed of allSeeds) {
+      const lhsReached = lhsResults.get(seed.id);
+      const rhsReached = rhsResults.get(seed.id);
+
+      if (!lhsReached && !rhsReached) continue;
+      total++;
+      kindCounts.set(seed.kind, (kindCounts.get(seed.kind) ?? 0) + 1);
+
+      if (lhsReached && rhsReached) {
+        // Check set equality
+        let equal = lhsReached.size === rhsReached.size;
+        if (equal) {
+          for (const id of lhsReached) {
+            if (!rhsReached.has(id)) { equal = false; break; }
+          }
+        }
+        if (equal) {
+          support++;
+        } else if (counterexamples.length < opts.maxCounterexamples) {
+          counterexamples.push({
+            elementId: seed.id,
+            elementName: seed.name,
+            elementKind: seed.kind,
+            lhsResult: [...lhsReached]
+              .filter(id => !rhsReached.has(id))
+              .map(id => graph.elems.get(id)?.name ?? id),
+            rhsResult: [...rhsReached]
+              .filter(id => !lhsReached.has(id))
+              .map(id => graph.elems.get(id)?.name ?? id),
+          });
+        }
+      } else if (counterexamples.length < opts.maxCounterexamples) {
+        counterexamples.push({
+          elementId: seed.id,
+          elementName: seed.name,
+          elementKind: seed.kind,
+          lhsResult: lhsReached ? [...lhsReached].map(id => graph.elems.get(id)?.name ?? id) : [],
+          rhsResult: rhsReached ? [...rhsReached].map(id => graph.elems.get(id)?.name ?? id) : [],
+        });
+      }
     }
 
-    const result = evaluateEquationCandidate(
-      store,
-      candidate.lhs,
-      candidate.rhs,
-      allSeeds,
-      opts.maxCounterexamples,
-    );
+    if (total === 0) continue;
+    const coverage = support / total;
+    if (coverage < opts.minCoverage) continue;
 
-    // Skip if total is 0 (no seed element had both paths defined)
-    if (result.total === 0) continue;
+    // Dominant kind among seeds that contributed to this equation
+    let domainKind = 'any';
+    let maxCount = 0;
+    for (const [kind, count] of kindCounts) {
+      if (count > maxCount) { maxCount = count; domainKind = kind; }
+    }
 
-    // Skip if coverage is below threshold
-    if (result.coverage < opts.minCoverage) continue;
+    results.push({ lhsPath: candidate.lhs, rhsPath: candidate.rhs, domainKind, support, total, coverage, counterexamples });
 
-    results.push(result);
-
-    // Early termination if we have enough results
-    if (results.length >= opts.maxResults * 2) break; // extra for later dedup
+    if (results.length >= opts.maxResults * 2) break;
   }
 
   // Step 5: Sort by coverage (descending), then by total (descending)

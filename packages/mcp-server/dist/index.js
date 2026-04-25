@@ -325,8 +325,13 @@ var OlogStore = class {
           "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
         ).run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
       }
+      const allElemIds = /* @__PURE__ */ new Set();
+      for (const e of elems) allElemIds.add(e.id);
+      for (const e of manualElems) allElemIds.add(e.id);
       for (const a of manualArrs) {
-        insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        if (allElemIds.has(a.src_id) && allElemIds.has(a.dst_id)) {
+          insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        }
       }
       for (const p of manualProvs) {
         this.insertProvStmt.run(p.elem_id, p.source, p.commit_sha, p.ingested_at, p.confidence ?? "resolved");
@@ -638,6 +643,23 @@ var OlogStore = class {
   hasArrowKind(kind) {
     const row = this.hasArrowKindStmt.get(kind);
     return !!row;
+  }
+  /**
+   * Load every arrow as lightweight {src_id, kind, dst_id} rows.
+   * Used to build the in-memory adjacency map for fast mining.
+   */
+  loadAllArrows() {
+    return this.db.prepare("SELECT src_id, kind, dst_id FROM olog_arr").all();
+  }
+  /**
+   * Load every element's id, kind, and name.
+   * Used for kind annotation and counterexample names during mining.
+   */
+  loadElemMeta() {
+    const rows = this.db.prepare("SELECT id, kind, name FROM olog_elem").all();
+    const map = /* @__PURE__ */ new Map();
+    for (const r of rows) map.set(r.id, { kind: r.kind, name: r.name });
+    return map;
   }
   /**
    * Get all distinct arrow kinds where either the source or destination element
@@ -2995,39 +3017,6 @@ function enumeratePaths(arrowKinds, maxDepth) {
 }
 
 // ../core/src/mining/candidates.ts
-function annotatePathKinds(paths, store2, elementKinds, sampleSize = 50) {
-  const kindToIds = /* @__PURE__ */ new Map();
-  for (const kind of elementKinds) {
-    const elems = store2.queryElements({ kind, limit: sampleSize });
-    kindToIds.set(kind, elems.map((e) => e.id));
-  }
-  for (const path2 of paths) {
-    const steps = path2.arrows.map((kind) => ({
-      kind,
-      direction: "out"
-    }));
-    const domainKinds = [];
-    const codomainKinds = /* @__PURE__ */ new Set();
-    for (const [kind, ids] of kindToIds) {
-      let anyReached = false;
-      for (const id of ids) {
-        const result = store2.traverse({ startId: id, steps });
-        if (result.elements.length > 0) {
-          anyReached = true;
-          for (const elem of result.elements) {
-            codomainKinds.add(elem.kind);
-          }
-        }
-      }
-      if (anyReached) {
-        domainKinds.push(kind);
-      }
-    }
-    path2.domainKind = domainKinds.length === 1 ? domainKinds[0] : null;
-    path2.codomainKind = codomainKinds.size > 0 ? Array.from(codomainKinds).sort().join(",") : null;
-  }
-  return paths;
-}
 function generateCandidatePairs(paths) {
   const pairs = [];
   const byDomain = /* @__PURE__ */ new Map();
@@ -3096,79 +3085,54 @@ function canonicalKey(lhs, rhs) {
   return `${rhsKey}\u2261${lhsKey}`;
 }
 
-// ../core/src/mining/evaluate.ts
-function evaluateEquationCandidate(store2, lhsPath, rhsPath, seedElements, maxCounterexamples = 5) {
-  let support = 0;
-  let total = 0;
-  const counterexamples = [];
-  const lhsSteps = lhsPath.map((kind) => ({
-    kind,
-    direction: "out"
-  }));
-  const rhsSteps = rhsPath.map((kind) => ({
-    kind,
-    direction: "out"
-  }));
-  const kindCounts = /* @__PURE__ */ new Map();
-  for (const elem of seedElements) {
-    kindCounts.set(elem.kind, (kindCounts.get(elem.kind) ?? 0) + 1);
+// ../core/src/mining/graph.ts
+function buildInMemoryGraph(store2) {
+  const rawArrows = store2.loadAllArrows();
+  const outgoing = /* @__PURE__ */ new Map();
+  for (const { src_id, kind, dst_id } of rawArrows) {
+    let list = outgoing.get(src_id);
+    if (!list) {
+      list = [];
+      outgoing.set(src_id, list);
+    }
+    list.push({ kind, dstId: dst_id });
   }
-  let domainKind = "any";
-  let maxCount = 0;
-  for (const [kind, count] of kindCounts) {
-    if (count > maxCount) {
-      maxCount = count;
-      domainKind = kind;
-    }
-  }
-  for (const elem of seedElements) {
-    const lhsResult = store2.traverse({ startId: elem.id, steps: lhsSteps });
-    const rhsResult = store2.traverse({ startId: elem.id, steps: rhsSteps });
-    if (lhsResult.elements.length === 0 && rhsResult.elements.length === 0) {
-      continue;
-    }
-    if (lhsResult.elements.length === 0 || rhsResult.elements.length === 0) {
-      total++;
-      if (counterexamples.length < maxCounterexamples) {
-        counterexamples.push({
-          elementId: elem.id,
-          elementName: elem.name,
-          elementKind: elem.kind,
-          lhsResult: lhsResult.elements.map((e) => e.name),
-          rhsResult: rhsResult.elements.map((e) => e.name)
-        });
-      }
-      continue;
-    }
-    total++;
-    const lhsIds = new Set(lhsResult.elements.map((e) => e.id));
-    const rhsIds = new Set(rhsResult.elements.map((e) => e.id));
-    const lhsOnly = [...lhsIds].filter((id) => !rhsIds.has(id));
-    const rhsOnly = [...rhsIds].filter((id) => !lhsIds.has(id));
-    if (lhsOnly.length === 0 && rhsOnly.length === 0) {
-      support++;
-    } else {
-      if (counterexamples.length < maxCounterexamples) {
-        counterexamples.push({
-          elementId: elem.id,
-          elementName: elem.name,
-          elementKind: elem.kind,
-          lhsResult: lhsResult.elements.filter((e) => !rhsIds.has(e.id)).map((e) => e.name),
-          rhsResult: rhsResult.elements.filter((e) => !lhsIds.has(e.id)).map((e) => e.name)
-        });
+  return { outgoing, elems: store2.loadElemMeta() };
+}
+function followPath2(graph, startId, arrowKinds) {
+  let current = /* @__PURE__ */ new Set([startId]);
+  for (const kind of arrowKinds) {
+    const next = /* @__PURE__ */ new Set();
+    for (const id of current) {
+      for (const arr of graph.outgoing.get(id) ?? []) {
+        if (arr.kind === kind) next.add(arr.dstId);
       }
     }
+    current = next;
+    if (current.size === 0) return current;
   }
-  const coverage = total > 0 ? support / total : 0;
-  return {
-    lhsPath,
-    rhsPath,
-    domainKind,
-    support,
-    total,
-    coverage,
-    counterexamples
-  };
+  return current;
+}
+function pathKey(arrows) {
+  return arrows.join("\u2192");
+}
+function precomputePathResults(graph, paths, seeds) {
+  const cache = /* @__PURE__ */ new Map();
+  const seenKeys = /* @__PURE__ */ new Set();
+  for (const path2 of paths) {
+    const key = pathKey(path2.arrows);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const seedResults = /* @__PURE__ */ new Map();
+    for (const seed of seeds) {
+      const reached = followPath2(graph, seed.id, path2.arrows);
+      if (reached.size > 0) {
+        seedResults.set(seed.id, reached);
+      }
+    }
+    cache.set(key, seedResults);
+  }
+  return cache;
 }
 
 // ../core/src/mining/index.ts
@@ -3224,35 +3188,94 @@ function mineEquations(store2, options = {}) {
   }
   const elementKinds = opts.elementKinds ?? DEFAULT_ELEMENT_KINDS;
   const paths = enumeratePaths(arrowKinds, opts.maxDepth);
-  annotatePathKinds(paths, store2, elementKinds, opts.sampleSize);
-  const candidates = generateCandidatePairs(paths);
-  const seedElements = [];
+  const graph = buildInMemoryGraph(store2);
+  const allSeeds = [];
   for (const kind of elementKinds) {
     const elems = store2.queryElements({ kind, limit: opts.sampleSize });
-    if (elems.length > 0) {
-      seedElements.push({ kind, elements: elems });
-    }
+    allSeeds.push(...elems);
   }
+  const cache = precomputePathResults(graph, paths, allSeeds);
+  const seedKindMap = new Map(allSeeds.map((e) => [e.id, e.kind]));
+  for (const path2 of paths) {
+    const key = pathKey(path2.arrows);
+    const seedResults = cache.get(key) ?? /* @__PURE__ */ new Map();
+    const domainKinds = /* @__PURE__ */ new Set();
+    const codomainKinds = /* @__PURE__ */ new Set();
+    for (const [seedId, reached] of seedResults) {
+      const dk = seedKindMap.get(seedId);
+      if (dk) domainKinds.add(dk);
+      for (const dstId of reached) {
+        const ck = graph.elems.get(dstId)?.kind;
+        if (ck) codomainKinds.add(ck);
+      }
+    }
+    path2.domainKind = domainKinds.size === 1 ? [...domainKinds][0] : null;
+    path2.codomainKind = codomainKinds.size > 0 ? [...codomainKinds].sort().join(",") : null;
+  }
+  const candidates = generateCandidatePairs(paths);
   const results = [];
   const seen = /* @__PURE__ */ new Set();
   for (const candidate of candidates) {
     const key = canonicalEquationKey(candidate.lhs, candidate.rhs);
     if (seen.has(key)) continue;
     seen.add(key);
-    const allSeeds = [];
-    for (const group of seedElements) {
-      allSeeds.push(...group.elements);
+    const lhsKey = pathKey(candidate.lhs);
+    const rhsKey = pathKey(candidate.rhs);
+    const lhsResults = cache.get(lhsKey) ?? /* @__PURE__ */ new Map();
+    const rhsResults = cache.get(rhsKey) ?? /* @__PURE__ */ new Map();
+    let support = 0;
+    let total = 0;
+    const counterexamples = [];
+    const kindCounts = /* @__PURE__ */ new Map();
+    for (const seed of allSeeds) {
+      const lhsReached = lhsResults.get(seed.id);
+      const rhsReached = rhsResults.get(seed.id);
+      if (!lhsReached && !rhsReached) continue;
+      total++;
+      kindCounts.set(seed.kind, (kindCounts.get(seed.kind) ?? 0) + 1);
+      if (lhsReached && rhsReached) {
+        let equal = lhsReached.size === rhsReached.size;
+        if (equal) {
+          for (const id of lhsReached) {
+            if (!rhsReached.has(id)) {
+              equal = false;
+              break;
+            }
+          }
+        }
+        if (equal) {
+          support++;
+        } else if (counterexamples.length < opts.maxCounterexamples) {
+          counterexamples.push({
+            elementId: seed.id,
+            elementName: seed.name,
+            elementKind: seed.kind,
+            lhsResult: [...lhsReached].filter((id) => !rhsReached.has(id)).map((id) => graph.elems.get(id)?.name ?? id),
+            rhsResult: [...rhsReached].filter((id) => !lhsReached.has(id)).map((id) => graph.elems.get(id)?.name ?? id)
+          });
+        }
+      } else if (counterexamples.length < opts.maxCounterexamples) {
+        counterexamples.push({
+          elementId: seed.id,
+          elementName: seed.name,
+          elementKind: seed.kind,
+          lhsResult: lhsReached ? [...lhsReached].map((id) => graph.elems.get(id)?.name ?? id) : [],
+          rhsResult: rhsReached ? [...rhsReached].map((id) => graph.elems.get(id)?.name ?? id) : []
+        });
+      }
     }
-    const result = evaluateEquationCandidate(
-      store2,
-      candidate.lhs,
-      candidate.rhs,
-      allSeeds,
-      opts.maxCounterexamples
-    );
-    if (result.total === 0) continue;
-    if (result.coverage < opts.minCoverage) continue;
-    results.push(result);
+    if (total === 0) continue;
+    const coverage = support / total;
+    if (coverage < opts.minCoverage) continue;
+    let domainKind = "any";
+    let maxCount = 0;
+    for (const [kind, count] of kindCounts) {
+      if (count > maxCount) {
+        maxCount = count;
+        domainKind = kind;
+      }
+    }
+    results.push({ lhsPath: candidate.lhs, rhsPath: candidate.rhs, domainKind, support, total, coverage, counterexamples });
     if (results.length >= opts.maxResults * 2) break;
   }
   results.sort((a, b) => {
@@ -3369,6 +3392,7 @@ function discoverDomainCandidates(store2, options = {}) {
       domainCandidateId: candidateId,
       codomainName: elem.name,
       codomainCandidateId: null,
+      codomainExistingElemId: null,
       total: true,
       source: "field",
       confidence: "resolved",
@@ -3387,6 +3411,16 @@ function discoverDomainCandidates(store2, options = {}) {
   const codeIdToCandidate = /* @__PURE__ */ new Map();
   for (const c of candidates) {
     codeIdToCandidate.set(c.codeElementId, c);
+  }
+  const existingDomainByCodeId = /* @__PURE__ */ new Map();
+  const existingDomainElems = store2.queryElements({ kind: "domain", limit: 1e4 });
+  for (const domElem of existingDomainElems) {
+    const domOutgoing = store2.outgoing(domElem.id);
+    for (const arr of domOutgoing) {
+      if (arr.kind === "implementedAs") {
+        existingDomainByCodeId.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
   }
   for (const candidate of candidates) {
     const elem = store2.getElem(candidate.codeElementId);
@@ -3413,16 +3447,18 @@ function discoverDomainCandidates(store2, options = {}) {
         const typeElem = store2.getElem(typeArrow.dstId);
         if (!typeElem) continue;
         const targetCandidate = codeIdToCandidate.get(typeArrow.dstId);
+        const existingDomain = targetCandidate ? null : existingDomainByCodeId.get(typeArrow.dstId) ?? null;
         const total = !optional && !isArray;
         const proposal = {
           id: randomUUID3(),
           name: `has ${propName}`,
           domainCandidateId: candidate.id,
-          codomainName: targetCandidate?.proposedName ?? typeElem.name,
+          codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? typeElem.name,
           codomainCandidateId: targetCandidate?.id ?? null,
+          codomainExistingElemId: existingDomain?.id ?? null,
           total,
           source: "field",
-          confidence: targetCandidate ? "resolved" : "unresolved",
+          confidence: targetCandidate || existingDomain ? "resolved" : "unresolved",
           status: "proposed"
         };
         if (optional) {
@@ -3437,6 +3473,28 @@ function discoverDomainCandidates(store2, options = {}) {
           `The field "${propName}" has a generic container type ("${typeText}"). Should individual attributes be modeled as separate domain arrows?`
         );
       }
+    }
+    const structuralArrows = outgoing.filter((a) => a.kind === "extends" || a.kind === "implements");
+    for (const structArrow of structuralArrows) {
+      const targetCandidate = codeIdToCandidate.get(structArrow.dstId);
+      const existingDomain = targetCandidate ? null : existingDomainByCodeId.get(structArrow.dstId) ?? null;
+      if (!targetCandidate && !existingDomain) continue;
+      const targetElem = store2.getElem(structArrow.dstId);
+      if (!targetElem) continue;
+      const arrowName = structArrow.kind === "extends" ? "extends" : "implements";
+      const proposal = {
+        id: randomUUID3(),
+        name: arrowName,
+        domainCandidateId: candidate.id,
+        codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? targetElem.name,
+        codomainCandidateId: targetCandidate?.id ?? null,
+        codomainExistingElemId: existingDomain?.id ?? null,
+        total: true,
+        source: structArrow.kind,
+        confidence: "resolved",
+        status: "proposed"
+      };
+      candidate.proposedArrows.push(proposal);
     }
   }
   return candidates;
@@ -4288,7 +4346,7 @@ var equationSchema = z8.object({
   rhs: pathSchema
 });
 var provenanceSchema = z8.object({
-  source: z8.enum(["tree-sitter", "lsp", "manual", "heuristic", "other"]),
+  source: z8.enum(["tree-sitter", "lsp", "manual", "llm", "heuristic", "other"]),
   commitSha: z8.string(),
   ingestedAt: z8.number().optional(),
   confidence: z8.enum(["resolved", "unresolved", "tentative"])
@@ -4308,6 +4366,8 @@ var STANDARD_KINDS = [
   "const",
   "var",
   "namespace",
+  "domain",
+  "property",
   "other"
 ];
 function registerOlogProposeSchema(server2, store2) {
@@ -4316,9 +4376,9 @@ function registerOlogProposeSchema(server2, store2) {
     {
       description: "Propose a new schema fragment to the olog. Validates noun phrases for objects, total-function semantics for arrows, and path equation composability. Stores accepted objects in olog_elem, arrows in olog_arr, equations in olog_equation, and provenance in olog_prov.",
       inputSchema: z8.object({
-        objects: z8.array(objectSchema).optional().describe("Objects to add to the schema"),
-        arrows: z8.array(arrowSchema).optional().describe("Arrows to add to the schema"),
-        equations: z8.array(equationSchema).optional().describe("Path equations to add"),
+        objects: z8.preprocess((v) => typeof v === "string" ? JSON.parse(v) : v, z8.array(objectSchema)).default([]).describe("Objects to add to the schema. Omit or pass [] if adding only arrows/equations."),
+        arrows: z8.preprocess((v) => typeof v === "string" ? JSON.parse(v) : v, z8.array(arrowSchema)).default([]).describe("Arrows to add to the schema. Omit or pass [] if adding only objects/equations."),
+        equations: z8.preprocess((v) => typeof v === "string" ? JSON.parse(v) : v, z8.array(equationSchema)).default([]).describe("Path equations to add. Omit or pass [] if not adding equations."),
         provenance: provenanceSchema.describe("Provenance metadata for all proposed items")
       }),
       annotations: { readOnlyHint: false, idempotentHint: false }
@@ -4328,7 +4388,7 @@ function registerOlogProposeSchema(server2, store2) {
         const errors = [];
         const added = { objects: 0, arrows: 0, equations: 0 };
         const objectMap = /* @__PURE__ */ new Map();
-        for (const obj of objects ?? []) {
+        for (const obj of objects) {
           if (!isNounPhrase(obj.name)) {
             errors.push(
               `Object "${obj.name}" is not a valid noun phrase (must start with uppercase after optional "a"/"an"/"the")`
@@ -4338,7 +4398,7 @@ function registerOlogProposeSchema(server2, store2) {
         }
         const arrowList = [];
         const proposedArrowKinds = /* @__PURE__ */ new Set();
-        for (const arrow of arrows ?? []) {
+        for (const arrow of arrows) {
           if (!arrow.total) {
             errors.push(
               `Arrow "${arrow.name}" is not total. Many-valued relationships must be reified before proposing.`
@@ -4360,7 +4420,7 @@ function registerOlogProposeSchema(server2, store2) {
           arrowList.push(arrow);
           proposedArrowKinds.add(arrow.name);
         }
-        for (const eq of equations ?? []) {
+        for (const eq of equations) {
           const result = validateEquation(eq, store2, Array.from(proposedArrowKinds));
           errors.push(...result.errors);
         }
@@ -4375,7 +4435,7 @@ function registerOlogProposeSchema(server2, store2) {
           };
         }
         const createdElemIds = /* @__PURE__ */ new Map();
-        for (const obj of objects ?? []) {
+        for (const obj of objects) {
           const id = randomUUID4();
           createdElemIds.set(obj.name, id);
           const kind = STANDARD_KINDS.includes(obj.kind) ? obj.kind : "other";
@@ -4423,7 +4483,7 @@ function registerOlogProposeSchema(server2, store2) {
             ]
           };
         }
-        for (const eq of equations ?? []) {
+        for (const eq of equations) {
           const eqWithProv = {
             id: eq.id,
             name: eq.name,
@@ -4732,49 +4792,46 @@ function registerOlogDomainDiscover(server2, store2) {
   server2.registerTool(
     "olog_domain_discover",
     {
-      description: `Domain modeling session tool. Discovers domain concepts from the olog's interface/type/class elements and allows iterative refinement and commitment to the olog. Use action="start" to begin a session, "refine" to accept/reject candidates, "commit" to write accepted domain objects and arrows to the olog.`,
-      inputSchema: z12.discriminatedUnion("action", [
-        z12.object({
-          action: z12.literal("start"),
-          scopeRegex: z12.string().optional().describe('Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
-          excludeModules: z12.array(z12.string()).optional().describe("Module path patterns to exclude from discovery")
-        }),
-        z12.object({
-          action: z12.literal("refine"),
-          sessionId: z12.string().describe("Session ID returned by start"),
-          responses: z12.array(
-            z12.object({
-              candidateId: z12.string(),
-              status: z12.enum(["accepted", "rejected", "deferred"]),
-              nameOverride: z12.string().optional().describe("Override the proposed noun phrase name"),
-              arrowOverrides: z12.array(
-                z12.object({
-                  arrowId: z12.string(),
-                  status: z12.enum(["accepted", "rejected", "modified"]),
-                  newName: z12.string().optional(),
-                  totalOverride: z12.boolean().optional()
-                })
-              ).optional()
-            })
-          )
-        }),
-        z12.object({
-          action: z12.literal("commit"),
-          sessionId: z12.string().describe("Session ID returned by start"),
-          provenance: z12.object({
-            source: z12.enum(["manual", "llm"]),
-            commitSha: z12.string(),
-            confidence: z12.enum(["resolved", "unresolved", "tentative"])
+      description: `Domain modeling session tool. Discovers domain concepts from the olog's interface/type/class elements and proposes domain objects with arrows between them. Arrow proposals include: (1) field-level "has X" arrows via hasProperty\u2192hasType chains, (2) structural "extends"/"implements" arrows when the supertype is also a domain concept. Both current-session candidates and already-committed domain elements are resolved as arrow codomains, enabling incremental multi-session domain modeling. After committing, a new session on a broader scope will automatically link to the committed elements from previous sessions.
+
+Actions:
+- action="start": Begin a new discovery session. Optional: scopeRegex (regex to restrict discovery to matching module paths, e.g. "packages/core/src/ontology"), excludeModules (array of module path patterns to exclude). Returns sessionId, candidateCount, arrowCount, and the full list of candidates with proposedNames, codeElements, proposedArrows, bridgeArrows, and clarifyingQuestions.
+- action="refine": Accept/reject/rename candidates. Required: sessionId (string, from start), responses (array of objects with candidateId, status ("accepted"|"rejected"|"deferred"), optional nameOverride string, optional arrowOverrides array). Each arrowOverride has arrowId, status ("accepted"|"rejected"|"modified"), optional newName, optional totalOverride boolean. Returns summary with accepted/rejected/pending counts and remaining pendingCandidates.
+- action="commit": Write accepted domain objects and resolved arrows to the olog. Required: sessionId, provenance (object with source: "manual"|"llm", commitSha: string, confidence: "resolved"|"unresolved"|"tentative"). Returns sessionId, status "committed", addedObjects, addedArrows, addedBridges counts. At least one candidate must be accepted before committing.
+- action="list": List all domain discovery sessions. Returns array of session summaries.
+- action="get": Get details of a specific session. Required: sessionId. Returns the full session object including candidates and their status.`,
+      inputSchema: z12.object({
+        action: z12.enum(["start", "refine", "commit", "list", "get"]).describe(
+          'Action to perform: "start" begins a new session, "refine" accepts/rejects candidates, "commit" writes to the olog, "list" shows all sessions, "get" returns a session by ID.'
+        ),
+        // start
+        scopeRegex: z12.string().optional().describe('(start) Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
+        excludeModules: z12.array(z12.string()).optional().describe("(start) Module path patterns to exclude from discovery"),
+        // refine, commit, get
+        sessionId: z12.string().optional().describe("(refine/commit/get) Session ID returned by start"),
+        // refine
+        responses: z12.array(
+          z12.object({
+            candidateId: z12.string(),
+            status: z12.enum(["accepted", "rejected", "deferred"]),
+            nameOverride: z12.string().optional().describe("Override the proposed noun phrase name"),
+            arrowOverrides: z12.array(
+              z12.object({
+                arrowId: z12.string(),
+                status: z12.enum(["accepted", "rejected", "modified"]),
+                newName: z12.string().optional(),
+                totalOverride: z12.boolean().optional()
+              })
+            ).optional()
           })
-        }),
-        z12.object({
-          action: z12.literal("list")
-        }),
-        z12.object({
-          action: z12.literal("get"),
-          sessionId: z12.string()
-        })
-      ]),
+        ).optional().describe("(refine) Array of candidate responses"),
+        // commit
+        provenance: z12.object({
+          source: z12.enum(["manual", "llm"]),
+          commitSha: z12.string(),
+          confidence: z12.enum(["resolved", "unresolved", "tentative"])
+        }).optional().describe("(commit) Provenance metadata")
+      }),
       annotations: { readOnlyHint: false, idempotentHint: false }
     },
     async (params) => {
@@ -4833,6 +4890,12 @@ function registerOlogDomainDiscover(server2, store2) {
           };
         }
         if (params.action === "refine") {
+          if (!params.sessionId) {
+            return { content: [{ type: "text", text: 'sessionId is required for action="refine"' }], isError: true };
+          }
+          if (!params.responses) {
+            return { content: [{ type: "text", text: 'responses is required for action="refine"' }], isError: true };
+          }
           const session = store2.sessions.get(params.sessionId);
           if (!session) {
             return {
@@ -4891,6 +4954,12 @@ function registerOlogDomainDiscover(server2, store2) {
           };
         }
         if (params.action === "commit") {
+          if (!params.sessionId) {
+            return { content: [{ type: "text", text: 'sessionId is required for action="commit"' }], isError: true };
+          }
+          if (!params.provenance) {
+            return { content: [{ type: "text", text: 'provenance is required for action="commit"' }], isError: true };
+          }
           const session = store2.sessions.get(params.sessionId);
           if (!session) {
             return {
@@ -4952,6 +5021,9 @@ function registerOlogDomainDiscover(server2, store2) {
               let dstId;
               if (arrow.codomainCandidateId) {
                 dstId = candidateToElemId.get(arrow.codomainCandidateId);
+              }
+              if (!dstId && arrow.codomainExistingElemId) {
+                dstId = arrow.codomainExistingElemId;
               }
               if (!dstId) continue;
               const arrowId2 = `${srcId}:${arrow.name.replace(/\s+/g, "-")}:${dstId}`;
@@ -5021,6 +5093,9 @@ function registerOlogDomainDiscover(server2, store2) {
           };
         }
         if (params.action === "get") {
+          if (!params.sessionId) {
+            return { content: [{ type: "text", text: 'sessionId is required for action="get"' }], isError: true };
+          }
           const session = store2.sessions.get(params.sessionId);
           if (!session) {
             return {
@@ -5082,7 +5157,7 @@ try {
 var server = new McpServer13(
   { name: "olog-mcp", version: "0.0.1" },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations), olog_domain_discover (domain modeling sessions: discover domain objects from code types, refine, and commit to olog). The name and module parameters accept JavaScript regex patterns.`,
+    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations in the olog graph; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: discovers domain objects from interface/type/class elements, proposes arrows from field types and extends/implements relationships, links to already-committed domain elements across sessions \u2014 use action=start/refine/commit). The name and module parameters accept JavaScript regex patterns. Domain modeling workflow: (1) start a session with optional scopeRegex, (2) refine candidates by accepting/rejecting/renaming, (3) commit to persist domain elements and arrows to the olog. Subsequent sessions on broader scopes will automatically cross-link to elements committed in prior sessions.`,
     capabilities: { logging: {} }
   }
 );
