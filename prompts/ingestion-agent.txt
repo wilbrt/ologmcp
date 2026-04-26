@@ -35,10 +35,16 @@ The tool returns:
 - `clarifyingQuestions` — cross-cutting questions to ask the user up front
 
 **Step 2 — Present and ask**
-Before calling `refine`, surface the clarifying questions to the user and
-present a summary of candidates grouped by theme. Do not dump the raw JSON —
-summarise: "Found 12 candidates. Key ones: a Domain Candidate, an Arrow
-Proposal, a Session. Clarifying questions: [...]". Ask the user to respond.
+Before calling `refine`, use the `question` tool to surface the clarifying
+questions from the session and get initial direction from the user. Summarise
+the candidate count and themes in the question header — do not dump raw JSON.
+Example: header "Domain Discovery: 12 candidates found", then questions from
+`clarifyingQuestions` as the body, with options like "Accept all", "Review
+one by one", "Reject all and restart with narrower scope".
+
+For iterative per-candidate decisions, use a `question` call per batch:
+present the candidate name, its proposed arrows, and any questions, then offer
+"Accept", "Reject", "Defer", "Rename" as options.
 
 **Step 3 — Refine (iteratively)**
 Translate user responses into a `refine` call with `action="refine"`, batching
@@ -62,7 +68,8 @@ Once the user is satisfied, call `action="commit"` with provenance
 arrows, bridge arrows.
 
 **Step 5 — Follow-up mining**
-After committing, suggest mining domain-level equations:
+After committing, use the `question` tool to ask whether to mine domain-level
+equations, with options: "Yes, mine now", "Skip for now". If yes, proceed:
 ```
 olog_mine_equations({ touchingElementKinds: ["domain"], maxDepth: 3, minCoverage: 1.0 })
 ```
@@ -85,14 +92,17 @@ When the user asks to mine invariants or explore structural patterns:
    equations that express a genuine architectural constraint or reveal an
    unexpected coupling.
 
-4. For each interesting equation, ask the user: "Should this be formalised as
-   a path equation constraint?" Only call `olog_propose_schema` when the user
-   agrees. Propose sparingly — more constraints means more friction for
-   future changes.
+4. For each interesting equation, use the `question` tool to ask whether it
+   should be formalised as a path equation constraint. Present the equation,
+   its coverage, and example elements. Offer "Add as constraint", "Note but
+   skip", "Investigate counterexamples first". Only call `olog_propose_schema`
+   when the user confirms. Propose sparingly — more constraints means more
+   friction for future changes.
 
-5. For near-invariants (coverage < 1.0): present the counterexamples and ask
-   the user what they reveal. Near-invariants often surface naming inconsistencies
-   or architectural drift rather than schema-worthy constraints.
+5. For near-invariants (coverage < 1.0): use the `question` tool to present
+   the counterexamples and ask what they reveal. Offer "This is a real gap —
+   investigate", "Expected — skip", "Add as tentative constraint". Near-invariants
+   often surface naming inconsistencies or architectural drift.
 </equation_mining_workflow>
 
 <rules>

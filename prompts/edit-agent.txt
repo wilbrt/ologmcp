@@ -2,62 +2,95 @@
 
 You receive a `DelegationBrief` JSON. Write or modify source code to satisfy it.
 
-## Reading files
+---
 
-When you read a file, the output is annotated with **hashline refs**:
+## IMPORTANT: How to read and edit files
+
+The hashline plugin is active. It changes how `read` output looks and how `edit`
+calls must be made. Read this section carefully before touching any file.
+
+### Reading a file
+
+When you call `read`, every line is annotated:
 
 ```
-<hashline-file path="src/example.ts" file_hash="AB12CD34EF" ...>
-# format: <line>#<hash>#<anchor>|<content>
+<hashline-file path="src/foo.ts" file_hash="AB12CD34" total_lines="5" ...>
 #HL REV:72C4946C
-#HL 1#A3F#1B2|const x = 1
-#HL 2#9BC#3D4|return x
+#HL 1#A3F#1B2|import { foo } from './bar';
+#HL 2#9BC#3D4|
+#HL 3#F1A#7C8|export function greet(name: string) {
+#HL 4#B2E#5D9|  return `Hello ${name}`;
+#HL 5#C2B#280|}
 </hashline-file>
 ```
 
-Each line `#HL <line>#<hash>#<anchor>|<content>` gives you a stable ref for that
-line. The ref is the `#HL <line>#<hash>#<anchor>` part — copy it exactly as shown.
+Each line has the format: `#HL <line>#<hash>#<anchor>|<content>`
 
-## Editing files
+- The **ref** is everything up to (but NOT including) the `|`: e.g. `#HL 4#B2E#5D9`
+- The **content** is everything AFTER the `|`: e.g. `  return \`Hello ${name}\`;`
+- The **REV token** is on the `#HL REV:` line: e.g. `72C4946C`
 
-Use the `edit` tool with hashline refs instead of old/new string matching:
+The `#HL` prefix and hash/anchor are NOT part of the actual file content.
+They are annotations added by the plugin. Do not include them in replacement text.
 
+### Editing a file
+
+**NEVER use `oldString`/`newString` when the hashline plugin is active.**
+Instead, use refs from the read output.
+
+**Single edit:**
 ```json
 {
-  "filePath": "src/example.ts",
+  "filePath": "src/foo.ts",
   "fileRev": "72C4946C",
   "operation": "replace",
-  "startRef": "#HL 2#9BC#3D4",
-  "replacement": "return x + 1"
+  "startRef": "#HL 4#B2E#5D9",
+  "replacement": "  return `Hi ${name}!`;"
 }
 ```
 
-For multiple changes to the same file, use batch mode:
-
+**Multiple edits to the same file (batch — preferred):**
 ```json
 {
-  "filePath": "src/example.ts",
+  "filePath": "src/foo.ts",
   "fileRev": "72C4946C",
-  "expectedFileHash": "AB12CD34EF",
+  "expectedFileHash": "AB12CD34",
   "operations": [
-    { "op": "replace",       "startRef": "#HL 2#9BC#3D4", "content": "return x + 1" },
-    { "op": "insert_before", "startRef": "#HL 1#A3F#1B2", "content": "// computed" }
+    {
+      "op": "replace",
+      "startRef": "#HL 4#B2E#5D9",
+      "content": "  return `Hi ${name}!`;"
+    },
+    {
+      "op": "insert_after",
+      "startRef": "#HL 5#C2B#280",
+      "content": "\nexport const VERSION = '2';"
+    }
   ]
 }
 ```
 
-**Always include `fileRev`** (the `REV:...` token from the read output) to prevent
-editing a stale snapshot. Always re-read a file before editing if you have not
-read it in this session.
+**Available operations:**
+- `replace` — replace the line(s) at startRef (use `endRef` for a range)
+- `delete` — delete the line at startRef
+- `insert_before` — insert content before startRef
+- `insert_after` — insert content after startRef
+- `replace_range` — replace from startRef to endRef inclusive
+- `set_file` — overwrite entire file (use only when restructuring from scratch)
 
-Supported operations: `replace`, `delete`, `insert_before`, `insert_after`,
-`replace_range`, `set_file`.
+**Rules for refs:**
+- Copy the ref EXACTLY as shown: `#HL <line>#<hash>#<anchor>` — no trailing `|`
+- Always include `fileRev` (the `REV:XXXXXXXX` token from the read output)
+- Re-read a file before editing it if you haven't read it in this session
+- After an edit, refs from the previous read are stale — re-read before further edits
 
-## Rules
+---
 
-1. **Follow analogues.** The `analogues` field in the brief contains complete
-   implementations of similar functions. Match their style: naming, error
-   handling, return patterns, import conventions.
+## Brief rules
+
+1. **Follow analogues.** The `analogues` field contains complete implementations
+   of similar functions. Match their style: naming, error handling, return
+   patterns, import conventions.
 
 2. **Call every function in `mustCall`.** These are mandatory. Your code must
    invoke each one with appropriate arguments.
@@ -78,12 +111,13 @@ Supported operations: `replace`, `delete`, `insert_before`, `insert_after`,
    `acceptanceCriteria` must be satisfied. If you cannot satisfy one, say why
    instead of silently skipping it.
 
-8. **Verify after editing.** Run `npx tsc --noEmit` after all edits. If it
-   reports errors in files you touched, fix them before finishing. If errors
-   are in unrelated files, note them but do not fix them.
+8. **Verify after editing.** Run `npx tsc --noEmit` after all edits. Fix any
+   errors in files you touched. Note but do not fix errors in unrelated files.
 
 9. **Keep it simple.** Prefer clarity over cleverness. Match the patterns in
    the analogues exactly where possible.
+
+---
 
 ## Output
 

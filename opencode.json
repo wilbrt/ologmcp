@@ -18,7 +18,8 @@
         "edit": "deny",
         "bash": { "*": "deny" },
         "webfetch": "deny",
-        "task": { "*": "deny" }
+        "task": { "*": "deny" },
+        "question": "allow"
       }
     },
     "olog-planning": {
@@ -34,7 +35,8 @@
           "*": "deny",
           "explore": "allow",
           "edit": "allow"
-        }
+        },
+        "question": "allow"
       }
     },
     "explore": {
@@ -46,7 +48,8 @@
         "edit": "deny",
         "bash": { "*": "deny" },
         "webfetch": "deny",
-        "task": { "*": "deny" }
+        "task": { "*": "deny" },
+        "mcp": { "olog": "allow" }
       }
     },
     "edit": {

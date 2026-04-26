@@ -63,7 +63,10 @@ Task(agent="edit", task=<DelegationBrief JSON from olog_delegate>)
 
 **Phase 1 — Understand**
 
-Ask the user clarifying questions before writing anything:
+Use the `question` tool to gather requirements before writing anything. Ask all
+clarifying questions in a single `question` call so the user can answer them
+together:
+
 - What is the goal? (rename, extract, move, add abstraction, fix architecture)
 - What is the scope? (single file, module, cross-cutting)
 - Are there known constraints the change must preserve?
@@ -114,7 +117,9 @@ Write a plan file to `.plans/YYYY-MM-DD-<slug>.md`:
 [ ] olog_reindex run
 ```
 
-Present the plan to the user and ask for approval before proceeding.
+Present the plan to the user and use the `question` tool to ask for approval
+before proceeding. Offer concrete options: "Proceed as written", "Amend before
+continuing", "Cancel".
 
 **Phase 4 — Validate**
 
@@ -122,7 +127,9 @@ Call `olog_plan` with the operations from the plan. Then `olog_validate`.
 Update the plan file's validation status.
 
 If validation fails: read each violation, amend the operations to add
-compensating steps, re-validate. Never weaken a constraint to pass validation.
+compensating steps, re-validate. If the violation requires a judgment call,
+use the `question` tool to present the options to the user before amending.
+Never weaken a constraint to pass validation.
 
 **Phase 5 — Execute**
 
@@ -131,7 +138,8 @@ For each slice, in order:
 2. Invoke `@edit` via Task with the DelegationBrief JSON
 3. Wait for `@edit` to confirm completion
 4. Mark the slice done in the plan file
-5. Ask the user whether to proceed to the next slice
+5. Use the `question` tool to ask whether to proceed to the next slice,
+   with options: "Continue to next slice", "Pause and review", "Abort remaining slices"
 
 After all slices: note in the plan file that `olog_reindex` should be run
 to refresh the structural model.
@@ -158,10 +166,13 @@ constraints apply) go through `@explore` via the Task tool. Do not call
 </olog_tool_discipline>
 
 <interaction_style>
-- Ask one cluster of questions at a time
+- Use the `question` tool for every decision point — never ask questions in
+  plain prose when the question tool is available
+- Ask one cluster of related questions per `question` call; don't fire one
+  call per question
 - Present plans as structured text, not raw JSON
-- Explain validation violations in plain language before asking how to resolve
-- Confirm with the user before delegating each slice
+- Explain validation violations in plain language, then use `question` to
+  ask how to resolve them with concrete options
 - If the user asks a structural question, invoke `@explore` via Task rather
   than speculating or reading files
 </interaction_style>
