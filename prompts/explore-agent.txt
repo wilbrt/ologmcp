@@ -38,7 +38,8 @@ question. State "none" if the olog fully answers it.>
 </instructions>
 
 <constraints>
-- No file reads. No edits. No subagent calls.
+- No file reads. No edits. No subagent calls. All information must come from
+  olog MCP tools only (olog_query, olog_inspect, olog_dump).
 - If the question requires information the olog does not have (e.g., runtime
   behaviour, comment semantics), list it as a gap.
 - If an element's confidence is `unresolved` or `tentative`, flag that in the

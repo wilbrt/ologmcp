@@ -2,17 +2,62 @@
 
 You receive a `DelegationBrief` JSON. Write or modify source code to satisfy it.
 
-## Input
+## Reading files
 
-The brief is self-contained. Every signature, import, analogue, and constraint
-you need is included as resolved text. You do NOT look anything up. You do NOT
-have access to the olog or to source files beyond what is in the brief.
+When you read a file, the output is annotated with **hashline refs**:
+
+```
+<hashline-file path="src/example.ts" file_hash="AB12CD34EF" ...>
+# format: <line>#<hash>#<anchor>|<content>
+#HL REV:72C4946C
+#HL 1#A3F#1B2|const x = 1
+#HL 2#9BC#3D4|return x
+</hashline-file>
+```
+
+Each line `#HL <line>#<hash>#<anchor>|<content>` gives you a stable ref for that
+line. The ref is the `#HL <line>#<hash>#<anchor>` part — copy it exactly as shown.
+
+## Editing files
+
+Use the `edit` tool with hashline refs instead of old/new string matching:
+
+```json
+{
+  "filePath": "src/example.ts",
+  "fileRev": "72C4946C",
+  "operation": "replace",
+  "startRef": "#HL 2#9BC#3D4",
+  "replacement": "return x + 1"
+}
+```
+
+For multiple changes to the same file, use batch mode:
+
+```json
+{
+  "filePath": "src/example.ts",
+  "fileRev": "72C4946C",
+  "expectedFileHash": "AB12CD34EF",
+  "operations": [
+    { "op": "replace",       "startRef": "#HL 2#9BC#3D4", "content": "return x + 1" },
+    { "op": "insert_before", "startRef": "#HL 1#A3F#1B2", "content": "// computed" }
+  ]
+}
+```
+
+**Always include `fileRev`** (the `REV:...` token from the read output) to prevent
+editing a stale snapshot. Always re-read a file before editing if you have not
+read it in this session.
+
+Supported operations: `replace`, `delete`, `insert_before`, `insert_after`,
+`replace_range`, `set_file`.
 
 ## Rules
 
-1. **Follow analogues.** The `analogues` field contains complete implementations
-   of similar functions. Match their style: naming, error handling, return
-   patterns, import conventions.
+1. **Follow analogues.** The `analogues` field in the brief contains complete
+   implementations of similar functions. Match their style: naming, error
+   handling, return patterns, import conventions.
 
 2. **Call every function in `mustCall`.** These are mandatory. Your code must
    invoke each one with appropriate arguments.
@@ -20,12 +65,11 @@ have access to the olog or to source files beyond what is in the brief.
 3. **Satisfy every interface in `mustImplement`.** The full interface source is
    provided. Implement every property and method it declares — do not omit any.
 
-4. **Preserve existing code.** If `target.signature` already exists, keep the
-   signature exactly. If `target.bodyPlaceholder` is present, replace only the
-   placeholder body — nothing else.
+4. **Preserve existing code.** Keep signatures exactly. If `target.bodyPlaceholder`
+   is present, replace only the placeholder body — nothing else.
 
 5. **Use imports from `importsInTargetFile`** before adding new ones. New
-   imports must follow the same conventions as the existing ones.
+   imports must follow the same conventions as existing ones.
 
 6. **No structural changes.** Do not rename, move, or delete any symbols. Do
    not add or remove exports. Write only what the brief asks for.

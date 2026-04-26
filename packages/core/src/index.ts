@@ -94,3 +94,17 @@ export {
   type EquationCandidate,
   type Counterexample,
 } from './mining/evaluate.js';
+export { discoverMotifs } from './mining/motifs.js';
+export type {
+  MotifCandidate,
+  MotifShape,
+  MotifDiscoveryOptions,
+  MotifSessionData,
+  MotifInstance,
+  EgoGraph,
+  ShapeGroup,
+} from './mining/types.js';
+export { MotifSessionStore } from './mining/session.js';
+export { extractEgoGraph } from './mining/ego.js';
+export { abstractToShape, shapeHash } from './mining/shape.js';
+export { groupEgoGraphs, verifyInternalEquations } from './mining/group.js';

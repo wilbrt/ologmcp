@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { DomainSessionStore } from './domain/session.js';
+import { MotifSessionStore } from './mining/session.js';
+import type { MotifShape, MotifCandidate } from './mining/types.js';
 import type {
   OlogElem,
   OlogArr,
@@ -53,6 +55,24 @@ interface ConstraintRow {
   provenance_json: string | null;
 }
 
+interface MotifTemplateRow {
+  id: string;
+  name: string;
+  description: string | null;
+  shape_json: string;
+  equations_json: string | null;
+  provenance_json: string;
+  created_at: number;
+}
+
+interface MotifInstanceRow {
+  id: string;
+  template_id: string;
+  mappings_json: string;
+  provenance_json: string;
+  created_at: number;
+}
+
 interface ProvRow {
   elem_id: string;
   source: string;
@@ -67,6 +87,7 @@ const __dirname = dirname(__filename);
 export class OlogStore {
   private db: Database.Database;
   private readonly _sessions: DomainSessionStore;
+  private readonly _motifSessions: MotifSessionStore;
   private readonly getElemStmt: Database.Statement;
   private readonly outgoingStmt: Database.Statement;
   private readonly incomingStmt: Database.Statement;
@@ -80,6 +101,8 @@ export class OlogStore {
   private readonly insertArrStmt: Database.Statement;
   private readonly insertProvStmt: Database.Statement;
   private readonly hasArrowKindStmt: Database.Statement;
+  private readonly insertMotifTemplateStmt: Database.Statement;
+  private readonly insertMotifInstanceStmt: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -138,6 +161,46 @@ export class OlogStore {
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)');
     }
 
+    // Motif discovery session table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS olog_motif_session (
+        id              TEXT PRIMARY KEY,
+        status          TEXT NOT NULL CHECK (status IN ('active', 'committed', 'abandoned')),
+        scope_regex     TEXT,
+        candidates_json TEXT NOT NULL CHECK (json_valid(candidates_json)),
+        commit_sha      TEXT NOT NULL,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS ix_motif_session_status ON olog_motif_session(status);
+    `);
+
+    // Motif discovery template and instance tables
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS olog_motif_template (
+        id              TEXT NOT NULL PRIMARY KEY,
+        name            TEXT NOT NULL,
+        description     TEXT,
+        shape_json      TEXT NOT NULL CHECK (json_valid(shape_json)),
+        equations_json  TEXT CHECK (json_valid(equations_json)),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at      INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS olog_motif_instance (
+        id              TEXT NOT NULL PRIMARY KEY,
+        template_id     TEXT NOT NULL,
+        mappings_json   TEXT NOT NULL CHECK (json_valid(mappings_json)),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at      INTEGER NOT NULL,
+        FOREIGN KEY (template_id) REFERENCES olog_motif_template(id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS ix_motif_template_name ON olog_motif_template(name);
+      CREATE INDEX IF NOT EXISTS ix_motif_instance_template ON olog_motif_instance(template_id);
+    `);
+
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
     );
@@ -177,12 +240,23 @@ export class OlogStore {
     this.hasArrowKindStmt = this.db.prepare(
       "SELECT 1 FROM olog_arr WHERE kind = ? LIMIT 1"
     );
+    this.insertMotifTemplateStmt = this.db.prepare(
+      `INSERT INTO olog_motif_template (id, name, description, shape_json, equations_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.insertMotifInstanceStmt = this.db.prepare(
+      `INSERT INTO olog_motif_instance (id, template_id, mappings_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+    );
 
     this._sessions = new DomainSessionStore(this.db);
+    this._motifSessions = new MotifSessionStore(this.db);
   }
 
   get sessions(): DomainSessionStore {
     return this._sessions;
+  }
+
+  get motifSessions(): MotifSessionStore {
+    return this._motifSessions;
   }
 
   commitSha(): string {
@@ -368,6 +442,82 @@ export class OlogStore {
   getConstraints(): IntegrityConstraint[] {
     const rows = this.getConstraintsStmt.all() as ConstraintRow[];
     return rows.map(r => this.rowToConstraint(r));
+  }
+
+  addMotifTemplate(template: {
+    id: string;
+    name: string;
+    description: string;
+    shape: MotifShape;
+    equations: Array<{ lhsPath: string[]; rhsPath: string[]; coverage: number }>;
+    provenance: { source: string; commitSha: string; confidence: string };
+  }): void {
+    this.insertMotifTemplateStmt.run(
+      template.id,
+      template.name,
+      template.description,
+      JSON.stringify(template.shape),
+      JSON.stringify(template.equations),
+      JSON.stringify(template.provenance),
+      Date.now(),
+    );
+  }
+
+  getMotifTemplates(): Array<{
+    id: string;
+    name: string;
+    description: string;
+    shape: MotifShape;
+    equations: Array<{ lhsPath: string[]; rhsPath: string[]; coverage: number }>;
+    provenance: { source: string; commitSha: string; confidence: string };
+    createdAt: number;
+  }> {
+    const rows = this.db.prepare(
+      'SELECT id, name, description, shape_json, equations_json, provenance_json, created_at FROM olog_motif_template',
+    ).all() as MotifTemplateRow[];
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description ?? '',
+      shape: JSON.parse(r.shape_json) as MotifShape,
+      equations: r.equations_json ? JSON.parse(r.equations_json) : [],
+      provenance: JSON.parse(r.provenance_json),
+      createdAt: r.created_at,
+    }));
+  }
+
+  addMotifInstance(instance: {
+    id: string;
+    templateId: string;
+    mappings: Record<string, string>;
+    provenance: { source: string; commitSha: string; confidence: string };
+  }): void {
+    this.insertMotifInstanceStmt.run(
+      instance.id,
+      instance.templateId,
+      JSON.stringify(instance.mappings),
+      JSON.stringify(instance.provenance),
+      Date.now(),
+    );
+  }
+
+  getMotifInstances(templateId: string): Array<{
+    id: string;
+    templateId: string;
+    mappings: Record<string, string>;
+    provenance: { source: string; commitSha: string; confidence: string };
+    createdAt: number;
+  }> {
+    const rows = this.db.prepare(
+      'SELECT id, template_id, mappings_json, provenance_json, created_at FROM olog_motif_instance WHERE template_id = ?',
+    ).all(templateId) as MotifInstanceRow[];
+    return rows.map((r) => ({
+      id: r.id,
+      templateId: r.template_id,
+      mappings: JSON.parse(r.mappings_json),
+      provenance: JSON.parse(r.provenance_json),
+      createdAt: r.created_at,
+    }));
   }
 
   traverse(opts: TraverseOptions): { elements: OlogElem[]; arrows: OlogArr[] } {

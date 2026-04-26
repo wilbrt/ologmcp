@@ -18,6 +18,9 @@ import { generateCandidatePairs } from './candidates.js';
 import { type EquationCandidate, type Counterexample } from './evaluate.js';
 import { buildInMemoryGraph, precomputePathResults, pathKey } from './graph.js';
 
+export { discoverMotifs } from './motifs.js';
+export type { EgoGraph, MotifCandidate, MotifDiscoveryOptions, MotifInstance, MotifSessionData, ShapeGroup, MotifShape } from './types.js';
+export { MotifSessionStore } from './session.js';
 export type { EquationCandidate, Counterexample };
 
 export interface MiningOptions {
