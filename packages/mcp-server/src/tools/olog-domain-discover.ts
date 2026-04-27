@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, discoverDomainCandidates } from '@olog/core';
+import { OlogStore, discoverDomainCandidates, getExistingDomainElementsByCodeId } from '@olog/core';
 
 export function registerOlogDomainDiscover(server: McpServer, store: OlogStore): void {
   server.registerTool(
@@ -269,28 +269,40 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
           // Map candidate id → domain element id for arrow resolution
           const candidateToElemId = new Map<string, string>();
           let addedObjects = 0;
+          let reusedObjects = 0;
           let addedArrows = 0;
           let addedBridges = 0;
 
-          // Insert domain elements
+          // Build lookup: code element id → already-committed domain element
+          const existingDomainByCodeId = getExistingDomainElementsByCodeId(store);
+
+          // Insert domain elements (skipping duplicates)
           for (const candidate of accepted) {
-            const elemId = `domain:${candidate.id}`;
-            candidateToElemId.set(candidate.id, elemId);
-            store.addElement({
-              id: elemId,
-              kind: 'domain',
-              name: candidate.proposedName,
-              module: null,
-              span: null,
-              attrs: { codeElementId: candidate.codeElementId },
-            });
-            store.addProvenance(elemId, prov);
-            addedObjects++;
+            const existing = existingDomainByCodeId.get(candidate.codeElementId);
+            if (existing) {
+              // Reuse existing domain element — don't create a duplicate
+              candidateToElemId.set(candidate.id, existing.id);
+              reusedObjects++;
+            } else {
+              const elemId = `domain:${candidate.id}`;
+              candidateToElemId.set(candidate.id, elemId);
+              store.addElement({
+                id: elemId,
+                kind: 'domain',
+                name: candidate.proposedName,
+                module: null,
+                span: null,
+                attrs: { codeElementId: candidate.codeElementId },
+              });
+              store.addProvenance(elemId, prov);
+              addedObjects++;
+            }
           }
 
           // Insert domain→domain arrows
           for (const candidate of accepted) {
             const srcId = candidateToElemId.get(candidate.id)!;
+            const isNew = !existingDomainByCodeId.has(candidate.codeElementId);
             for (const arrow of candidate.proposedArrows) {
               if (arrow.status === 'rejected') continue;
 
@@ -315,8 +327,10 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
             }
 
             // Bridge arrow: domain element → code element
+            // Only add bridge arrow for newly created domain elements;
+            // reused ones already have an implementedAs arrow
             const bridgeArrow = candidate.bridgeArrow;
-            if (bridgeArrow.status !== 'rejected') {
+            if (bridgeArrow.status !== 'rejected' && isNew) {
               const domElemId = candidateToElemId.get(candidate.id)!;
               const bridgeId = `${domElemId}:implementedAs:${candidate.codeElementId}`;
               store.addArrow({
@@ -341,6 +355,7 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
                     sessionId: params.sessionId,
                     status: 'committed',
                     addedObjects,
+                    reusedObjects,
                     addedArrows,
                     addedBridges,
                   },

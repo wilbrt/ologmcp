@@ -3441,6 +3441,19 @@ function isExternalModule(module, excludeModules) {
   }
   return false;
 }
+function getExistingDomainElementsByCodeId(store2) {
+  const result = /* @__PURE__ */ new Map();
+  const existingDomainElems = store2.queryElements({ kind: "domain", limit: 1e4 });
+  for (const domElem of existingDomainElems) {
+    const domOutgoing = store2.outgoing(domElem.id);
+    for (const arr of domOutgoing) {
+      if (arr.kind === "implementedAs") {
+        result.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  return result;
+}
 function discoverDomainCandidates(store2, options = {}) {
   const elements = [
     ...store2.queryElements({ kind: "interface", limit: 1e4 }),
@@ -3485,16 +3498,7 @@ function discoverDomainCandidates(store2, options = {}) {
   for (const c of candidates) {
     codeIdToCandidate.set(c.codeElementId, c);
   }
-  const existingDomainByCodeId = /* @__PURE__ */ new Map();
-  const existingDomainElems = store2.queryElements({ kind: "domain", limit: 1e4 });
-  for (const domElem of existingDomainElems) {
-    const domOutgoing = store2.outgoing(domElem.id);
-    for (const arr of domOutgoing) {
-      if (arr.kind === "implementedAs") {
-        existingDomainByCodeId.set(arr.dstId, { id: domElem.id, name: domElem.name });
-      }
-    }
-  }
+  const existingDomainByCodeId = getExistingDomainElementsByCodeId(store2);
   for (const candidate of candidates) {
     const elem = store2.getElem(candidate.codeElementId);
     if (!elem) continue;

@@ -3692,6 +3692,19 @@ function isExternalModule(module, excludeModules) {
   }
   return false;
 }
+function getExistingDomainElementsByCodeId(store) {
+  const result = /* @__PURE__ */ new Map();
+  const existingDomainElems = store.queryElements({ kind: "domain", limit: 1e4 });
+  for (const domElem of existingDomainElems) {
+    const domOutgoing = store.outgoing(domElem.id);
+    for (const arr of domOutgoing) {
+      if (arr.kind === "implementedAs") {
+        result.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  return result;
+}
 function discoverDomainCandidates(store, options = {}) {
   const elements = [
     ...store.queryElements({ kind: "interface", limit: 1e4 }),
@@ -3736,16 +3749,7 @@ function discoverDomainCandidates(store, options = {}) {
   for (const c of candidates) {
     codeIdToCandidate.set(c.codeElementId, c);
   }
-  const existingDomainByCodeId = /* @__PURE__ */ new Map();
-  const existingDomainElems = store.queryElements({ kind: "domain", limit: 1e4 });
-  for (const domElem of existingDomainElems) {
-    const domOutgoing = store.outgoing(domElem.id);
-    for (const arr of domOutgoing) {
-      if (arr.kind === "implementedAs") {
-        existingDomainByCodeId.set(arr.dstId, { id: domElem.id, name: domElem.name });
-      }
-    }
-  }
+  const existingDomainByCodeId = getExistingDomainElementsByCodeId(store);
   for (const candidate of candidates) {
     const elem = store.getElem(candidate.codeElementId);
     if (!elem) continue;
@@ -3846,6 +3850,7 @@ export {
   generateCandidatePairs,
   getArrowKindsInUse,
   getDefaultRegistry,
+  getExistingDomainElementsByCodeId,
   groupEgoGraphs,
   ingestProject,
   isExternalModule,

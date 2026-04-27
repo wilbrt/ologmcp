@@ -58,6 +58,26 @@ export function isExternalModule(module: string | null, excludeModules?: string[
 }
 
 /**
+ * Build a lookup from code element ID to already-committed domain element.
+ * Domain elements point to their code element via an `implementedAs` arrow.
+ */
+export function getExistingDomainElementsByCodeId(
+  store: OlogStore,
+): Map<string, { id: string; name: string }> {
+  const result = new Map<string, { id: string; name: string }>();
+  const existingDomainElems = store.queryElements({ kind: 'domain', limit: 10000 });
+  for (const domElem of existingDomainElems) {
+    const domOutgoing = store.outgoing(domElem.id);
+    for (const arr of domOutgoing) {
+      if (arr.kind === 'implementedAs') {
+        result.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Discover domain candidates from the olog.
  *
  * Reads interface/type/class elements from the store, follows hasProperty and
@@ -122,17 +142,7 @@ export function discoverDomainCandidates(
 
   // Build lookup: code element id → already-committed domain element
   // (domain elements from a previous session that survive re-indexing)
-  const existingDomainByCodeId = new Map<string, { id: string; name: string }>();
-  const existingDomainElems = store.queryElements({ kind: 'domain', limit: 10000 });
-  for (const domElem of existingDomainElems) {
-    // Domain elements point to their code element via an implementedAs arrow
-    const domOutgoing = store.outgoing(domElem.id);
-    for (const arr of domOutgoing) {
-      if (arr.kind === 'implementedAs') {
-        existingDomainByCodeId.set(arr.dstId, { id: domElem.id, name: domElem.name });
-      }
-    }
-  }
+  const existingDomainByCodeId = getExistingDomainElementsByCodeId(store);
 
   // Step 4: add arrow proposals by following hasProperty → hasType chains
   for (const candidate of candidates) {
