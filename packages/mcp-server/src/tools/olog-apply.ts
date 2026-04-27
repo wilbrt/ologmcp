@@ -1,7 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, type PlanOperation, renderPlan, applySourceEdits, rollback } from '@olog/core';
-import { reindexProject } from '@olog/core';
+import { OlogStore, type PlanOperation, renderPlan, applySourceEdits, rollback, reindexProject, getDefaultRegistry } from '@olog/core';
 import { planStore } from './olog-plan.js';
 
 const planOperationSchema = z.union([
@@ -124,7 +123,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
 
           // Re-ingest to verify
           try {
-            reindexProject(projectRoot, store);
+            reindexProject(projectRoot, store, getDefaultRegistry());
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             return {

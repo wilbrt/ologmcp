@@ -1,5 +1,5 @@
 {
-  "name": "@olog/core",
+  "name": "@olog/lang-typescript",
   "version": "0.1.0",
   "type": "module",
   "exports": {
@@ -9,15 +9,13 @@
     }
   },
   "dependencies": {
+    "@olog/core": "*",
     "tree-sitter": "^0.21.1",
-    "better-sqlite3": "^11.7.0",
-    "glob": "^11.0.0"
+    "tree-sitter-typescript": "^0.21.0"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
     "@types/node": "^22.10.1",
-    "@types/better-sqlite3": "^7.6.12",
-    "tsx": "^4.19.2",
     "tsup": "^8.3.5"
   },
   "scripts": {

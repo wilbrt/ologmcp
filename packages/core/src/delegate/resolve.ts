@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { findEnclosingDeclaration, findImportStatement } from '../render/declaration.js';
 import { parseImports } from '../render/imports.js';
 import { computeRelativeImportPath, moduleToFilePath } from '../render/paths.js';
+import { getDefaultRegistry } from '../ingest/adapter.js';
 
 export class SourceResolver {
   private fileCache = new Map<string, string | null>();
@@ -46,8 +47,10 @@ export class SourceResolver {
       return range?.text ?? null;
     }
 
+    const registry = getDefaultRegistry();
+    if (!registry) return null;
     const range = findEnclosingDeclaration(
-      source, filePath, parsed.startLine, parsed.startCol, kind
+      source, filePath, parsed.startLine, parsed.startCol, kind, registry
     );
     return range?.text ?? null;
   }

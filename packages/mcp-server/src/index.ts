@@ -2,7 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { OlogStore, ingestProject } from '@olog/core';
+import { OlogStore, ingestProject, AdapterRegistry, setDefaultRegistry } from '@olog/core';
+import { TypeScriptAdapter } from '@olog/lang-typescript';
 import { registerOlogQuery } from './tools/olog-query.js';
 import { registerOlogInspect } from './tools/olog-inspect.js';
 import { registerOlogDump } from './tools/olog-dump.js';
@@ -35,7 +36,10 @@ const store = new OlogStore(dbPath);
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 const start = Date.now();
 try {
-  const result = ingestProject(projectRoot, store);
+  const adapterRegistry = new AdapterRegistry();
+  adapterRegistry.register(new TypeScriptAdapter());
+  setDefaultRegistry(adapterRegistry);
+  const result = ingestProject(projectRoot, store, adapterRegistry);
   console.error(
     `[olog] Ingestion complete in ${Date.now() - start}ms: ${result.filesProcessed} files, ${result.elementsCreated} elements, ${result.arrowsCreated} arrows`
   );

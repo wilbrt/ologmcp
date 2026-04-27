@@ -1,5 +1,5 @@
 {
-  "name": "@olog/core",
+  "name": "@olog/lang-clojure",
   "version": "0.1.0",
   "type": "module",
   "exports": {
@@ -9,15 +9,20 @@
     }
   },
   "dependencies": {
-    "tree-sitter": "^0.21.1",
-    "better-sqlite3": "^11.7.0",
-    "glob": "^11.0.0"
+    "@olog/core": "*",
+    "tree-sitter": "^0.21.1"
+  },
+  "peerDependencies": {
+    "tree-sitter-clojure": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "tree-sitter-clojure": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "typescript": "^5.7.2",
     "@types/node": "^22.10.1",
-    "@types/better-sqlite3": "^7.6.12",
-    "tsx": "^4.19.2",
     "tsup": "^8.3.5"
   },
   "scripts": {

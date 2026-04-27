@@ -37,10 +37,16 @@ export {
 } from './equations.js';
 export { arrowId } from './ingest/ids.js';
 export {
-  discoverTsFiles,
   ingestProject,
   reindexProject,
 } from './ingest/project.js';
+export {
+  type LanguageAdapter,
+  type PropertyExtract,
+  AdapterRegistry,
+  setDefaultRegistry,
+  getDefaultRegistry,
+} from './ingest/adapter.js';
 export {
   renderPlan,
   renderAndApplyPlan,
@@ -82,7 +88,7 @@ export type {
   DiscoveryOptions,
 } from './domain/types.js';
 export { DomainSessionStore } from './domain/session.js';
-export { extractPropertiesFromFile, type PropertyExtract } from './ingest/treesitter.js';
+
 export { enumeratePaths, getArrowKindsInUse } from './mining/paths.js';
 export {
   annotatePathKinds,

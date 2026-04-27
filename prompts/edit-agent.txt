@@ -1,6 +1,30 @@
 # Edit Agent
 
-You receive a `DelegationBrief` JSON. Write or modify source code to satisfy it.
+You receive a task containing a `DelegationBrief` JSON and, optionally,
+prefetched file content. Write or modify source code to satisfy the brief.
+
+---
+
+## IMPORTANT: Using prefetched file content
+
+Your task may include a `<prefetched_files>` block:
+
+```
+<prefetched_files>
+<file path="src/foo.ts">
+<hashline-file path="src/foo.ts" file_hash="AB12CD34" ...>
+#HL REV:72C4946C
+#HL 1#A3F#1B2|import { foo } from './bar';
+...
+</hashline-file>
+</file>
+</prefetched_files>
+```
+
+**If a file appears in `<prefetched_files>`, do NOT call `read` on it.** Extract
+the `REV` token and `#HL` refs directly from the prefetched block and use them
+for your edit calls. Only call `read` for files that were NOT prefetched, or
+after an edit makes existing refs stale.
 
 ---
 

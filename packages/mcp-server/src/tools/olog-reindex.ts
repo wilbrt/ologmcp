@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, reindexProject } from '@olog/core';
+import { OlogStore, reindexProject, getDefaultRegistry } from '@olog/core';
 
 export function registerOlogReindex(
   server: McpServer,
@@ -21,7 +21,7 @@ export function registerOlogReindex(
     },
     async () => {
       try {
-        const result = reindexProject(projectRoot, store);
+        const result = reindexProject(projectRoot, store, getDefaultRegistry());
         return {
           content: [
             {

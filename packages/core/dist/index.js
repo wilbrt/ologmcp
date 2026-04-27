@@ -4,6 +4,173 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
 
+// src/domain/session.ts
+import { randomUUID } from "crypto";
+var DomainSessionStore = class {
+  constructor(db) {
+    this.db = db;
+    this.insertStmt = this.db.prepare(
+      `INSERT INTO olog_domain_session
+         (id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.getStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
+       FROM olog_domain_session WHERE id = ?`
+    );
+    this.listStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
+       FROM olog_domain_session ORDER BY created_at DESC`
+    );
+    this.updateStmt = this.db.prepare(
+      `UPDATE olog_domain_session
+       SET status = ?, scope_regex = ?, candidates_json = ?, equations_json = ?, updated_at = ?
+       WHERE id = ?`
+    );
+    this.deleteStmt = this.db.prepare(`DELETE FROM olog_domain_session WHERE id = ?`);
+  }
+  db;
+  insertStmt;
+  getStmt;
+  listStmt;
+  updateStmt;
+  deleteStmt;
+  create(data) {
+    const id = randomUUID();
+    const now = Date.now();
+    this.insertStmt.run(
+      id,
+      "active",
+      data.scopeRegex ?? null,
+      JSON.stringify(data.candidates),
+      JSON.stringify(data.equations),
+      data.commitSha,
+      now,
+      now
+    );
+    return id;
+  }
+  get(id) {
+    const row = this.getStmt.get(id);
+    if (!row) return null;
+    return this.rowToSession(row);
+  }
+  list() {
+    const rows = this.listStmt.all();
+    return rows.map((r) => this.rowToSession(r));
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Domain session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(
+      merged.status,
+      merged.scopeRegex,
+      JSON.stringify(merged.candidates),
+      JSON.stringify(merged.equations),
+      Date.now(),
+      id
+    );
+  }
+  delete(id) {
+    this.deleteStmt.run(id);
+  }
+  rowToSession(row) {
+    return {
+      id: row.id,
+      status: row.status,
+      scopeRegex: row.scope_regex,
+      candidates: JSON.parse(row.candidates_json),
+      equations: row.equations_json ? JSON.parse(row.equations_json) : [],
+      commitSha: row.commit_sha,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+};
+
+// src/mining/session.ts
+import { randomUUID as randomUUID2 } from "crypto";
+var MotifSessionStore = class {
+  constructor(db) {
+    this.db = db;
+    this.insertStmt = this.db.prepare(
+      `INSERT INTO olog_motif_session
+         (id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.getStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
+       FROM olog_motif_session WHERE id = ?`
+    );
+    this.listStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
+       FROM olog_motif_session ORDER BY created_at DESC`
+    );
+    this.updateStmt = this.db.prepare(
+      `UPDATE olog_motif_session
+       SET status = ?, scope_regex = ?, candidates_json = ?, updated_at = ?
+       WHERE id = ?`
+    );
+    this.deleteStmt = this.db.prepare(`DELETE FROM olog_motif_session WHERE id = ?`);
+  }
+  db;
+  insertStmt;
+  getStmt;
+  listStmt;
+  updateStmt;
+  deleteStmt;
+  create(data) {
+    const id = randomUUID2();
+    const now = Date.now();
+    this.insertStmt.run(
+      id,
+      "active",
+      data.scopeRegex ?? null,
+      JSON.stringify(data.candidates),
+      data.commitSha,
+      now,
+      now
+    );
+    return id;
+  }
+  get(id) {
+    const row = this.getStmt.get(id);
+    if (!row) return null;
+    return this.rowToSession(row);
+  }
+  list() {
+    const rows = this.listStmt.all();
+    return rows.map((r) => this.rowToSession(r));
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Motif session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(
+      merged.status,
+      merged.scopeRegex,
+      JSON.stringify(merged.candidates),
+      Date.now(),
+      id
+    );
+  }
+  delete(id) {
+    this.deleteStmt.run(id);
+  }
+  rowToSession(row) {
+    return {
+      id: row.id,
+      status: row.status,
+      scopeRegex: row.scope_regex,
+      candidates: JSON.parse(row.candidates_json),
+      commitSha: row.commit_sha,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+};
+
 // src/traverse.ts
 function rowToElem(row) {
   return {
@@ -84,6 +251,8 @@ var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var OlogStore = class {
   db;
+  _sessions;
+  _motifSessions;
   getElemStmt;
   outgoingStmt;
   incomingStmt;
@@ -97,8 +266,10 @@ var OlogStore = class {
   insertArrStmt;
   insertProvStmt;
   hasArrowKindStmt;
-  constructor(path2) {
-    this.db = new Database(path2);
+  insertMotifTemplateStmt;
+  insertMotifInstanceStmt;
+  constructor(path) {
+    this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("foreign_keys = ON");
@@ -124,8 +295,62 @@ var OlogStore = class {
     }
     const provCols = this.db.prepare("PRAGMA table_info(olog_prov)").all();
     if (!provCols.some((c) => c.name === "confidence")) {
-      this.db.exec("ALTER TABLE olog_prov ADD COLUMN confidence TEXT NOT NULL DEFAULT 'resolved' CHECK (confidence IN ('resolved','unresolved','tentative'))");
+      this.db.exec("ALTER TABLE olog_prov ADD COLUMN confidence TEXT NOT NULL DEFAULT 'resolved'");
     }
+    const provTableDef = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='olog_prov'"
+    ).get()?.sql ?? "";
+    if (provTableDef.includes("CHECK (source IN")) {
+      this.db.exec(`CREATE TABLE olog_prov_new (
+        elem_id      TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        commit_sha   TEXT NOT NULL,
+        ingested_at  INTEGER NOT NULL,
+        confidence   TEXT NOT NULL DEFAULT 'resolved',
+        PRIMARY KEY (elem_id, source, commit_sha),
+        FOREIGN KEY (elem_id) REFERENCES olog_elem(id) ON DELETE CASCADE
+      ) STRICT, WITHOUT ROWID`);
+      this.db.exec("INSERT INTO olog_prov_new SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov");
+      this.db.exec("DROP TABLE olog_prov");
+      this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS olog_motif_session (
+        id              TEXT PRIMARY KEY,
+        status          TEXT NOT NULL CHECK (status IN ('active', 'committed', 'abandoned')),
+        scope_regex     TEXT,
+        candidates_json TEXT NOT NULL CHECK (json_valid(candidates_json)),
+        commit_sha      TEXT NOT NULL,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS ix_motif_session_status ON olog_motif_session(status);
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS olog_motif_template (
+        id              TEXT NOT NULL PRIMARY KEY,
+        name            TEXT NOT NULL,
+        description     TEXT,
+        shape_json      TEXT NOT NULL CHECK (json_valid(shape_json)),
+        equations_json  TEXT CHECK (json_valid(equations_json)),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at      INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS olog_motif_instance (
+        id              TEXT NOT NULL PRIMARY KEY,
+        template_id     TEXT NOT NULL,
+        mappings_json   TEXT NOT NULL CHECK (json_valid(mappings_json)),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at      INTEGER NOT NULL,
+        FOREIGN KEY (template_id) REFERENCES olog_motif_template(id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS ix_motif_template_name ON olog_motif_template(name);
+      CREATE INDEX IF NOT EXISTS ix_motif_instance_template ON olog_motif_instance(template_id);
+    `);
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
     );
@@ -157,7 +382,7 @@ var OlogStore = class {
       "INSERT INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
     );
     this.insertArrStmt = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
     );
     this.insertProvStmt = this.db.prepare(
       "INSERT INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, ?, ?, ?, ?)"
@@ -165,6 +390,20 @@ var OlogStore = class {
     this.hasArrowKindStmt = this.db.prepare(
       "SELECT 1 FROM olog_arr WHERE kind = ? LIMIT 1"
     );
+    this.insertMotifTemplateStmt = this.db.prepare(
+      `INSERT INTO olog_motif_template (id, name, description, shape_json, equations_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.insertMotifInstanceStmt = this.db.prepare(
+      `INSERT INTO olog_motif_instance (id, template_id, mappings_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?)`
+    );
+    this._sessions = new DomainSessionStore(this.db);
+    this._motifSessions = new MotifSessionStore(this.db);
+  }
+  get sessions() {
+    return this._sessions;
+  }
+  get motifSessions() {
+    return this._motifSessions;
   }
   commitSha() {
     const row = this.db.prepare("SELECT value FROM olog_meta WHERE key = 'commit_sha'").get();
@@ -178,7 +417,7 @@ var OlogStore = class {
       "INSERT INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
     );
     const insertArr = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
     );
     const insertProv = this.db.prepare(
       "INSERT INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, 'tree-sitter', ?, ?, 'resolved')"
@@ -188,13 +427,13 @@ var OlogStore = class {
     );
     const tx = this.db.transaction(() => {
       const manualElems = this.db.prepare(
-        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual'"
+        "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter'"
       ).all();
       const manualArrs = this.db.prepare(
-        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'manual')"
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_arr a WHERE a.src_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter') OR a.dst_id IN (SELECT e.id FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source != 'tree-sitter')"
       ).all();
       const manualProvs = this.db.prepare(
-        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source = 'manual'"
+        "SELECT elem_id, source, commit_sha, ingested_at, confidence FROM olog_prov WHERE source != 'tree-sitter'"
       ).all();
       this.db.prepare("DELETE FROM olog_elem").run();
       for (const e of elems) {
@@ -209,8 +448,13 @@ var OlogStore = class {
           "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
         ).run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
       }
+      const allElemIds = /* @__PURE__ */ new Set();
+      for (const e of elems) allElemIds.add(e.id);
+      for (const e of manualElems) allElemIds.add(e.id);
       for (const a of manualArrs) {
-        insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        if (allElemIds.has(a.src_id) && allElemIds.has(a.dst_id)) {
+          insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        }
       }
       for (const p of manualProvs) {
         this.insertProvStmt.run(p.elem_id, p.source, p.commit_sha, p.ingested_at, p.confidence ?? "resolved");
@@ -307,6 +551,52 @@ var OlogStore = class {
     const rows = this.getConstraintsStmt.all();
     return rows.map((r) => this.rowToConstraint(r));
   }
+  addMotifTemplate(template) {
+    this.insertMotifTemplateStmt.run(
+      template.id,
+      template.name,
+      template.description,
+      JSON.stringify(template.shape),
+      JSON.stringify(template.equations),
+      JSON.stringify(template.provenance),
+      Date.now()
+    );
+  }
+  getMotifTemplates() {
+    const rows = this.db.prepare(
+      "SELECT id, name, description, shape_json, equations_json, provenance_json, created_at FROM olog_motif_template"
+    ).all();
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description ?? "",
+      shape: JSON.parse(r.shape_json),
+      equations: r.equations_json ? JSON.parse(r.equations_json) : [],
+      provenance: JSON.parse(r.provenance_json),
+      createdAt: r.created_at
+    }));
+  }
+  addMotifInstance(instance) {
+    this.insertMotifInstanceStmt.run(
+      instance.id,
+      instance.templateId,
+      JSON.stringify(instance.mappings),
+      JSON.stringify(instance.provenance),
+      Date.now()
+    );
+  }
+  getMotifInstances(templateId) {
+    const rows = this.db.prepare(
+      "SELECT id, template_id, mappings_json, provenance_json, created_at FROM olog_motif_instance WHERE template_id = ?"
+    ).all(templateId);
+    return rows.map((r) => ({
+      id: r.id,
+      templateId: r.template_id,
+      mappings: JSON.parse(r.mappings_json),
+      provenance: JSON.parse(r.provenance_json),
+      createdAt: r.created_at
+    }));
+  }
   traverse(opts) {
     return traverse(this.db, opts);
   }
@@ -330,8 +620,8 @@ var OlogStore = class {
       params.push(opts.minConfidence);
     }
     const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
-    const join3 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
-    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join3} ${where} ORDER BY e.module, e.name LIMIT ?`;
+    const join4 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
+    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join4} ${where} ORDER BY e.module, e.name LIMIT ?`;
     params.push(opts.limit);
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => this.rowToElem(r));
@@ -364,7 +654,7 @@ var OlogStore = class {
       "INSERT INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
     );
     const insertArr = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
     );
     const deleteElem = this.db.prepare(
       "DELETE FROM olog_elem WHERE id = ?"
@@ -523,6 +813,50 @@ var OlogStore = class {
     const row = this.hasArrowKindStmt.get(kind);
     return !!row;
   }
+  /**
+   * Load every arrow as lightweight {src_id, kind, dst_id} rows.
+   * Used to build the in-memory adjacency map for fast mining.
+   */
+  loadAllArrows() {
+    return this.db.prepare("SELECT src_id, kind, dst_id FROM olog_arr").all();
+  }
+  /**
+   * Load every element's id, kind, and name.
+   * Used for kind annotation and counterexample names during mining.
+   */
+  loadElemMeta() {
+    const rows = this.db.prepare("SELECT id, kind, name FROM olog_elem").all();
+    const map = /* @__PURE__ */ new Map();
+    for (const r of rows) map.set(r.id, { kind: r.kind, name: r.name });
+    return map;
+  }
+  /**
+   * Get all distinct arrow kinds where either the source or destination element
+   * is of one of the given element kinds.
+   *
+   * This is useful for mining: when you want to restrict path enumeration to
+   * only arrow kinds that connect to domain objects (or any other element kind),
+   * this method returns the relevant arrow kinds.
+   *
+   * @param elementKinds - Array of element kinds to filter by (e.g., ['domain'])
+   * @returns Sorted array of distinct ArrowKind values
+   */
+  getArrowKindsForElementKinds(elementKinds) {
+    if (elementKinds.length === 0) return [];
+    const placeholders = elementKinds.map(() => "?").join(",");
+    const sql = `
+      SELECT DISTINCT a.kind
+      FROM olog_arr a
+      INNER JOIN olog_elem src ON a.src_id = src.id
+      INNER JOIN olog_elem dst ON a.dst_id = dst.id
+      WHERE src.kind IN (${placeholders})
+         OR dst.kind IN (${placeholders})
+      ORDER BY a.kind
+    `;
+    const params = [...elementKinds, ...elementKinds];
+    const rows = this.db.prepare(sql).all(...params);
+    return rows.map((r) => r.kind);
+  }
   close() {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
     this.db.close();
@@ -569,7 +903,7 @@ var OlogStore = class {
 };
 
 // src/constraints.ts
-import { randomUUID } from "crypto";
+import { randomUUID as randomUUID3 } from "crypto";
 var CONFIDENCE_RANK = {
   tentative: 0,
   unresolved: 1,
@@ -604,7 +938,7 @@ function evaluateExistence(store, constraint) {
   if (elements.length > 0) return [];
   return [
     {
-      id: randomUUID(),
+      id: randomUUID3(),
       kind: "integrity",
       humanMessage: constraint.message ?? `Existence constraint "${constraint.name}" violated: no elements of kind "${kind}" exist`,
       involved: []
@@ -639,7 +973,7 @@ function evaluateLayering(store, constraint) {
       if (dstLayer === null) continue;
       if (srcLayer < dstLayer) {
         violations.push({
-          id: randomUUID(),
+          id: randomUUID3(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Layering constraint "${constraint.name}" violated: "${elem.name}" (layer ${srcLayer}) references "${dstElem.name}" (layer ${dstLayer})`,
           involved: [elem.id, dstElem.id]
@@ -662,7 +996,7 @@ function evaluateMonotonicity(store, constraint) {
       if (CONFIDENCE_RANK[dstProv.confidence] > CONFIDENCE_RANK[srcProv.confidence]) {
         const dstElem = store.getElem(arr.dstId);
         violations.push({
-          id: randomUUID(),
+          id: randomUUID3(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Monotonicity constraint "${constraint.name}" violated: "${elem.name}" (${srcProv.confidence}) \u2192 "${dstElem?.name ?? arr.dstId}" (${dstProv.confidence})`,
           involved: [elem.id, arr.dstId]
@@ -683,14 +1017,14 @@ function evaluateTotality(store, constraint) {
     const matching = outgoing.filter((a) => a.kind === arrowKind);
     if (matching.length === 0) {
       violations.push({
-        id: randomUUID(),
+        id: randomUUID3(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has no outgoing "${arrowKind}" arrow`,
         involved: [elem.id]
       });
     } else if (matching.length > 1) {
       violations.push({
-        id: randomUUID(),
+        id: randomUUID3(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has ${matching.length} outgoing "${arrowKind}" arrows (expected exactly 1)`,
         involved: [elem.id, ...matching.map((a) => a.id)]
@@ -706,7 +1040,7 @@ function evaluatePathEquations(store, _operations) {
     const result = evaluateEquation(eq, store);
     if (!result.valid) {
       violations.push({
-        id: randomUUID(),
+        id: randomUUID3(),
         kind: "equation",
         humanMessage: result.message,
         involved: result.involved
@@ -716,6 +1050,8 @@ function evaluatePathEquations(store, _operations) {
   return { valid: violations.length === 0, violations };
 }
 function isSchemaElement(elem) {
+  if (elem.kind === "domain") return "domain";
+  if (elem.kind === "property") return "property";
   const schemaKind = elem.attrs?.schemaKind;
   if (typeof schemaKind === "string") return schemaKind;
   if (elem.kind === "other" && elem.module === null && elem.span === null) {
@@ -880,197 +1216,44 @@ function formatSpan(relativePath, startLine, startCol, endLine, endCol) {
 // src/ingest/project.ts
 import { globSync } from "glob";
 import { readFileSync as readFileSync2, statSync } from "fs";
-import { resolve as resolve2, relative, basename, dirname as dirname2 } from "path";
-import { fileURLToPath as fileURLToPath2 } from "url";
+import { relative, basename } from "path";
 import { execSync } from "child_process";
 
-// src/ingest/treesitter.ts
-import Parser from "tree-sitter";
-import TS from "tree-sitter-typescript";
-import fs from "fs";
-import path from "path";
-function formatSpan2(node) {
-  const s = node.startPosition;
-  const e = node.endPosition;
-  return `${s.row + 1}:${s.column + 1}-${e.row + 1}:${e.column + 1}`;
+// src/ingest/adapter.ts
+var AdapterRegistry = class {
+  adapters = /* @__PURE__ */ new Map();
+  extensionMap = /* @__PURE__ */ new Map();
+  /** Register a language adapter */
+  register(adapter) {
+    this.adapters.set(adapter.languageId, adapter);
+    for (const ext of adapter.extensions) {
+      this.extensionMap.set(ext, adapter);
+    }
+  }
+  /** Look up the adapter for a given filename (by its extension) */
+  getForFile(filename) {
+    const ext = filename.substring(filename.lastIndexOf("."));
+    return this.extensionMap.get(ext) ?? null;
+  }
+  /** Get all registered file extensions across all adapters */
+  allExtensions() {
+    return Array.from(this.extensionMap.keys());
+  }
+  /** Get all glob patterns across all adapters */
+  allGlobPatterns() {
+    return Array.from(this.adapters.values()).map((a) => a.globPattern);
+  }
+  /** Check if an adapter is registered for a given language id */
+  hasAdapter(languageId) {
+    return this.adapters.has(languageId);
+  }
+};
+var defaultRegistry = void 0;
+function setDefaultRegistry(registry) {
+  defaultRegistry = registry;
 }
-function asKind(kind) {
-  return kind;
-}
-function findContainingFunctionName(node) {
-  let cur = node.parent;
-  while (cur !== null) {
-    switch (cur.type) {
-      case "function_declaration":
-      case "generator_function_declaration":
-      case "method_definition": {
-        const nameNode = cur.childForFieldName("name");
-        if (nameNode) return nameNode.text;
-        break;
-      }
-      case "arrow_function": {
-        if (cur.parent?.type === "variable_declarator") {
-          const varName = cur.parent.childForFieldName("name");
-          if (varName) return varName.text;
-        }
-        break;
-      }
-      case "function_expression": {
-        const nameNode = cur.childForFieldName("name");
-        if (nameNode) return nameNode.text;
-        if (cur.parent?.type === "variable_declarator") {
-          const varName = cur.parent.childForFieldName("name");
-          if (varName) return varName.text;
-        }
-        break;
-      }
-    }
-    cur = cur.parent;
-  }
-  return null;
-}
-function parserFor(filename) {
-  const parser = new Parser();
-  const ext = path.extname(filename);
-  switch (ext) {
-    case ".ts":
-    case ".mts":
-    case ".cts":
-      parser.setLanguage(TS.typescript);
-      break;
-    case ".tsx":
-      parser.setLanguage(TS.tsx);
-      break;
-    default:
-      throw new Error(`Unsupported file extension: ${ext}`);
-  }
-  return parser;
-}
-function extractFromFile(parser, source, queryPath) {
-  const scmContent = fs.readFileSync(queryPath, "utf-8");
-  const language = parser.getLanguage();
-  const query = new Parser.Query(language, scmContent);
-  const tree = parser.parse(source);
-  if (tree.rootNode.hasError) {
-    console.error("Warning: parse errors detected in source");
-  }
-  const elements = [];
-  const arrows = [];
-  for (const match of query.matches(tree.rootNode)) {
-    const byName = /* @__PURE__ */ new Map();
-    for (const cap of match.captures) {
-      const arr = byName.get(cap.name);
-      if (arr) {
-        arr.push(cap);
-      } else {
-        byName.set(cap.name, [cap]);
-      }
-    }
-    const first = (name) => {
-      const arr = byName.get(name);
-      return arr ? arr[0] : void 0;
-    };
-    for (const cap of byName.get("function.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "function", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("class.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "class", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("interface.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "interface", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("typealias.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "type", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("enum.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "enum", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("method.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "method", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("import.name") ?? []) {
-      const n = cap.node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.default")) {
-      const n = first("import.default").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.namespace")) {
-      const n = first("import.namespace").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    for (const srcCap of ["import.source", "reexport.source", "require.source"]) {
-      if (first(srcCap)) {
-        const n = first(srcCap).node;
-        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: n.text, dstName: "", attrs: {} });
-      }
-    }
-    if (first("import.source")) {
-      const moduleNode = first("import.source").node;
-      const moduleStr = moduleNode.text;
-      for (const impCap of byName.get("import.name") ?? []) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: impCap.node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.default")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.default").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.namespace")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.namespace").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-    }
-    if (first("call.callee")) {
-      const calleeNode = first("call.callee").node;
-      const callNode = first("call")?.node ?? first("call.member")?.node;
-      const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: calleeNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: calleeNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: calleeNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("call.method")) {
-      const methodNode = first("call.method").node;
-      const callNode = first("call.member")?.node ?? first("call")?.node;
-      const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: methodNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: methodNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("new.ctor")) {
-      const ctorNode = first("new.ctor").node;
-      const newNode = first("new")?.node;
-      const fnName = newNode ? findContainingFunctionName(newNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: ctorNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: ctorNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: ctorNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("memberof.method") && first("memberof.class")) {
-      const methodNode = first("memberof.method").node;
-      const classNode = first("memberof.class").node;
-      arrows.push({ kind: asKind("memberOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: classNode.text, attrs: {} });
-    }
-  }
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
-  return { elements, arrows };
+function getDefaultRegistry() {
+  return defaultRegistry;
 }
 
 // src/ingest/project.ts
@@ -1083,39 +1266,7 @@ var IGNORE_PATTERNS = [
   "**/*.d.ts"
 ];
 var ONE_MB = 1024 * 1024;
-function resolveImportSpecifier(specifier, importingFileRelativePath) {
-  if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-    return specifier;
-  }
-  const importingDir = dirname2(importingFileRelativePath);
-  const joined = importingDir + "/" + specifier.replace(/^\.\//, "");
-  const normalized = normalizePath(joined);
-  return normalized.replace(/\.(js|cjs|mjs|jsx)$/, ".ts");
-}
-function normalizePath(path2) {
-  const parts = path2.split("/");
-  const result = [];
-  for (const part of parts) {
-    if (part === "..") {
-      result.pop();
-    } else if (part !== "." && part !== "") {
-      result.push(part);
-    }
-  }
-  return result.join("/");
-}
-var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = dirname2(__filename2);
-var TS_QUERY_PATH = resolve2(__dirname2, "queries", "ts.scm");
-var TSX_QUERY_PATH = resolve2(__dirname2, "queries", "tsx.scm");
-function discoverTsFiles(projectRoot) {
-  return globSync("**/*.{ts,tsx,mts,cts}", {
-    cwd: projectRoot,
-    ignore: IGNORE_PATTERNS,
-    absolute: true
-  });
-}
-function ingestProject(projectRoot, store) {
+function ingestProject(projectRoot, store, registry) {
   const start = Date.now();
   let head;
   try {
@@ -1131,10 +1282,10 @@ function ingestProject(projectRoot, store) {
       durationMs: Date.now() - start
     };
   }
-  const result = runIngestion(projectRoot, store, head);
+  const result = runIngestion(projectRoot, store, head, registry);
   return { ...result, durationMs: Date.now() - start };
 }
-function reindexProject(projectRoot, store) {
+function reindexProject(projectRoot, store, registry) {
   const start = Date.now();
   let head;
   try {
@@ -1142,15 +1293,33 @@ function reindexProject(projectRoot, store) {
   } catch {
     head = "nogit";
   }
-  const result = runIngestion(projectRoot, store, head);
+  const result = runIngestion(projectRoot, store, head, registry);
   return { ...result, durationMs: Date.now() - start };
 }
-function runIngestion(projectRoot, store, head) {
-  const files = discoverTsFiles(projectRoot);
+function discoverFiles(projectRoot, registry) {
+  const patterns = registry.allGlobPatterns();
+  let allFiles = [];
+  for (const pattern of patterns) {
+    allFiles = allFiles.concat(globSync(pattern, {
+      cwd: projectRoot,
+      ignore: IGNORE_PATTERNS,
+      absolute: true
+    }));
+  }
+  return [...new Set(allFiles)];
+}
+function runIngestion(projectRoot, store, head, registry) {
+  const effectiveRegistry = registry ?? getDefaultRegistry();
+  if (!effectiveRegistry) {
+    throw new Error("No adapter registry available. Register language adapters or pass a registry.");
+  }
+  setDefaultRegistry(effectiveRegistry);
+  const files = discoverFiles(projectRoot, effectiveRegistry);
   const elems = [];
   const arrs = [];
   let filesProcessed = 0;
   const createdModuleIds = /* @__PURE__ */ new Set();
+  const filesToExtract = [];
   for (const absolutePath of files) {
     let stats;
     try {
@@ -1175,11 +1344,16 @@ function runIngestion(projectRoot, store, head) {
       continue;
     }
     const relativePath = relative(projectRoot, absolutePath);
-    const parser = parserFor(absolutePath);
-    const queryPath = absolutePath.endsWith(".tsx") ? TSX_QUERY_PATH : TS_QUERY_PATH;
+    const adapter = effectiveRegistry.getForFile(absolutePath);
+    if (!adapter) {
+      console.error(`[olog] Skipping ${absolutePath}: no language adapter for extension`);
+      continue;
+    }
+    const parser = adapter.createParser(absolutePath);
+    const queryPath = adapter.queryPath(absolutePath);
     let extracted;
     try {
-      extracted = extractFromFile(parser, source, queryPath);
+      extracted = adapter.extractElements(parser, source, queryPath);
     } catch (err) {
       console.error(
         `[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`
@@ -1259,7 +1433,7 @@ function runIngestion(projectRoot, store, head) {
       if (arrowKindStr === "importsFrom") {
         const srcId = (nameToId.get(rawArrow.srcName) ?? [])[0];
         const rawModule = rawArrow.attrs.module ?? rawArrow.dstModule;
-        const resolvedModule = resolveImportSpecifier(rawModule, relativePath);
+        const resolvedModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(rawModule, relativePath, projectRoot) ?? rawModule : rawModule;
         const moduleId = `module:${resolvedModule}`;
         if (srcId) {
           if (!createdModuleIds.has(moduleId)) {
@@ -1316,7 +1490,7 @@ function runIngestion(projectRoot, store, head) {
         }
         const sourceModule = rawElem.attrs.sourceModule;
         if (sourceModule) {
-          const resolvedSourceModule = resolveImportSpecifier(sourceModule, relativePath);
+          const resolvedSourceModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(sourceModule, relativePath, projectRoot) ?? sourceModule : sourceModule;
           const moduleId = `module:${resolvedSourceModule}`;
           if (!createdModuleIds.has(moduleId)) {
             createdModuleIds.add(moduleId);
@@ -1337,7 +1511,66 @@ function runIngestion(projectRoot, store, head) {
         }
       }
     }
+    const hasStructuredTypes = extracted.elements.some(
+      (e) => e.kind === "interface" || e.kind === "type" || e.kind === "class"
+    );
+    if (hasStructuredTypes) {
+      filesToExtract.push({ relativePath, source, adapter, nameToId });
+    }
     filesProcessed++;
+  }
+  const globalNameToId = /* @__PURE__ */ new Map();
+  for (const e of elems) {
+    if (!globalNameToId.has(e.name)) {
+      globalNameToId.set(e.name, e.id);
+    }
+  }
+  const seenPropArrowIds = /* @__PURE__ */ new Set();
+  for (const { relativePath, source, adapter: fileAdapter, nameToId: fileNameToId } of filesToExtract) {
+    if (!fileAdapter.extractProperties) continue;
+    let properties;
+    try {
+      const parser = fileAdapter.createParser(relativePath);
+      properties = fileAdapter.extractProperties(parser, source, relativePath);
+    } catch (err) {
+      console.error(
+        `[olog] Failed to extract properties from ${relativePath}: ${err instanceof Error ? err.message : String(err)}`
+      );
+      continue;
+    }
+    for (const prop of properties) {
+      const parentIds = fileNameToId.get(prop.parentName);
+      const parentId = parentIds?.[0];
+      if (!parentId) continue;
+      const coords = parseTreeSitterSpan(prop.span);
+      const line = coords?.startLine ?? 1;
+      const col = coords?.startCol ?? 1;
+      const propId = elemId(relativePath, line, col, "property", `${prop.parentName}.${prop.name}`);
+      const fullSpan = coords ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : prop.span;
+      elems.push({
+        id: propId,
+        kind: "property",
+        name: `${prop.parentName}.${prop.name}`,
+        module: relativePath,
+        span: fullSpan,
+        attrs: JSON.stringify({ typeText: prop.typeText, optional: prop.optional, readonly: prop.readonly })
+      });
+      const hpId = arrowId(parentId, "hasProperty", propId);
+      if (!seenPropArrowIds.has(hpId)) {
+        seenPropArrowIds.add(hpId);
+        arrs.push({ id: hpId, kind: "hasProperty", src_id: parentId, dst_id: propId, attrs: "{}" });
+      }
+      for (const typeRef of prop.typeRefs) {
+        const typeId = (fileNameToId.get(typeRef) ?? [])[0] ?? globalNameToId.get(typeRef);
+        if (typeId && typeId !== propId) {
+          const htId = arrowId(propId, "hasType", typeId);
+          if (!seenPropArrowIds.has(htId)) {
+            seenPropArrowIds.add(htId);
+            arrs.push({ id: htId, kind: "hasType", src_id: propId, dst_id: typeId, attrs: "{}" });
+          }
+        }
+      }
+    }
   }
   store.ingestFull(elems, arrs, head);
   return {
@@ -1399,9 +1632,9 @@ function applyEditsToString(source, edits) {
 }
 async function applySourceEdits(edits, projectRoot, readFile, writeFile) {
   const { readFile: fsReadFile, writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join3 } = await import("path");
-  const readFn = readFile ?? (async (p) => fsReadFile(join3(projectRoot, p), "utf8"));
-  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join3(projectRoot, p), c, "utf8"));
+  const { join: join4 } = await import("path");
+  const readFn = readFile ?? (async (p) => fsReadFile(join4(projectRoot, p), "utf8"));
+  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join4(projectRoot, p), c, "utf8"));
   let applied = 0;
   let skipped = 0;
   const errors = [];
@@ -1447,10 +1680,10 @@ async function applySourceEdits(edits, projectRoot, readFile, writeFile) {
 }
 async function rollback(snapshots, projectRoot) {
   const { writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join3 } = await import("path");
+  const { join: join4 } = await import("path");
   for (const snapshot of snapshots) {
     try {
-      await fsWriteFile(join3(projectRoot, snapshot.filePath), snapshot.originalContent, "utf8");
+      await fsWriteFile(join4(projectRoot, snapshot.filePath), snapshot.originalContent, "utf8");
     } catch {
     }
   }
@@ -1579,26 +1812,12 @@ function parseSpan(span) {
 }
 
 // src/render/declaration.ts
-import "tree-sitter";
 import "fs";
-import { resolve as resolve3, dirname as dirname3 } from "path";
-import { fileURLToPath as fileURLToPath3 } from "url";
-var __filename3 = fileURLToPath3(import.meta.url);
-var __dirname3 = dirname3(__filename3);
-var TS_QUERY_PATH2 = resolve3(__dirname3, "..", "ingest", "queries", "ts.scm");
-var TSX_QUERY_PATH2 = resolve3(__dirname3, "..", "ingest", "queries", "tsx.scm");
-var DECLARATION_NODE_TYPES = {
-  function: ["function_declaration", "arrow_function"],
-  method: ["method_definition", "abstract_method_signature"],
-  class: ["class_declaration"],
-  interface: ["interface_declaration"],
-  type: ["type_alias_declaration"],
-  enum: ["enum_declaration"],
-  const: ["variable_declarator"],
-  var: ["variable_declarator"]
-};
-function findEnclosingDeclaration(source, filePath, identifierLine, identifierCol, kind) {
-  const parser = parserFor(filePath);
+function findEnclosingDeclaration(source, filePath, identifierLine, identifierCol, kind, registry) {
+  const adapter = registry.getForFile(filePath);
+  if (!adapter) return null;
+  const parser = adapter.createParser(filePath);
+  const targetTypes = adapter.kindToNodeTypes[kind] ?? [];
   const tree = parser.parse(source);
   const targetRow = identifierLine - 1;
   const targetCol = identifierCol - 1;
@@ -1606,7 +1825,6 @@ function findEnclosingDeclaration(source, filePath, identifierLine, identifierCo
     { row: targetRow, column: targetCol },
     { row: targetRow, column: targetCol + 1 }
   );
-  const targetTypes = DECLARATION_NODE_TYPES[kind] ?? [];
   while (node && !targetTypes.includes(node.type)) {
     node = node.parent;
   }
@@ -1871,9 +2089,9 @@ function computeRemoveSymbolEdits(store, elementId, readFile) {
 }
 
 // src/render/paths.ts
-import { dirname as dirname4, relative as relative2 } from "path";
+import { dirname as dirname2, relative as relative2 } from "path";
 function computeRelativeImportPath(fromFile, toModule) {
-  const fromDir = dirname4(fromFile);
+  const fromDir = dirname2(fromFile);
   let rel = relative2(fromDir, toModule);
   if (!rel.startsWith(".")) {
     rel = "./" + rel;
@@ -1882,6 +2100,9 @@ function computeRelativeImportPath(fromFile, toModule) {
 }
 function filePathToModule(filePath) {
   return filePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "");
+}
+function moduleToFilePath(moduleId) {
+  return moduleId + ".ts";
 }
 
 // src/render/strategies/add-symbol.ts
@@ -1981,12 +2202,18 @@ function computeMoveEdits(store, elementId, newModule, readFile) {
     warnings.push(`Cannot parse span: ${elem.span}`);
     return { edits, warnings };
   }
+  const registry = getDefaultRegistry();
+  if (!registry) {
+    warnings.push(`No language adapter registry available for ${sourceModule}`);
+    return { edits, warnings };
+  }
   const declarationRange = findEnclosingDeclaration(
     sourceContent,
     sourceModule,
     parsedSpan.startLine,
     parsedSpan.startCol,
-    elem.kind
+    elem.kind,
+    registry
   );
   if (!declarationRange) {
     warnings.push(`Cannot find enclosing declaration for ${elem.name} in ${sourceModule}`);
@@ -2249,22 +2476,1390 @@ function verifyOperation(store, op) {
   }
   return discrepancies;
 }
+
+// src/delegate/context.ts
+function gatherMustCall(store, targetId) {
+  const incoming = store.incoming(targetId);
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  const callees = [];
+  for (const arrow of callerOfArrows) {
+    const callSiteOutgoing = store.outgoing(arrow.srcId);
+    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
+    if (calleeOfArrow) {
+      const calleeElem = store.getElem(calleeOfArrow.dstId);
+      if (calleeElem) {
+        callees.push({
+          id: calleeElem.id,
+          name: calleeElem.name,
+          kind: calleeElem.kind,
+          module: calleeElem.module,
+          span: calleeElem.span,
+          attrs: calleeElem.attrs
+        });
+      }
+    }
+  }
+  return callees;
+}
+function gatherMustImplement(store, targetId) {
+  const outgoing = store.outgoing(targetId);
+  const implementsArrows = outgoing.filter((a) => a.kind === "implements");
+  const interfaces = [];
+  for (const arrow of implementsArrows) {
+    const iface = store.getElem(arrow.dstId);
+    if (iface) {
+      interfaces.push({
+        id: iface.id,
+        name: iface.name,
+        kind: iface.kind,
+        module: iface.module,
+        span: iface.span
+      });
+    }
+  }
+  const incoming = store.incoming(targetId);
+  const implementsIncoming = incoming.filter((a) => a.kind === "implements");
+  for (const arrow of implementsIncoming) {
+    const iface = store.getElem(arrow.srcId);
+    if (iface) {
+      interfaces.push({
+        id: iface.id,
+        name: iface.name,
+        kind: iface.kind,
+        module: iface.module,
+        span: iface.span
+      });
+    }
+  }
+  return interfaces;
+}
+function gatherUsedBy(store, targetId) {
+  const incoming = store.incoming(targetId);
+  const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
+  const callers = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const arrow of calleeOfArrows) {
+    const callSiteOutgoing = store.outgoing(arrow.srcId);
+    const callerOfArrow = callSiteOutgoing.find((a) => a.kind === "callerOf");
+    if (callerOfArrow) {
+      const callerElem = store.getElem(callerOfArrow.dstId);
+      if (callerElem && !seen.has(callerElem.id)) {
+        seen.add(callerElem.id);
+        callers.push({
+          id: callerElem.id,
+          name: callerElem.name,
+          kind: callerElem.kind,
+          module: callerElem.module,
+          span: callerElem.span
+        });
+      }
+    }
+  }
+  return callers;
+}
+function gatherImports(store, targetModule) {
+  const imports = [];
+  const moduleElems = store.queryElements({
+    kind: "import",
+    moduleRegex: `^${escapeRegex2(targetModule)}$`,
+    limit: 200
+  });
+  for (const imp of moduleElems) {
+    const outgoing = store.outgoing(imp.id);
+    const importsFromArrow = outgoing.find((a) => a.kind === "importsFrom");
+    imports.push({
+      name: imp.name,
+      sourceModule: importsFromArrow ? importsFromArrow.attrs?.sourceModule ?? null : null,
+      targetModule: imp.module
+    });
+  }
+  return imports;
+}
+function getModuleElement(store, modulePath) {
+  const results = store.queryElements({
+    kind: "module",
+    nameRegex: `^${escapeRegex2(modulePath)}$`,
+    limit: 1
+  });
+  return results[0] ?? null;
+}
+function getModuleFilePath(store, modulePath) {
+  const modElem = getModuleElement(store, modulePath);
+  if (!modElem) return null;
+  const outgoing = store.outgoing(modElem.id);
+  const locatedIn = outgoing.find((a) => a.kind === "locatedIn");
+  if (locatedIn) {
+    const fileElem = store.getElem(locatedIn.dstId);
+    if (fileElem) return fileElem.name;
+  }
+  return modulePath;
+}
+function escapeRegex2(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// src/delegate/resolve.ts
+import { readFileSync as readFileSync5 } from "fs";
+import { join as join3 } from "path";
+var SourceResolver = class {
+  constructor(projectRoot) {
+    this.projectRoot = projectRoot;
+  }
+  projectRoot;
+  fileCache = /* @__PURE__ */ new Map();
+  readSpan(filePath, span) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split("\n");
+    const start = Math.max(0, parsed.startLine - 1);
+    const end = Math.min(lines.length, parsed.endLine);
+    return lines.slice(start, end).join("\n");
+  }
+  readContext(filePath, span, contextLines = 2) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split("\n");
+    const start = Math.max(0, parsed.startLine - 1 - contextLines);
+    const end = Math.min(lines.length, parsed.endLine + contextLines);
+    return lines.slice(start, end).join("\n");
+  }
+  readDeclaration(filePath, span, kind) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    if (kind === "import") {
+      const range2 = findImportStatement(source, parsed.startLine);
+      return range2?.text ?? null;
+    }
+    const registry = getDefaultRegistry();
+    if (!registry) return null;
+    const range = findEnclosingDeclaration(
+      source,
+      filePath,
+      parsed.startLine,
+      parsed.startCol,
+      kind,
+      registry
+    );
+    return range?.text ?? null;
+  }
+  readSignature(filePath, span, kind) {
+    const declaration = this.readDeclaration(filePath, span, kind);
+    if (!declaration) return null;
+    const firstBrace = declaration.indexOf("{");
+    const firstSemicolon = declaration.indexOf(";");
+    if (firstBrace >= 0 && (firstSemicolon < 0 || firstBrace < firstSemicolon)) {
+      return declaration.slice(0, firstBrace).trim();
+    }
+    if (firstSemicolon >= 0) {
+      return declaration.slice(0, firstSemicolon + 1).trim();
+    }
+    const firstNewline = declaration.indexOf("\n");
+    if (firstNewline >= 0) {
+      return declaration.slice(0, firstNewline).trim();
+    }
+    return declaration.trim();
+  }
+  readBody(filePath, span, kind, maxLines = 50) {
+    const declaration = this.readDeclaration(filePath, span, kind);
+    if (!declaration) return null;
+    const firstBrace = declaration.indexOf("{");
+    if (firstBrace < 0) return null;
+    const body = declaration.slice(firstBrace);
+    const lines = body.split("\n");
+    if (lines.length <= maxLines) return body;
+    return lines.slice(0, maxLines).join("\n") + "\n  // ... (truncated)";
+  }
+  readImportBlock(filePath) {
+    const source = this.readFile(filePath);
+    if (source === null) return [];
+    const imports = parseImports(source);
+    return imports.map((imp) => imp.fullText.trim());
+  }
+  computeImportStatement(symbolName, symbolModule, targetModule) {
+    const fromFile = moduleToFilePath(targetModule);
+    const relativePath = computeRelativeImportPath(fromFile, symbolModule);
+    return `import { ${symbolName} } from '${relativePath}'`;
+  }
+  readFileContent(filePath, maxLines = 500) {
+    const content = this.readFile(filePath);
+    if (content === null) return null;
+    const lines = content.split("\n");
+    if (lines.length <= maxLines) return content;
+    return lines.slice(0, maxLines).join("\n") + "\n// ... (truncated)";
+  }
+  readFile(filePath) {
+    const cached = this.fileCache.get(filePath);
+    if (cached !== void 0) return cached;
+    try {
+      const content = readFileSync5(join3(this.projectRoot, filePath), "utf8");
+      this.fileCache.set(filePath, content);
+      return content;
+    } catch {
+      this.fileCache.set(filePath, null);
+      return null;
+    }
+  }
+};
+function parseSpan2(span) {
+  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+  if (!m) return null;
+  return {
+    startLine: parseInt(m[1], 10),
+    startCol: parseInt(m[2], 10),
+    endLine: parseInt(m[3], 10),
+    endCol: parseInt(m[4], 10)
+  };
+}
+
+// src/delegate/analogues.ts
+function findAnalogues(store, target, limit = 3) {
+  const targetCallees = getCalleeSet(store, target);
+  const candidates = store.queryElements({
+    kind: target.kind,
+    limit: 200
+  });
+  const scored = [];
+  for (const candidate of candidates) {
+    if (candidate.id === target.id) continue;
+    if (candidate.module === target.module) continue;
+    const candidateCallees = getCalleeSet(store, candidate);
+    const intersectionSize = countIntersection(targetCallees, candidateCallees);
+    const unionSize = targetCallees.size + candidateCallees.size - intersectionSize;
+    const similarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    if (similarity > 0) {
+      scored.push({
+        id: candidate.id,
+        name: candidate.name,
+        kind: candidate.kind,
+        module: candidate.module,
+        span: candidate.span,
+        similarity
+      });
+    }
+  }
+  scored.sort((a, b) => b.similarity - a.similarity);
+  return scored.slice(0, limit);
+}
+function getCalleeSet(store, elem) {
+  const result = /* @__PURE__ */ new Set();
+  const incoming = store.incoming(elem.id);
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  for (const arrow of callerOfArrows) {
+    const callSiteOutgoing = store.outgoing(arrow.srcId);
+    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
+    if (calleeOfArrow) {
+      result.add(calleeOfArrow.dstId);
+    }
+  }
+  const directCalls = store.outgoing(elem.id).filter((a) => a.kind === "calls");
+  for (const arrow of directCalls) {
+    result.add(arrow.dstId);
+  }
+  return result;
+}
+function countIntersection(a, b) {
+  let count = 0;
+  for (const item of a) {
+    if (b.has(item)) count++;
+  }
+  return count;
+}
+
+// src/delegate/index.ts
+var TASK_CRITERIA = {
+  write_function_body: [
+    "Must compile without type errors.",
+    "Must call every function listed in mustCall.",
+    "Must return a value matching the signature.",
+    "Must not change the function signature or exports.",
+    "Must follow the coding patterns in the provided analogues."
+  ],
+  write_test: [
+    "Must compile.",
+    "Must import the target function.",
+    "Must have at least one test case for each mustCall function.",
+    "Must follow the test framework patterns in the analogues.",
+    "Must be in a .test.ts or .spec.ts file."
+  ],
+  write_migration: [
+    "Must compile.",
+    "Must be idempotent (safe to run twice).",
+    "Must use the project's database client (see analogues).",
+    "Must include both up and down migrations if the framework requires it."
+  ],
+  rewrite_body: [
+    "Must compile.",
+    "Must preserve the existing signature and exports.",
+    "Must call every function in mustCall.",
+    "Must not introduce new dependencies not listed in the acceptance criteria.",
+    "Must be strictly better than the current body per the criteria."
+  ],
+  write_documentation: [
+    "Must be valid JSDoc/TSDoc.",
+    "Must document all parameters.",
+    "Must include @returns with type.",
+    "Must include at least one @example if any analogue has examples.",
+    "Must describe thrown errors."
+  ]
+};
+function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria) {
+  const target = store.getElem(targetId);
+  if (!target) {
+    return { ok: false, error: `Element not found: ${targetId}` };
+  }
+  const targetModule = target.module;
+  if (!targetModule) {
+    return { ok: false, error: `Element has no module: ${targetId}` };
+  }
+  const resolver = new SourceResolver(projectRoot);
+  const filePath = getModuleFilePath(store, targetModule) ?? localModuleToFilePath(targetModule);
+  const targetSignature = resolver.readSignature(filePath, target.span ?? "", target.kind) ?? target.name;
+  const targetDeclaration = resolver.readDeclaration(filePath, target.span ?? "", target.kind) ?? "";
+  const bodyPlaceholder = extractBodyPlaceholder(targetDeclaration);
+  const parsedSpan = target.span ? parseSpanSimple(target.span) : null;
+  const mustCallEntries = overrides?.mustCall ? resolveElementList(store, overrides.mustCall) : gatherMustCall(store, targetId);
+  const mustImplementEntries = overrides?.mustImplement ? resolveElementList(store, overrides.mustImplement) : gatherMustImplement(store, targetId);
+  const usedByEntries = gatherUsedBy(store, targetId);
+  const importEntries = gatherImports(store, targetModule);
+  const analogueCandidates = overrides?.analogues ? resolveAnalogueList(store, overrides.analogues) : findAnalogues(store, target, maxAnalogues);
+  const resolvedMustCall = mustCallEntries.map((entry) => {
+    const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    return {
+      name: entry.name,
+      signature: resolver.readSignature(entryFilePath, entry.span ?? "", entry.kind) ?? entry.name,
+      importStatement: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule),
+      calleeBodySnippet: resolver.readBody(entryFilePath, entry.span ?? "", entry.kind, snippetLines) ?? ""
+    };
+  });
+  const resolvedMustImplement = mustImplementEntries.map((entry) => {
+    const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    return {
+      name: entry.name,
+      fullDeclaration: resolver.readDeclaration(entryFilePath, entry.span ?? "", entry.kind) ?? entry.name,
+      importStatement: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule)
+    };
+  });
+  const resolvedUsedBy = usedByEntries.map((entry) => {
+    const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    const incoming = store.incoming(targetId);
+    const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
+    let callSiteSnippet = "";
+    for (const arrow of calleeOfArrows) {
+      const csOutgoing = store.outgoing(arrow.srcId);
+      const callerOfArrow = csOutgoing.find((a) => a.kind === "callerOf");
+      if (callerOfArrow?.dstId === entry.id) {
+        const csElem = store.getElem(arrow.srcId);
+        if (csElem?.span) {
+          callSiteSnippet = resolver.readContext(entryFilePath, csElem.span, 2) ?? "";
+          break;
+        }
+      }
+    }
+    return {
+      name: entry.name,
+      callSiteSnippet
+    };
+  });
+  const resolvedImports = importEntries.map((imp) => {
+    if (imp.sourceModule) {
+      return `import { ${imp.name} } from '${imp.sourceModule}'`;
+    }
+    return `import { ${imp.name} } from '...'`;
+  });
+  const resolvedAnalogues = analogueCandidates.map((candidate) => {
+    const candidateFilePath = getModuleFilePath(store, candidate.module ?? "") ?? localModuleToFilePath(candidate.module ?? "");
+    const analogueCallees = getCalleeNames(store, candidate.id);
+    return {
+      name: candidate.name,
+      similarity: candidate.similarity,
+      fullSource: resolver.readDeclaration(candidateFilePath, candidate.span ?? "", candidate.kind) ?? "",
+      callees: analogueCallees,
+      modulePath: candidate.module ?? ""
+    };
+  });
+  const targetFileContent = resolver.readFileContent(filePath, 500) ?? "";
+  const defaultCriteria = TASK_CRITERIA[task] ?? [];
+  const acceptanceCriteria = [...defaultCriteria, ...extraCriteria ?? []];
+  const commitSha = store.commitSha();
+  const provenanceConfidence = determineConfidence(store, targetId);
+  return {
+    task,
+    target: {
+      id: target.id,
+      name: target.name,
+      kind: target.kind,
+      module: targetModule,
+      signature: targetSignature,
+      bodyPlaceholder,
+      filePath,
+      lineRange: parsedSpan ?? { start: 1, end: 1 }
+    },
+    mustCall: resolvedMustCall,
+    mustImplement: resolvedMustImplement,
+    usedBy: resolvedUsedBy,
+    importsInTargetFile: resolver.readImportBlock(filePath),
+    analogues: resolvedAnalogues,
+    targetFileContent,
+    acceptanceCriteria,
+    provenance: {
+      ologCommitSha: commitSha,
+      confidence: provenanceConfidence,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }
+  };
+}
+function extractBodyPlaceholder(declaration) {
+  const firstBrace = declaration.indexOf("{");
+  if (firstBrace < 0) return "";
+  const lastBrace = declaration.lastIndexOf("}");
+  if (lastBrace < 0) return declaration.slice(firstBrace);
+  return declaration.slice(firstBrace, lastBrace + 1);
+}
+function resolveElementList(store, ids) {
+  const results = [];
+  for (const id of ids) {
+    const elem = store.getElem(id);
+    if (elem) {
+      results.push({
+        id: elem.id,
+        name: elem.name,
+        kind: elem.kind,
+        module: elem.module,
+        span: elem.span,
+        attrs: elem.attrs
+      });
+    }
+  }
+  return results;
+}
+function resolveAnalogueList(store, ids) {
+  const results = [];
+  for (const id of ids) {
+    const elem = store.getElem(id);
+    if (elem) {
+      results.push({
+        id: elem.id,
+        name: elem.name,
+        kind: elem.kind,
+        module: elem.module,
+        span: elem.span,
+        similarity: 1
+        // manually overridden, max similarity
+      });
+    }
+  }
+  return results;
+}
+function getCalleeNames(store, elemId2) {
+  const names = [];
+  const incoming = store.incoming(elemId2);
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  for (const arrow of callerOfArrows) {
+    const csOutgoing = store.outgoing(arrow.srcId);
+    const calleeOfArrow = csOutgoing.find((a) => a.kind === "calleeOf");
+    if (calleeOfArrow) {
+      const callee = store.getElem(calleeOfArrow.dstId);
+      if (callee) names.push(callee.name);
+    }
+  }
+  return names;
+}
+function determineConfidence(store, targetId) {
+  const prov = store.getProvenance(targetId);
+  if (!prov) return "unresolved";
+  if (prov.confidence === "resolved") return "resolved";
+  return "mixed";
+}
+function localModuleToFilePath(modulePath) {
+  return modulePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "") + ".ts";
+}
+function parseSpanSimple(span) {
+  const m = span.match(/^(\d+):\d+-(\d+):\d+$/);
+  if (!m) return null;
+  return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
+}
+
+// src/mining/paths.ts
+function getArrowKindsInUse(allArrowKinds, hasArrowKind) {
+  return allArrowKinds.filter((k) => hasArrowKind(k));
+}
+function enumeratePaths(arrowKinds, maxDepth) {
+  const paths = [];
+  for (const kind of arrowKinds) {
+    paths.push({
+      arrows: [kind],
+      domainKind: null,
+      codomainKind: null
+    });
+  }
+  let currentDepthPaths = paths.slice();
+  for (let depth = 2; depth <= maxDepth; depth++) {
+    const nextDepthPaths = [];
+    for (const existingPath of currentDepthPaths) {
+      for (const kind of arrowKinds) {
+        const lastArrow = existingPath.arrows[existingPath.arrows.length - 1];
+        if (kind === lastArrow) continue;
+        nextDepthPaths.push({
+          arrows: [...existingPath.arrows, kind],
+          domainKind: null,
+          codomainKind: null
+        });
+      }
+    }
+    paths.push(...nextDepthPaths);
+    currentDepthPaths = nextDepthPaths;
+    if (paths.length > 1e4) break;
+  }
+  return paths;
+}
+
+// src/mining/candidates.ts
+function annotatePathKinds(paths, store, elementKinds, sampleSize = 50) {
+  const kindToIds = /* @__PURE__ */ new Map();
+  for (const kind of elementKinds) {
+    const elems = store.queryElements({ kind, limit: sampleSize });
+    kindToIds.set(kind, elems.map((e) => e.id));
+  }
+  for (const path of paths) {
+    const steps = path.arrows.map((kind) => ({
+      kind,
+      direction: "out"
+    }));
+    const domainKinds = [];
+    const codomainKinds = /* @__PURE__ */ new Set();
+    for (const [kind, ids] of kindToIds) {
+      let anyReached = false;
+      for (const id of ids) {
+        const result = store.traverse({ startId: id, steps });
+        if (result.elements.length > 0) {
+          anyReached = true;
+          for (const elem of result.elements) {
+            codomainKinds.add(elem.kind);
+          }
+        }
+      }
+      if (anyReached) {
+        domainKinds.push(kind);
+      }
+    }
+    path.domainKind = domainKinds.length === 1 ? domainKinds[0] : null;
+    path.codomainKind = codomainKinds.size > 0 ? Array.from(codomainKinds).sort().join(",") : null;
+  }
+  return paths;
+}
+function generateCandidatePairs(paths) {
+  const pairs = [];
+  const byDomain = /* @__PURE__ */ new Map();
+  for (const path of paths) {
+    if (!path.domainKind) continue;
+    const existing = byDomain.get(path.domainKind) ?? [];
+    existing.push(path);
+    byDomain.set(path.domainKind, existing);
+  }
+  for (const [, domainPaths] of byDomain) {
+    for (let i = 0; i < domainPaths.length; i++) {
+      for (let j = i + 1; j < domainPaths.length; j++) {
+        const lhs = domainPaths[i];
+        const rhs = domainPaths[j];
+        if (arrowsEqual(lhs.arrows, rhs.arrows)) continue;
+        if (!lhs.codomainKind || !rhs.codomainKind) continue;
+        const lhsCodomains = new Set(lhs.codomainKind.split(","));
+        const rhsCodomains = new Set(rhs.codomainKind.split(","));
+        const overlap = [...lhsCodomains].some((k) => rhsCodomains.has(k));
+        if (!overlap) continue;
+        pairs.push({
+          lhs: [...lhs.arrows],
+          rhs: [...rhs.arrows]
+        });
+      }
+    }
+  }
+  const nullDomainPaths = paths.filter((p) => !p.domainKind);
+  for (let i = 0; i < nullDomainPaths.length; i++) {
+    for (let j = i + 1; j < nullDomainPaths.length; j++) {
+      const lhs = nullDomainPaths[i];
+      const rhs = nullDomainPaths[j];
+      if (arrowsEqual(lhs.arrows, rhs.arrows)) continue;
+      if (!lhs.codomainKind || !rhs.codomainKind) continue;
+      const lhsCodomains = new Set(lhs.codomainKind.split(","));
+      const rhsCodomains = new Set(rhs.codomainKind.split(","));
+      const overlap = [...lhsCodomains].some((k) => rhsCodomains.has(k));
+      if (!overlap) continue;
+      pairs.push({
+        lhs: [...lhs.arrows],
+        rhs: [...rhs.arrows]
+      });
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const deduped = [];
+  for (const pair of pairs) {
+    const key = canonicalKey(pair.lhs, pair.rhs);
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(pair);
+    }
+  }
+  return deduped;
+}
+function arrowsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+function canonicalKey(lhs, rhs) {
+  const lhsKey = lhs.join("\u2192");
+  const rhsKey = rhs.join("\u2192");
+  if (lhsKey <= rhsKey) {
+    return `${lhsKey}\u2261${rhsKey}`;
+  }
+  return `${rhsKey}\u2261${lhsKey}`;
+}
+
+// src/mining/evaluate.ts
+function evaluateEquationCandidate(store, lhsPath, rhsPath, seedElements, maxCounterexamples = 5) {
+  let support = 0;
+  let total = 0;
+  const counterexamples = [];
+  const lhsSteps = lhsPath.map((kind) => ({
+    kind,
+    direction: "out"
+  }));
+  const rhsSteps = rhsPath.map((kind) => ({
+    kind,
+    direction: "out"
+  }));
+  const kindCounts = /* @__PURE__ */ new Map();
+  for (const elem of seedElements) {
+    kindCounts.set(elem.kind, (kindCounts.get(elem.kind) ?? 0) + 1);
+  }
+  let domainKind = "any";
+  let maxCount = 0;
+  for (const [kind, count] of kindCounts) {
+    if (count > maxCount) {
+      maxCount = count;
+      domainKind = kind;
+    }
+  }
+  for (const elem of seedElements) {
+    const lhsResult = store.traverse({ startId: elem.id, steps: lhsSteps });
+    const rhsResult = store.traverse({ startId: elem.id, steps: rhsSteps });
+    if (lhsResult.elements.length === 0 && rhsResult.elements.length === 0) {
+      continue;
+    }
+    if (lhsResult.elements.length === 0 || rhsResult.elements.length === 0) {
+      total++;
+      if (counterexamples.length < maxCounterexamples) {
+        counterexamples.push({
+          elementId: elem.id,
+          elementName: elem.name,
+          elementKind: elem.kind,
+          lhsResult: lhsResult.elements.map((e) => e.name),
+          rhsResult: rhsResult.elements.map((e) => e.name)
+        });
+      }
+      continue;
+    }
+    total++;
+    const lhsIds = new Set(lhsResult.elements.map((e) => e.id));
+    const rhsIds = new Set(rhsResult.elements.map((e) => e.id));
+    const lhsOnly = [...lhsIds].filter((id) => !rhsIds.has(id));
+    const rhsOnly = [...rhsIds].filter((id) => !lhsIds.has(id));
+    if (lhsOnly.length === 0 && rhsOnly.length === 0) {
+      support++;
+    } else {
+      if (counterexamples.length < maxCounterexamples) {
+        counterexamples.push({
+          elementId: elem.id,
+          elementName: elem.name,
+          elementKind: elem.kind,
+          lhsResult: lhsResult.elements.filter((e) => !rhsIds.has(e.id)).map((e) => e.name),
+          rhsResult: rhsResult.elements.filter((e) => !lhsIds.has(e.id)).map((e) => e.name)
+        });
+      }
+    }
+  }
+  const coverage = total > 0 ? support / total : 0;
+  return {
+    lhsPath,
+    rhsPath,
+    domainKind,
+    support,
+    total,
+    coverage,
+    counterexamples
+  };
+}
+
+// src/mining/graph.ts
+function buildInMemoryGraph(store) {
+  const rawArrows = store.loadAllArrows();
+  const outgoing = /* @__PURE__ */ new Map();
+  for (const { src_id, kind, dst_id } of rawArrows) {
+    let list = outgoing.get(src_id);
+    if (!list) {
+      list = [];
+      outgoing.set(src_id, list);
+    }
+    list.push({ kind, dstId: dst_id });
+  }
+  return { outgoing, elems: store.loadElemMeta() };
+}
+function followPath2(graph, startId, arrowKinds) {
+  let current = /* @__PURE__ */ new Set([startId]);
+  for (const kind of arrowKinds) {
+    const next = /* @__PURE__ */ new Set();
+    for (const id of current) {
+      for (const arr of graph.outgoing.get(id) ?? []) {
+        if (arr.kind === kind) next.add(arr.dstId);
+      }
+    }
+    current = next;
+    if (current.size === 0) return current;
+  }
+  return current;
+}
+function pathKey(arrows) {
+  return arrows.join("\u2192");
+}
+function precomputePathResults(graph, paths, seeds) {
+  const cache = /* @__PURE__ */ new Map();
+  const seenKeys = /* @__PURE__ */ new Set();
+  for (const path of paths) {
+    const key = pathKey(path.arrows);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const seedResults = /* @__PURE__ */ new Map();
+    for (const seed of seeds) {
+      const reached = followPath2(graph, seed.id, path.arrows);
+      if (reached.size > 0) {
+        seedResults.set(seed.id, reached);
+      }
+    }
+    cache.set(key, seedResults);
+  }
+  return cache;
+}
+
+// src/mining/motifs.ts
+import { randomUUID as randomUUID4 } from "crypto";
+
+// src/mining/ego.ts
+function extractEgoGraph(graph, seedId, depth, arrowKinds) {
+  const seedElement = graph.elems.get(seedId);
+  if (!seedElement) {
+    throw new Error(`Seed element not found: ${seedId}`);
+  }
+  const elements = /* @__PURE__ */ new Map();
+  elements.set(seedId, { id: seedId, kind: seedElement.kind, name: seedElement.name });
+  const arrows = [];
+  const visited = /* @__PURE__ */ new Set([seedId]);
+  const queue = [{ id: seedId, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.depth >= depth) {
+      continue;
+    }
+    const outgoing = graph.outgoing.get(current.id) ?? [];
+    for (const arrow of outgoing) {
+      if (arrowKinds && !arrowKinds.includes(arrow.kind)) {
+        continue;
+      }
+      arrows.push({ srcId: current.id, kind: arrow.kind, dstId: arrow.dstId });
+      if (!visited.has(arrow.dstId)) {
+        visited.add(arrow.dstId);
+        const destElem = graph.elems.get(arrow.dstId);
+        if (destElem) {
+          elements.set(arrow.dstId, {
+            id: arrow.dstId,
+            kind: destElem.kind,
+            name: destElem.name
+          });
+          queue.push({ id: arrow.dstId, depth: current.depth + 1 });
+        }
+      }
+    }
+  }
+  return {
+    seedId,
+    seedKind: seedElement.kind,
+    elements,
+    arrows
+  };
+}
+
+// src/mining/shape.ts
+import { createHash } from "crypto";
+function shapeHash(shape) {
+  const canonical = JSON.stringify({ objects: shape.objects, arrows: shape.arrows });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+function abstractToShape(ego) {
+  const sortedElements = Array.from(ego.elements.values()).sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    return a.id.localeCompare(b.id);
+  });
+  const roleMap = /* @__PURE__ */ new Map();
+  const kindCounters = /* @__PURE__ */ new Map();
+  for (const element of sortedElements) {
+    const count = kindCounters.get(element.kind) ?? 0;
+    roleMap.set(element.id, `${element.kind}_${count}`);
+    kindCounters.set(element.kind, count + 1);
+  }
+  const objects = sortedElements.map((element) => ({
+    role: roleMap.get(element.id),
+    kind: element.kind
+  }));
+  const arrows = ego.arrows.map((arrow) => ({
+    fromRole: roleMap.get(arrow.srcId),
+    label: arrow.kind,
+    toRole: roleMap.get(arrow.dstId)
+  }));
+  const sortedObjects = [...objects].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    return a.role.localeCompare(b.role);
+  });
+  const sortedArrows = [...arrows].sort((a, b) => {
+    if (a.fromRole !== b.fromRole) return a.fromRole.localeCompare(b.fromRole);
+    if (a.label !== b.label) return a.label.localeCompare(b.label);
+    return a.toRole.localeCompare(b.toRole);
+  });
+  const hash = shapeHash({ hash: "", objects: sortedObjects, arrows: sortedArrows });
+  return { hash, objects: sortedObjects, arrows: sortedArrows };
+}
+
+// src/mining/group.ts
+function groupEgoGraphs(egos, minSupport) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const ego of egos) {
+    const shape = abstractToShape(ego);
+    const hash = shape.hash;
+    if (!groups.has(hash)) {
+      groups.set(hash, []);
+    }
+    groups.get(hash).push(ego);
+  }
+  const result = [];
+  for (const [, instances] of groups) {
+    if (instances.length >= minSupport) {
+      const shape = abstractToShape(instances[0]);
+      result.push({
+        shape,
+        instances,
+        support: instances.length
+      });
+    }
+  }
+  result.sort((a, b) => b.support - a.support);
+  return result;
+}
+function verifyInternalEquations(store, group, options) {
+  const elementIds = /* @__PURE__ */ new Set();
+  for (const instance of group.instances) {
+    for (const id of instance.elements.keys()) {
+      elementIds.add(id);
+    }
+  }
+  const firstInstance = group.instances[0];
+  if (!firstInstance) return [];
+  const elementKinds = [
+    ...new Set(
+      [...elementIds].map((id) => firstInstance.elements.get(id)?.kind).filter((kind) => Boolean(kind))
+    )
+  ];
+  const equations = mineEquations(store, {
+    elementKinds,
+    sampleSize: elementIds.size,
+    minCoverage: 0.8,
+    ...options
+  });
+  return equations.map((eq) => ({
+    lhsPath: eq.lhsPath,
+    rhsPath: eq.rhsPath,
+    coverage: eq.coverage
+  }));
+}
+
+// src/mining/motifs.ts
+function discoverMotifs(store, options = {}) {
+  const graph = buildInMemoryGraph(store);
+  const seedKinds = options.seedKinds ?? ["function", "class", "interface"];
+  const depth = options.depth ?? 2;
+  const minSupport = options.minSupport ?? 3;
+  const mineEquationsFlag = options.mineEquations ?? true;
+  const seedIds = [];
+  for (const [id, elem] of graph.elems) {
+    if (!seedKinds.includes(elem.kind)) continue;
+    const module = store.getElem(id)?.module ?? null;
+    if (options.scopeRegex) {
+      const regex = new RegExp(options.scopeRegex);
+      if (!module || !regex.test(module)) continue;
+    }
+    if (options.excludeModules && options.excludeModules.length > 0) {
+      if (module && options.excludeModules.some((pattern) => new RegExp(pattern).test(module))) {
+        continue;
+      }
+    }
+    seedIds.push(id);
+  }
+  const egos = [];
+  for (const seedId of seedIds) {
+    const ego = extractEgoGraph(graph, seedId, depth, options.arrowKinds);
+    egos.push(ego);
+  }
+  const groups = groupEgoGraphs(egos, minSupport);
+  const candidates = [];
+  for (const group of groups) {
+    const objectKinds = group.shape.objects.map((o) => o.kind).join("_");
+    const arrowLabels = group.shape.arrows.map((a) => a.label).join("_");
+    const proposedName = `Motif_${objectKinds}_${arrowLabels}`;
+    const roleList = group.shape.objects.map((o) => o.role).join(", ");
+    const description = `Recurring pattern with ${group.support} instances: ${roleList}`;
+    const instances = group.instances.map((ego) => {
+      const seedElem = store.getElem(ego.seedId);
+      const module = seedElem?.module ?? null;
+      const sortedElements = Array.from(ego.elements.values()).sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+        return a.id.localeCompare(b.id);
+      });
+      const mappings = {};
+      for (let i = 0; i < group.shape.objects.length; i++) {
+        const shapeObj = group.shape.objects[i];
+        const elem = sortedElements[i];
+        mappings[shapeObj.role] = elem.id;
+      }
+      return {
+        id: ego.seedId,
+        mappings,
+        module
+      };
+    });
+    const equations = mineEquationsFlag ? verifyInternalEquations(store, group, options.equationOptions) : [];
+    const questions = [
+      `This motif has ${group.support} instances with ${group.shape.arrows.length} arrow kinds. Consider naming them.`
+    ];
+    candidates.push({
+      id: randomUUID4(),
+      shape: group.shape,
+      proposedName,
+      description,
+      support: group.support,
+      instances,
+      equations,
+      questions,
+      status: "proposed"
+    });
+  }
+  candidates.sort((a, b) => b.support - a.support);
+  return candidates;
+}
+
+// src/mining/index.ts
+var DEFAULT_MINING_OPTIONS = {
+  maxDepth: 3,
+  minCoverage: 1,
+  maxResults: 50,
+  maxCounterexamples: 5,
+  sampleSize: 100
+};
+var ALL_ARROW_KINDS = [
+  "extends",
+  "implements",
+  "calls",
+  "imports",
+  "exports",
+  "references",
+  "contains",
+  "returns",
+  "param",
+  "typeof",
+  "instanceof",
+  "definedIn",
+  "inModule",
+  "memberOf",
+  "callerOf",
+  "calleeOf",
+  "importsFrom",
+  "locatedIn",
+  "hasProperty",
+  "hasType",
+  "implementedAs",
+  "other"
+];
+var DEFAULT_ELEMENT_KINDS = [
+  "function",
+  "method",
+  "class",
+  "interface",
+  "type",
+  "import",
+  "module",
+  "domain",
+  "property"
+];
+function mineEquations(store, options = {}) {
+  const opts = { ...DEFAULT_MINING_OPTIONS, ...options };
+  let arrowKinds = opts.arrowKinds ?? getArrowKindsInUse(ALL_ARROW_KINDS, (k) => store.hasArrowKind(k));
+  if (opts.touchingElementKinds && opts.touchingElementKinds.length > 0) {
+    const touchingKinds = store.getArrowKindsForElementKinds(opts.touchingElementKinds);
+    const touchingSet = new Set(touchingKinds);
+    arrowKinds = arrowKinds.filter((k) => touchingSet.has(k));
+  }
+  const elementKinds = opts.elementKinds ?? DEFAULT_ELEMENT_KINDS;
+  const paths = enumeratePaths(arrowKinds, opts.maxDepth);
+  const graph = buildInMemoryGraph(store);
+  const allSeeds = [];
+  for (const kind of elementKinds) {
+    const elems = store.queryElements({ kind, limit: opts.sampleSize });
+    allSeeds.push(...elems);
+  }
+  const cache = precomputePathResults(graph, paths, allSeeds);
+  const seedKindMap = new Map(allSeeds.map((e) => [e.id, e.kind]));
+  for (const path of paths) {
+    const key = pathKey(path.arrows);
+    const seedResults = cache.get(key) ?? /* @__PURE__ */ new Map();
+    const domainKinds = /* @__PURE__ */ new Set();
+    const codomainKinds = /* @__PURE__ */ new Set();
+    for (const [seedId, reached] of seedResults) {
+      const dk = seedKindMap.get(seedId);
+      if (dk) domainKinds.add(dk);
+      for (const dstId of reached) {
+        const ck = graph.elems.get(dstId)?.kind;
+        if (ck) codomainKinds.add(ck);
+      }
+    }
+    path.domainKind = domainKinds.size === 1 ? [...domainKinds][0] : null;
+    path.codomainKind = codomainKinds.size > 0 ? [...codomainKinds].sort().join(",") : null;
+  }
+  const candidates = generateCandidatePairs(paths);
+  const results = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    const key = canonicalEquationKey(candidate.lhs, candidate.rhs);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const lhsKey = pathKey(candidate.lhs);
+    const rhsKey = pathKey(candidate.rhs);
+    const lhsResults = cache.get(lhsKey) ?? /* @__PURE__ */ new Map();
+    const rhsResults = cache.get(rhsKey) ?? /* @__PURE__ */ new Map();
+    let support = 0;
+    let total = 0;
+    const counterexamples = [];
+    const kindCounts = /* @__PURE__ */ new Map();
+    for (const seed of allSeeds) {
+      const lhsReached = lhsResults.get(seed.id);
+      const rhsReached = rhsResults.get(seed.id);
+      if (!lhsReached && !rhsReached) continue;
+      total++;
+      kindCounts.set(seed.kind, (kindCounts.get(seed.kind) ?? 0) + 1);
+      if (lhsReached && rhsReached) {
+        let equal = lhsReached.size === rhsReached.size;
+        if (equal) {
+          for (const id of lhsReached) {
+            if (!rhsReached.has(id)) {
+              equal = false;
+              break;
+            }
+          }
+        }
+        if (equal) {
+          support++;
+        } else if (counterexamples.length < opts.maxCounterexamples) {
+          counterexamples.push({
+            elementId: seed.id,
+            elementName: seed.name,
+            elementKind: seed.kind,
+            lhsResult: [...lhsReached].filter((id) => !rhsReached.has(id)).map((id) => graph.elems.get(id)?.name ?? id),
+            rhsResult: [...rhsReached].filter((id) => !lhsReached.has(id)).map((id) => graph.elems.get(id)?.name ?? id)
+          });
+        }
+      } else if (counterexamples.length < opts.maxCounterexamples) {
+        counterexamples.push({
+          elementId: seed.id,
+          elementName: seed.name,
+          elementKind: seed.kind,
+          lhsResult: lhsReached ? [...lhsReached].map((id) => graph.elems.get(id)?.name ?? id) : [],
+          rhsResult: rhsReached ? [...rhsReached].map((id) => graph.elems.get(id)?.name ?? id) : []
+        });
+      }
+    }
+    if (total === 0) continue;
+    const coverage = support / total;
+    if (coverage < opts.minCoverage) continue;
+    let domainKind = "any";
+    let maxCount = 0;
+    for (const [kind, count] of kindCounts) {
+      if (count > maxCount) {
+        maxCount = count;
+        domainKind = kind;
+      }
+    }
+    results.push({ lhsPath: candidate.lhs, rhsPath: candidate.rhs, domainKind, support, total, coverage, counterexamples });
+    if (results.length >= opts.maxResults * 2) break;
+  }
+  results.sort((a, b) => {
+    if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+    return b.total - a.total;
+  });
+  const deduped = [];
+  for (const result of results) {
+    if (deduped.length >= opts.maxResults) break;
+    let subsumed = false;
+    for (const existing of deduped) {
+      if (isSubsumedBy(result, existing)) {
+        subsumed = true;
+        break;
+      }
+    }
+    if (!subsumed) {
+      deduped.push(result);
+    }
+  }
+  return deduped;
+}
+function isSubsumedBy(candidate, existing) {
+  if (candidate.coverage !== existing.coverage) return false;
+  const cLhs = candidate.lhsPath.join("\u2192");
+  const cRhs = candidate.rhsPath.join("\u2192");
+  const eLhs = existing.lhsPath.join("\u2192");
+  const eRhs = existing.rhsPath.join("\u2192");
+  const pairs = [
+    [cLhs, cRhs],
+    [eLhs, eRhs]
+  ];
+  if (cLhs.startsWith(eLhs + "\u2192") && cRhs.startsWith(eRhs + "\u2192") && cLhs.slice(eLhs.length) === cRhs.slice(eRhs.length)) {
+    return true;
+  }
+  if (cLhs.endsWith("\u2192" + eLhs) && cRhs.endsWith("\u2192" + eRhs) && cLhs.slice(0, cLhs.length - eLhs.length) === cRhs.slice(0, cRhs.length - eRhs.length)) {
+    return true;
+  }
+  return false;
+}
+function canonicalEquationKey(lhs, rhs) {
+  const lhsKey = lhs.join("\u2192");
+  const rhsKey = rhs.join("\u2192");
+  if (lhsKey <= rhsKey) {
+    return `${lhsKey}\u2261${rhsKey}`;
+  }
+  return `${rhsKey}\u2261${lhsKey}`;
+}
+
+// src/domain/discover.ts
+import { randomUUID as randomUUID5 } from "crypto";
+var ABBREV_MAP = {
+  Elem: "Element",
+  Arr: "Arrow",
+  Prov: "Provenance",
+  Val: "Value",
+  Cfg: "Configuration",
+  Msg: "Message",
+  Err: "Error",
+  Req: "Request",
+  Res: "Response",
+  Impl: "Implementation",
+  Attr: "Attribute",
+  Prop: "Property",
+  Spec: "Specification",
+  Ctor: "Constructor",
+  Lhs: "Left-Hand Side",
+  Rhs: "Right-Hand Side",
+  Src: "Source",
+  Dst: "Destination",
+  Id: "ID"
+};
+function splitPascalCase(name) {
+  const spaced = name.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return spaced.split(" ").filter((s) => s.length > 0);
+}
+function toNounPhrase(pascalName) {
+  const words = splitPascalCase(pascalName).map((w) => ABBREV_MAP[w] ?? w);
+  const noun = words.join(" ");
+  const article = /^[aeiouAEIOU]/.test(noun) ? "an" : "a";
+  return `${article} ${noun}`;
+}
+function isExternalModule(module, excludeModules) {
+  if (module === null) return true;
+  if (module.startsWith("node:")) return true;
+  if (excludeModules) {
+    for (const pattern of excludeModules) {
+      if (new RegExp(pattern).test(module)) return true;
+    }
+  }
+  return false;
+}
+function discoverDomainCandidates(store, options = {}) {
+  const elements = [
+    ...store.queryElements({ kind: "interface", limit: 1e4 }),
+    ...store.queryElements({ kind: "type", limit: 1e4 }),
+    ...store.queryElements({ kind: "class", limit: 1e4 })
+  ];
+  const filtered = elements.filter((elem) => {
+    if (isExternalModule(elem.module, options.excludeModules)) return false;
+    if (options.scopeRegex) {
+      try {
+        if (!new RegExp(options.scopeRegex).test(elem.module ?? "")) return false;
+      } catch {
+      }
+    }
+    return true;
+  });
+  const candidates = filtered.map((elem) => {
+    const candidateId = randomUUID5();
+    const bridgeArrow = {
+      id: randomUUID5(),
+      name: "implemented as",
+      domainCandidateId: candidateId,
+      codomainName: elem.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: null,
+      total: true,
+      source: "field",
+      confidence: "resolved",
+      status: "proposed"
+    };
+    return {
+      id: candidateId,
+      codeElementId: elem.id,
+      proposedName: toNounPhrase(elem.name),
+      proposedArrows: [],
+      bridgeArrow,
+      questions: [],
+      status: "proposed"
+    };
+  });
+  const codeIdToCandidate = /* @__PURE__ */ new Map();
+  for (const c of candidates) {
+    codeIdToCandidate.set(c.codeElementId, c);
+  }
+  const existingDomainByCodeId = /* @__PURE__ */ new Map();
+  const existingDomainElems = store.queryElements({ kind: "domain", limit: 1e4 });
+  for (const domElem of existingDomainElems) {
+    const domOutgoing = store.outgoing(domElem.id);
+    for (const arr of domOutgoing) {
+      if (arr.kind === "implementedAs") {
+        existingDomainByCodeId.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    const elem = store.getElem(candidate.codeElementId);
+    if (!elem) continue;
+    const outgoing = store.outgoing(candidate.codeElementId);
+    const propertyArrows = outgoing.filter((a) => a.kind === "hasProperty");
+    if (propertyArrows.length === 0 && elem.kind === "type") {
+      candidate.questions.push(
+        `"${elem.name}" appears to be a type alias. If it is a union of string literals, should it become a domain concept, or should each value be a separate domain object?`
+      );
+    }
+    for (const propArrow of propertyArrows) {
+      const propElem = store.getElem(propArrow.dstId);
+      if (!propElem) continue;
+      const propAttrs = propElem.attrs;
+      const typeText = propAttrs.typeText ?? "";
+      const optional = propAttrs.optional === true;
+      const isArray = typeText.includes("[]") || typeText.includes("Array<");
+      const isRecord = typeText.includes("Record<") || typeText.startsWith("{") && !typeText.includes("null");
+      const propName = propElem.name.includes(".") ? propElem.name.split(".").slice(1).join(".") : propElem.name;
+      const propOutgoing = store.outgoing(propArrow.dstId);
+      const typeArrows = propOutgoing.filter((a) => a.kind === "hasType");
+      for (const typeArrow of typeArrows) {
+        const typeElem = store.getElem(typeArrow.dstId);
+        if (!typeElem) continue;
+        const targetCandidate = codeIdToCandidate.get(typeArrow.dstId);
+        const existingDomain = targetCandidate ? null : existingDomainByCodeId.get(typeArrow.dstId) ?? null;
+        const total = !optional && !isArray;
+        const proposal = {
+          id: randomUUID5(),
+          name: `has ${propName}`,
+          domainCandidateId: candidate.id,
+          codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? typeElem.name,
+          codomainCandidateId: targetCandidate?.id ?? null,
+          codomainExistingElemId: existingDomain?.id ?? null,
+          total,
+          source: "field",
+          confidence: targetCandidate || existingDomain ? "resolved" : "unresolved",
+          status: "proposed"
+        };
+        if (optional) {
+          proposal.question = `The field "${propName}" is optional (nullable). Is this arrow total (every ${candidate.proposedName} must have one) or partial?`;
+        } else if (isArray) {
+          proposal.question = `The field "${propName}" is an array. The arrow "has ${propName}" would be many-valued. Should ${typeElem.name} be reified with a back-reference?`;
+        }
+        candidate.proposedArrows.push(proposal);
+      }
+      if (typeArrows.length === 0 && isRecord) {
+        candidate.questions.push(
+          `The field "${propName}" has a generic container type ("${typeText}"). Should individual attributes be modeled as separate domain arrows?`
+        );
+      }
+    }
+    const structuralArrows = outgoing.filter((a) => a.kind === "extends" || a.kind === "implements");
+    for (const structArrow of structuralArrows) {
+      const targetCandidate = codeIdToCandidate.get(structArrow.dstId);
+      const existingDomain = targetCandidate ? null : existingDomainByCodeId.get(structArrow.dstId) ?? null;
+      if (!targetCandidate && !existingDomain) continue;
+      const targetElem = store.getElem(structArrow.dstId);
+      if (!targetElem) continue;
+      const arrowName = structArrow.kind === "extends" ? "extends" : "implements";
+      const proposal = {
+        id: randomUUID5(),
+        name: arrowName,
+        domainCandidateId: candidate.id,
+        codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? targetElem.name,
+        codomainCandidateId: targetCandidate?.id ?? null,
+        codomainExistingElemId: existingDomain?.id ?? null,
+        total: true,
+        source: structArrow.kind,
+        confidence: "resolved",
+        status: "proposed"
+      };
+      candidate.proposedArrows.push(proposal);
+    }
+  }
+  return candidates;
+}
 export {
+  AdapterRegistry,
+  DomainSessionStore,
+  MotifSessionStore,
   OlogStore,
+  SourceResolver,
+  abstractToShape,
+  annotatePathKinds,
   applyEditsToString,
   applySourceEdits,
   arrowId,
-  discoverTsFiles,
+  assembleBrief,
+  discoverDomainCandidates,
+  discoverMotifs,
+  enumeratePaths,
   evaluateConstraints,
   evaluateEquation,
+  evaluateEquationCandidate,
   evaluatePathEquations,
+  extractEgoGraph,
+  generateCandidatePairs,
+  getArrowKindsInUse,
+  getDefaultRegistry,
+  groupEgoGraphs,
   ingestProject,
+  isExternalModule,
   isNounPhrase,
+  mineEquations,
   offsetAt,
   reindexProject,
   renderAndApplyPlan,
   renderPlan,
   rollback,
+  setDefaultRegistry,
+  shapeHash,
+  toNounPhrase,
   traverse,
-  validateEquation
+  validateEquation,
+  verifyInternalEquations
 };

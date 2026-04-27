@@ -3,6 +3,7 @@ import type { OlogElem } from '../../ontology.js';
 import type { SourceEdit } from '../edit.js';
 import { parseSpan } from './rename.js';
 import { findEnclosingDeclaration, findImportStatement } from '../declaration.js';
+import { getDefaultRegistry } from '../../ingest/adapter.js';
 import { parseImports, findImportInsertionPoint, formatNamedImport } from '../imports.js';
 import { computeRelativeImportPath, filePathToModule } from '../paths.js';
 
@@ -46,10 +47,17 @@ export function computeMoveEdits(
     return { edits, warnings };
   }
 
+  const registry = getDefaultRegistry();
+  if (!registry) {
+    warnings.push(`No language adapter registry available for ${sourceModule}`);
+    return { edits, warnings };
+  }
+
   const declarationRange = findEnclosingDeclaration(
     sourceContent, sourceModule,
     parsedSpan.startLine, parsedSpan.startCol,
     elem.kind,
+    registry,
   );
 
   if (!declarationRange) {

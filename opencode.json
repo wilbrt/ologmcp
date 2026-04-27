@@ -28,7 +28,7 @@
       "prompt": "{file:./prompts/planning-agent.txt}",
       "description": "Planning agent. Interactively plans structural changes with the user, records plans as olog-format files in .plans/, validates them against the olog, and delegates implementation slices to the 'edit' subagent via the Task tool. Gathers all structural context by invoking the 'explore' subagent via the Task tool — never reads source files directly.",
       "permission": {
-        "edit": "allow",
+        "edit": { ".plans/*": "allow", "*": "deny" },
         "bash": { "*": "deny" },
         "webfetch": "deny",
         "task": {
@@ -62,6 +62,7 @@
         "edit": "allow",
         "bash": {
           "*": "deny",
+          "rm *": "allow",
           "npx tsc --noEmit *": "allow",
           "npx vitest run *": "allow",
           "npm run build *": "allow"

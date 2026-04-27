@@ -134,11 +134,27 @@ Never weaken a constraint to pass validation.
 **Phase 5 — Execute**
 
 For each slice, in order:
-1. Call `olog_delegate` for the slice's target element
-2. Invoke `@edit` via Task with the DelegationBrief JSON
-3. Wait for `@edit` to confirm completion
-4. Mark the slice done in the plan file
-5. Use the `question` tool to ask whether to proceed to the next slice,
+1. Call `olog_delegate` for the slice's target element — note the `target.filePath`
+   from the returned DelegationBrief.
+2. Invoke `@explore` via Task with `PREFETCH: <target.filePath>` to fetch the
+   file's hashline content **before** the edit agent runs.
+3. Invoke `@edit` via Task with the following combined task body:
+
+```
+<delegation_brief>
+<DelegationBrief JSON from olog_delegate>
+</delegation_brief>
+
+<prefetched_files>
+<file path="<target.filePath>">
+<paste the full @explore prefetch output here, including the <hashline-file> block>
+</file>
+</prefetched_files>
+```
+
+4. Wait for `@edit` to confirm completion.
+5. Mark the slice done in the plan file.
+6. Use the `question` tool to ask whether to proceed to the next slice,
    with options: "Continue to next slice", "Pause and review", "Abort remaining slices"
 
 After all slices: note in the plan file that `olog_reindex` should be run

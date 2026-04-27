@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
-import type { AdapterRegistry } from '../ingest/adapter.js';
+import Parser from 'tree-sitter';
 
+/** Range and text for a declaration in source code. */
 export interface DeclarationRange {
   startLine: number;
   startCol: number;
@@ -9,6 +9,18 @@ export interface DeclarationRange {
   text: string;
 }
 
+/** Map from olog element kind to tree-sitter node types for declaration rendering. */
+export const DECLARATION_NODE_TYPES: Record<string, string[]> = {
+  function: ['function_declaration', 'arrow_function'],
+  method: ['method_definition', 'abstract_method_signature'],
+  class: ['class_declaration'],
+  interface: ['interface_declaration'],
+  type: ['type_alias_declaration'],
+  enum: ['enum_declaration'],
+  const: ['variable_declarator'],
+  var: ['variable_declarator'],
+};
+
 /**
  * Find the full declaration range for an element, given its identifier
  * position and kind. Re-parses the source file with tree-sitter and
@@ -16,30 +28,25 @@ export interface DeclarationRange {
  */
 export function findEnclosingDeclaration(
   source: string,
-  filePath: string,
+  parser: Parser,
   identifierLine: number,
   identifierCol: number,
   kind: string,
-  registry: AdapterRegistry,
 ): DeclarationRange | null {
-  const adapter = registry.getForFile(filePath);
-  if (!adapter) return null;
-
-  const parser = adapter.createParser(filePath);
-  const targetTypes = adapter.kindToNodeTypes[kind] ?? [];
-
   const tree = parser.parse(source);
 
   const targetRow = identifierLine - 1;
   const targetCol = identifierCol - 1;
 
-  let node: { parent: { type: string; parent: { type: string; parent: unknown } | null; startPosition: { row: number; column: number }; endPosition: { row: number; column: number }; text: string } | null; type: string; startPosition: { row: number; column: number }; endPosition: { row: number; column: number }; text: string } | null = tree.rootNode.descendantForPosition(
+  let node: Parser.SyntaxNode | null = tree.rootNode.descendantForPosition(
     { row: targetRow, column: targetCol },
     { row: targetRow, column: targetCol + 1 },
   );
 
+  const targetTypes = DECLARATION_NODE_TYPES[kind] ?? [];
+
   while (node && !targetTypes.includes(node.type)) {
-    node = node.parent as typeof node;
+    node = node.parent;
   }
 
   if (!node) {
@@ -66,7 +73,6 @@ export function findEnclosingDeclaration(
 
 /**
  * Find an import statement line range given the line number of an import element.
- * Handles multi-line imports by scanning forward for the closing semicolon or newline.
  */
 export function findImportStatement(
   source: string,
@@ -75,10 +81,9 @@ export function findImportStatement(
   const lines = source.split('\n');
   if (startLine < 1 || startLine > lines.length) return null;
 
-  let beginLine = startLine - 1; // 0-based
+  let beginLine = startLine - 1;
   let endLine = beginLine;
 
-  // Scan forward for the end of the import statement
   let braceDepth = 0;
   let foundFrom = false;
 
@@ -100,7 +105,7 @@ export function findImportStatement(
   }
 
   const text = lines.slice(beginLine, endLine + 1).join('\n');
-  const startCol = lines[beginLine]!.search(/\S/) + 1; // first non-whitespace
+  const startCol = lines[beginLine]!.search(/\S/) + 1;
 
   return {
     startLine: beginLine + 1,
@@ -113,21 +118,19 @@ export function findImportStatement(
 
 /**
  * Extract the full declaration text for an element from its source file.
- * Returns the declaration text if found, or null.
  */
 export function extractDeclaration(
   source: string,
-  filePath: string,
+  parser: Parser,
   identifierLine: number,
   identifierCol: number,
   kind: string,
-  registry: AdapterRegistry,
 ): string | null {
   if (kind === 'import') {
     const range = findImportStatement(source, identifierLine);
     return range?.text ?? null;
   }
 
-  const range = findEnclosingDeclaration(source, filePath, identifierLine, identifierCol, kind, registry);
+  const range = findEnclosingDeclaration(source, parser, identifierLine, identifierCol, kind);
   return range?.text ?? null;
 }

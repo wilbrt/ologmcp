@@ -5,18 +5,13 @@ export default defineConfig({
   outDir: 'dist',
   format: ['esm'],
   target: 'node20',
-  platform: 'node',
-  splitting: false,
-  sourcemap: true,
-  banner: {
-    js: '#!/usr/bin/env node'
-  },
+  clean: true,
+  dts: true,
   external: [
     'better-sqlite3',
     'tree-sitter',
     'tree-sitter-typescript',
-    '@modelcontextprotocol/sdk',
-    'glob'
+    'tree-sitter-clojure',
+    'glob',
   ],
-  noExternal: ['@olog/core', '@olog/lang-typescript']
 });

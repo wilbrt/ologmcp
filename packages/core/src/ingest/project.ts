@@ -1,12 +1,12 @@
 import { globSync } from 'glob';
 import { readFileSync, statSync } from 'node:fs';
-import { resolve, relative, basename, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { relative, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { OlogStore } from '../db.js';
-import { parserFor, extractFromFile, extractPropertiesFromFile } from './treesitter.js';
 import { elemId, arrowId, fileElemId, formatSpan } from './ids.js';
 import type { IngestResult, RawElement, RawArrow } from '../ontology.js';
+import { setDefaultRegistry, getDefaultRegistry } from './adapter.js';
+import type { AdapterRegistry, LanguageAdapter } from './adapter.js';
 
 const IGNORE_PATTERNS = [
   '**/node_modules/**',
@@ -19,53 +19,7 @@ const IGNORE_PATTERNS = [
 
 const ONE_MB = 1024 * 1024;
 
-const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'];
-
-function resolveImportSpecifier(
-  specifier: string,
-  importingFileRelativePath: string,
-): string {
-  if (
-    !specifier.startsWith('./') &&
-    !specifier.startsWith('../')
-  ) {
-    return specifier;
-  }
-
-  const importingDir = dirname(importingFileRelativePath);
-  const joined = importingDir + '/' + specifier.replace(/^\.\//, '');
-  const normalized = normalizePath(joined);
-
-  return normalized.replace(/\.(js|cjs|mjs|jsx)$/, '.ts');
-}
-
-function normalizePath(path: string): string {
-  const parts = path.split('/');
-  const result: string[] = [];
-  for (const part of parts) {
-    if (part === '..') {
-      result.pop();
-    } else if (part !== '.' && part !== '') {
-      result.push(part);
-    }
-  }
-  return result.join('/');
-}
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const TS_QUERY_PATH = resolve(__dirname, 'queries', 'ts.scm');
-const TSX_QUERY_PATH = resolve(__dirname, 'queries', 'tsx.scm');
-
-export function discoverTsFiles(projectRoot: string): string[] {
-  return globSync('**/*.{ts,tsx,mts,cts}', {
-    cwd: projectRoot,
-    ignore: IGNORE_PATTERNS,
-    absolute: true,
-  });
-}
-
-export function ingestProject(projectRoot: string, store: OlogStore): IngestResult {
+export function ingestProject(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult {
   const start = Date.now();
   let head: string;
   try {
@@ -83,11 +37,11 @@ export function ingestProject(projectRoot: string, store: OlogStore): IngestResu
     };
   }
 
-  const result = runIngestion(projectRoot, store, head);
+  const result = runIngestion(projectRoot, store, head, registry);
   return { ...result, durationMs: Date.now() - start };
 }
 
-export function reindexProject(projectRoot: string, store: OlogStore): IngestResult {
+export function reindexProject(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult {
   const start = Date.now();
   let head: string;
   try {
@@ -96,7 +50,7 @@ export function reindexProject(projectRoot: string, store: OlogStore): IngestRes
     head = 'nogit';
   }
 
-  const result = runIngestion(projectRoot, store, head);
+  const result = runIngestion(projectRoot, store, head, registry);
   return { ...result, durationMs: Date.now() - start };
 }
 
@@ -109,12 +63,33 @@ interface IngestCounts {
 interface FileForPropertyExtraction {
   relativePath: string;
   source: string;
-  parser: ReturnType<typeof parserFor>;
+  adapter: LanguageAdapter;
   nameToId: Map<string, string[]>;
 }
 
-function runIngestion(projectRoot: string, store: OlogStore, head: string): IngestCounts {
-  const files = discoverTsFiles(projectRoot);
+function discoverFiles(projectRoot: string, registry: AdapterRegistry): string[] {
+  const patterns = registry.allGlobPatterns();
+  let allFiles: string[] = [];
+  for (const pattern of patterns) {
+    allFiles = allFiles.concat(globSync(pattern, {
+      cwd: projectRoot,
+      ignore: IGNORE_PATTERNS,
+      absolute: true,
+    }));
+  }
+  // Deduplicate
+  return [...new Set(allFiles)];
+}
+
+function runIngestion(projectRoot: string, store: OlogStore, head: string, registry?: AdapterRegistry): IngestCounts {
+  const effectiveRegistry = registry ?? getDefaultRegistry();
+  if (!effectiveRegistry) {
+    throw new Error('No adapter registry available. Register language adapters or pass a registry.');
+  }
+  // Set the global registry so other parts of the system can use it
+  setDefaultRegistry(effectiveRegistry);
+
+  const files = discoverFiles(projectRoot, effectiveRegistry);
 
   const elems: Array<{
     id: string;
@@ -164,12 +139,19 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
     }
 
     const relativePath = relative(projectRoot, absolutePath);
-    const parser = parserFor(absolutePath);
-    const queryPath = absolutePath.endsWith('.tsx') ? TSX_QUERY_PATH : TS_QUERY_PATH;
+
+    const adapter = effectiveRegistry.getForFile(absolutePath);
+    if (!adapter) {
+      console.error(`[olog] Skipping ${absolutePath}: no language adapter for extension`);
+      continue;
+    }
+
+    const parser = adapter.createParser(absolutePath);
+    const queryPath = adapter.queryPath(absolutePath);
 
     let extracted: { elements: RawElement[]; arrows: RawArrow[] };
     try {
-      extracted = extractFromFile(parser, source, queryPath);
+      extracted = adapter.extractElements(parser, source, queryPath);
     } catch (err) {
       console.error(
         `[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`
@@ -265,7 +247,9 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
       if (arrowKindStr === 'importsFrom') {
         const srcId = (nameToId.get(rawArrow.srcName) ?? [])[0];
         const rawModule = (rawArrow.attrs as Record<string, string>).module ?? rawArrow.dstModule;
-        const resolvedModule = resolveImportSpecifier(rawModule, relativePath);
+        const resolvedModule = adapter.resolveImportSpecifier
+          ? adapter.resolveImportSpecifier(rawModule, relativePath, projectRoot) ?? rawModule
+          : rawModule;
         const moduleId = `module:${resolvedModule}`;
 
         if (srcId) {
@@ -326,7 +310,9 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
 
         const sourceModule = (rawElem.attrs as Record<string, string>).sourceModule;
         if (sourceModule) {
-          const resolvedSourceModule = resolveImportSpecifier(sourceModule, relativePath);
+          const resolvedSourceModule = adapter.resolveImportSpecifier
+            ? adapter.resolveImportSpecifier(sourceModule, relativePath, projectRoot) ?? sourceModule
+            : sourceModule;
           const moduleId = `module:${resolvedSourceModule}`;
           if (!createdModuleIds.has(moduleId)) {
             createdModuleIds.add(moduleId);
@@ -353,7 +339,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
       e => e.kind === 'interface' || e.kind === 'type' || e.kind === 'class',
     );
     if (hasStructuredTypes) {
-      filesToExtract.push({ relativePath, source, parser, nameToId });
+      filesToExtract.push({ relativePath, source, adapter, nameToId });
     }
 
     filesProcessed++;
@@ -370,10 +356,13 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string): Inge
 
   const seenPropArrowIds = new Set<string>();
 
-  for (const { relativePath, source, parser: fileParser, nameToId: fileNameToId } of filesToExtract) {
+  for (const { relativePath, source, adapter: fileAdapter, nameToId: fileNameToId } of filesToExtract) {
+    if (!fileAdapter.extractProperties) continue;
+
     let properties;
     try {
-      properties = extractPropertiesFromFile(fileParser, source, relativePath);
+      const parser = fileAdapter.createParser(relativePath);
+      properties = fileAdapter.extractProperties(parser, source, relativePath);
     } catch (err) {
       console.error(
         `[olog] Failed to extract properties from ${relativePath}: ${err instanceof Error ? err.message : String(err)}`

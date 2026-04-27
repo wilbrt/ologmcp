@@ -2,18 +2,30 @@
 
 // src/index.ts
 import { mkdirSync } from "fs";
-import { join as join4 } from "path";
-import { McpServer as McpServer13 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { join } from "path";
+import { McpServer as McpServer14 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-// ../core/src/db.ts
+// ../core/dist/index.js
 import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
-
-// ../core/src/domain/session.ts
 import { randomUUID } from "crypto";
+import { randomUUID as randomUUID2 } from "crypto";
+import { randomUUID as randomUUID3 } from "crypto";
+import { globSync } from "glob";
+import { readFileSync as readFileSync2, statSync } from "fs";
+import { relative, basename } from "path";
+import { execSync } from "child_process";
+import { readFileSync as readFileSync4 } from "fs";
+import { join as join2 } from "path";
+import { dirname as dirname2, relative as relative2 } from "path";
+import { readFileSync as readFileSync5 } from "fs";
+import { join as join3 } from "path";
+import { randomUUID as randomUUID4 } from "crypto";
+import { createHash } from "crypto";
+import { randomUUID as randomUUID5 } from "crypto";
 var DomainSessionStore = class {
   constructor(db) {
     this.db = db;
@@ -96,8 +108,85 @@ var DomainSessionStore = class {
     };
   }
 };
-
-// ../core/src/traverse.ts
+var MotifSessionStore = class {
+  constructor(db) {
+    this.db = db;
+    this.insertStmt = this.db.prepare(
+      `INSERT INTO olog_motif_session
+         (id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.getStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
+       FROM olog_motif_session WHERE id = ?`
+    );
+    this.listStmt = this.db.prepare(
+      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
+       FROM olog_motif_session ORDER BY created_at DESC`
+    );
+    this.updateStmt = this.db.prepare(
+      `UPDATE olog_motif_session
+       SET status = ?, scope_regex = ?, candidates_json = ?, updated_at = ?
+       WHERE id = ?`
+    );
+    this.deleteStmt = this.db.prepare(`DELETE FROM olog_motif_session WHERE id = ?`);
+  }
+  db;
+  insertStmt;
+  getStmt;
+  listStmt;
+  updateStmt;
+  deleteStmt;
+  create(data) {
+    const id = randomUUID2();
+    const now = Date.now();
+    this.insertStmt.run(
+      id,
+      "active",
+      data.scopeRegex ?? null,
+      JSON.stringify(data.candidates),
+      data.commitSha,
+      now,
+      now
+    );
+    return id;
+  }
+  get(id) {
+    const row = this.getStmt.get(id);
+    if (!row) return null;
+    return this.rowToSession(row);
+  }
+  list() {
+    const rows = this.listStmt.all();
+    return rows.map((r) => this.rowToSession(r));
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Motif session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(
+      merged.status,
+      merged.scopeRegex,
+      JSON.stringify(merged.candidates),
+      Date.now(),
+      id
+    );
+  }
+  delete(id) {
+    this.deleteStmt.run(id);
+  }
+  rowToSession(row) {
+    return {
+      id: row.id,
+      status: row.status,
+      scopeRegex: row.scope_regex,
+      candidates: JSON.parse(row.candidates_json),
+      commitSha: row.commit_sha,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+};
 function rowToElem(row) {
   return {
     id: row.id,
@@ -171,13 +260,12 @@ function traverse(db, opts) {
     arrows: allTraversedArrows
   };
 }
-
-// ../core/src/db.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
 var OlogStore = class {
   db;
   _sessions;
+  _motifSessions;
   getElemStmt;
   outgoingStmt;
   incomingStmt;
@@ -191,8 +279,10 @@ var OlogStore = class {
   insertArrStmt;
   insertProvStmt;
   hasArrowKindStmt;
-  constructor(path2) {
-    this.db = new Database(path2);
+  insertMotifTemplateStmt;
+  insertMotifInstanceStmt;
+  constructor(path) {
+    this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("foreign_keys = ON");
@@ -238,6 +328,42 @@ var OlogStore = class {
       this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
     }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS olog_motif_session (
+        id              TEXT PRIMARY KEY,
+        status          TEXT NOT NULL CHECK (status IN ('active', 'committed', 'abandoned')),
+        scope_regex     TEXT,
+        candidates_json TEXT NOT NULL CHECK (json_valid(candidates_json)),
+        commit_sha      TEXT NOT NULL,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS ix_motif_session_status ON olog_motif_session(status);
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS olog_motif_template (
+        id              TEXT NOT NULL PRIMARY KEY,
+        name            TEXT NOT NULL,
+        description     TEXT,
+        shape_json      TEXT NOT NULL CHECK (json_valid(shape_json)),
+        equations_json  TEXT CHECK (json_valid(equations_json)),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at      INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS olog_motif_instance (
+        id              TEXT NOT NULL PRIMARY KEY,
+        template_id     TEXT NOT NULL,
+        mappings_json   TEXT NOT NULL CHECK (json_valid(mappings_json)),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at      INTEGER NOT NULL,
+        FOREIGN KEY (template_id) REFERENCES olog_motif_template(id) ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS ix_motif_template_name ON olog_motif_template(name);
+      CREATE INDEX IF NOT EXISTS ix_motif_instance_template ON olog_motif_instance(template_id);
+    `);
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
     );
@@ -277,10 +403,20 @@ var OlogStore = class {
     this.hasArrowKindStmt = this.db.prepare(
       "SELECT 1 FROM olog_arr WHERE kind = ? LIMIT 1"
     );
+    this.insertMotifTemplateStmt = this.db.prepare(
+      `INSERT INTO olog_motif_template (id, name, description, shape_json, equations_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.insertMotifInstanceStmt = this.db.prepare(
+      `INSERT INTO olog_motif_instance (id, template_id, mappings_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?)`
+    );
     this._sessions = new DomainSessionStore(this.db);
+    this._motifSessions = new MotifSessionStore(this.db);
   }
   get sessions() {
     return this._sessions;
+  }
+  get motifSessions() {
+    return this._motifSessions;
   }
   commitSha() {
     const row = this.db.prepare("SELECT value FROM olog_meta WHERE key = 'commit_sha'").get();
@@ -428,6 +564,52 @@ var OlogStore = class {
     const rows = this.getConstraintsStmt.all();
     return rows.map((r) => this.rowToConstraint(r));
   }
+  addMotifTemplate(template) {
+    this.insertMotifTemplateStmt.run(
+      template.id,
+      template.name,
+      template.description,
+      JSON.stringify(template.shape),
+      JSON.stringify(template.equations),
+      JSON.stringify(template.provenance),
+      Date.now()
+    );
+  }
+  getMotifTemplates() {
+    const rows = this.db.prepare(
+      "SELECT id, name, description, shape_json, equations_json, provenance_json, created_at FROM olog_motif_template"
+    ).all();
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description ?? "",
+      shape: JSON.parse(r.shape_json),
+      equations: r.equations_json ? JSON.parse(r.equations_json) : [],
+      provenance: JSON.parse(r.provenance_json),
+      createdAt: r.created_at
+    }));
+  }
+  addMotifInstance(instance) {
+    this.insertMotifInstanceStmt.run(
+      instance.id,
+      instance.templateId,
+      JSON.stringify(instance.mappings),
+      JSON.stringify(instance.provenance),
+      Date.now()
+    );
+  }
+  getMotifInstances(templateId) {
+    const rows = this.db.prepare(
+      "SELECT id, template_id, mappings_json, provenance_json, created_at FROM olog_motif_instance WHERE template_id = ?"
+    ).all(templateId);
+    return rows.map((r) => ({
+      id: r.id,
+      templateId: r.template_id,
+      mappings: JSON.parse(r.mappings_json),
+      provenance: JSON.parse(r.provenance_json),
+      createdAt: r.created_at
+    }));
+  }
   traverse(opts) {
     return traverse(this.db, opts);
   }
@@ -451,8 +633,8 @@ var OlogStore = class {
       params.push(opts.minConfidence);
     }
     const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
-    const join5 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
-    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join5} ${where} ORDER BY e.module, e.name LIMIT ?`;
+    const join4 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
+    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join4} ${where} ORDER BY e.module, e.name LIMIT ?`;
     params.push(opts.limit);
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => this.rowToElem(r));
@@ -732,9 +914,6 @@ var OlogStore = class {
     };
   }
 };
-
-// ../core/src/constraints.ts
-import { randomUUID as randomUUID2 } from "crypto";
 var CONFIDENCE_RANK = {
   tentative: 0,
   unresolved: 1,
@@ -769,7 +948,7 @@ function evaluateExistence(store2, constraint) {
   if (elements.length > 0) return [];
   return [
     {
-      id: randomUUID2(),
+      id: randomUUID3(),
       kind: "integrity",
       humanMessage: constraint.message ?? `Existence constraint "${constraint.name}" violated: no elements of kind "${kind}" exist`,
       involved: []
@@ -804,7 +983,7 @@ function evaluateLayering(store2, constraint) {
       if (dstLayer === null) continue;
       if (srcLayer < dstLayer) {
         violations.push({
-          id: randomUUID2(),
+          id: randomUUID3(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Layering constraint "${constraint.name}" violated: "${elem.name}" (layer ${srcLayer}) references "${dstElem.name}" (layer ${dstLayer})`,
           involved: [elem.id, dstElem.id]
@@ -827,7 +1006,7 @@ function evaluateMonotonicity(store2, constraint) {
       if (CONFIDENCE_RANK[dstProv.confidence] > CONFIDENCE_RANK[srcProv.confidence]) {
         const dstElem = store2.getElem(arr.dstId);
         violations.push({
-          id: randomUUID2(),
+          id: randomUUID3(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Monotonicity constraint "${constraint.name}" violated: "${elem.name}" (${srcProv.confidence}) \u2192 "${dstElem?.name ?? arr.dstId}" (${dstProv.confidence})`,
           involved: [elem.id, arr.dstId]
@@ -848,14 +1027,14 @@ function evaluateTotality(store2, constraint) {
     const matching = outgoing.filter((a) => a.kind === arrowKind);
     if (matching.length === 0) {
       violations.push({
-        id: randomUUID2(),
+        id: randomUUID3(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has no outgoing "${arrowKind}" arrow`,
         involved: [elem.id]
       });
     } else if (matching.length > 1) {
       violations.push({
-        id: randomUUID2(),
+        id: randomUUID3(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has ${matching.length} outgoing "${arrowKind}" arrows (expected exactly 1)`,
         involved: [elem.id, ...matching.map((a) => a.id)]
@@ -871,7 +1050,7 @@ function evaluatePathEquations(store2, _operations) {
     const result = evaluateEquation(eq, store2);
     if (!result.valid) {
       violations.push({
-        id: randomUUID2(),
+        id: randomUUID3(),
         kind: "equation",
         humanMessage: result.message,
         involved: result.involved
@@ -998,8 +1177,6 @@ function followPath(store2, startId, steps) {
   }
   return result;
 }
-
-// ../core/src/equations.ts
 function isNounPhrase(name) {
   const trimmed = name.trim();
   const withoutPrefix = trimmed.replace(/^(a|an|the)\s+/i, "");
@@ -1029,8 +1206,6 @@ function validateEquation(eq, store2, proposedArrowKinds) {
   }
   return { valid: errors.length === 0, errors };
 }
-
-// ../core/src/ingest/ids.ts
 function elemId(module, line, col, kind, name) {
   return `module:${module}:${line}:${col}:${kind}:${name}`;
 }
@@ -1043,281 +1218,41 @@ function fileElemId(relativePath) {
 function formatSpan(relativePath, startLine, startCol, endLine, endCol) {
   return `${relativePath}:${startLine}:${startCol}-${endLine}:${endCol}`;
 }
-
-// ../core/src/ingest/project.ts
-import { globSync } from "glob";
-import { readFileSync as readFileSync2, statSync } from "fs";
-import { resolve as resolve2, relative, basename, dirname as dirname2 } from "path";
-import { fileURLToPath as fileURLToPath2 } from "url";
-import { execSync } from "child_process";
-
-// ../core/src/ingest/treesitter.ts
-import Parser from "tree-sitter";
-import TS from "tree-sitter-typescript";
-import fs from "fs";
-import path from "path";
-function formatSpan2(node) {
-  const s = node.startPosition;
-  const e = node.endPosition;
-  return `${s.row + 1}:${s.column + 1}-${e.row + 1}:${e.column + 1}`;
-}
-function asKind(kind) {
-  return kind;
-}
-function findContainingFunctionName(node) {
-  let cur = node.parent;
-  while (cur !== null) {
-    switch (cur.type) {
-      case "function_declaration":
-      case "generator_function_declaration":
-      case "method_definition": {
-        const nameNode = cur.childForFieldName("name");
-        if (nameNode) return nameNode.text;
-        break;
-      }
-      case "arrow_function": {
-        if (cur.parent?.type === "variable_declarator") {
-          const varName = cur.parent.childForFieldName("name");
-          if (varName) return varName.text;
-        }
-        break;
-      }
-      case "function_expression": {
-        const nameNode = cur.childForFieldName("name");
-        if (nameNode) return nameNode.text;
-        if (cur.parent?.type === "variable_declarator") {
-          const varName = cur.parent.childForFieldName("name");
-          if (varName) return varName.text;
-        }
-        break;
-      }
-    }
-    cur = cur.parent;
-  }
-  return null;
-}
-function parserFor(filename) {
-  const parser = new Parser();
-  const ext = path.extname(filename);
-  switch (ext) {
-    case ".ts":
-    case ".mts":
-    case ".cts":
-      parser.setLanguage(TS.typescript);
-      break;
-    case ".tsx":
-      parser.setLanguage(TS.tsx);
-      break;
-    default:
-      throw new Error(`Unsupported file extension: ${ext}`);
-  }
-  return parser;
-}
-function extractFromFile(parser, source, queryPath) {
-  const scmContent = fs.readFileSync(queryPath, "utf-8");
-  const language = parser.getLanguage();
-  const query = new Parser.Query(language, scmContent);
-  const tree = parser.parse(source);
-  if (tree.rootNode.hasError) {
-    console.error("Warning: parse errors detected in source");
-  }
-  const elements = [];
-  const arrows = [];
-  for (const match of query.matches(tree.rootNode)) {
-    const byName = /* @__PURE__ */ new Map();
-    for (const cap of match.captures) {
-      const arr = byName.get(cap.name);
-      if (arr) {
-        arr.push(cap);
-      } else {
-        byName.set(cap.name, [cap]);
-      }
-    }
-    const first = (name) => {
-      const arr = byName.get(name);
-      return arr ? arr[0] : void 0;
-    };
-    for (const cap of byName.get("function.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "function", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("class.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "class", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("interface.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "interface", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("typealias.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "type", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("enum.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "enum", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("method.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "method", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("import.name") ?? []) {
-      const n = cap.node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.default")) {
-      const n = first("import.default").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.namespace")) {
-      const n = first("import.namespace").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    for (const srcCap of ["import.source", "reexport.source", "require.source"]) {
-      if (first(srcCap)) {
-        const n = first(srcCap).node;
-        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: n.text, dstName: "", attrs: {} });
-      }
-    }
-    if (first("import.source")) {
-      const moduleNode = first("import.source").node;
-      const moduleStr = moduleNode.text;
-      for (const impCap of byName.get("import.name") ?? []) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: impCap.node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.default")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.default").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.namespace")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.namespace").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-    }
-    if (first("call.callee")) {
-      const calleeNode = first("call.callee").node;
-      const callNode = first("call")?.node ?? first("call.member")?.node;
-      const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: calleeNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: calleeNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: calleeNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("call.method")) {
-      const methodNode = first("call.method").node;
-      const callNode = first("call.member")?.node ?? first("call")?.node;
-      const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: methodNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: methodNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("new.ctor")) {
-      const ctorNode = first("new.ctor").node;
-      const newNode = first("new")?.node;
-      const fnName = newNode ? findContainingFunctionName(newNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: ctorNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: ctorNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: ctorNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("memberof.method") && first("memberof.class")) {
-      const methodNode = first("memberof.method").node;
-      const classNode = first("memberof.class").node;
-      arrows.push({ kind: asKind("memberOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: classNode.text, attrs: {} });
+var AdapterRegistry = class {
+  adapters = /* @__PURE__ */ new Map();
+  extensionMap = /* @__PURE__ */ new Map();
+  /** Register a language adapter */
+  register(adapter) {
+    this.adapters.set(adapter.languageId, adapter);
+    for (const ext of adapter.extensions) {
+      this.extensionMap.set(ext, adapter);
     }
   }
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
+  /** Look up the adapter for a given filename (by its extension) */
+  getForFile(filename) {
+    const ext = filename.substring(filename.lastIndexOf("."));
+    return this.extensionMap.get(ext) ?? null;
   }
-  return { elements, arrows };
-}
-function collectTypeIdentifiers(node) {
-  const result = [];
-  if (node.type === "type_identifier") {
-    result.push(node.text);
+  /** Get all registered file extensions across all adapters */
+  allExtensions() {
+    return Array.from(this.extensionMap.keys());
   }
-  for (const child of node.children) {
-    result.push(...collectTypeIdentifiers(child));
+  /** Get all glob patterns across all adapters */
+  allGlobPatterns() {
+    return Array.from(this.adapters.values()).map((a) => a.globPattern);
   }
-  return result;
-}
-function walkDescendants(node, visitor) {
-  for (const child of node.children) {
-    visitor(child);
-    walkDescendants(child, visitor);
+  /** Check if an adapter is registered for a given language id */
+  hasAdapter(languageId) {
+    return this.adapters.has(languageId);
   }
+};
+var defaultRegistry = void 0;
+function setDefaultRegistry(registry) {
+  defaultRegistry = registry;
 }
-function extractPropertyFromNode(node, parentName, parentKind) {
-  const nameNode = node.childForFieldName("name");
-  if (!nameNode) return null;
-  const name = nameNode.text;
-  const optional = node.children.some((c) => c.type === "?");
-  const isReadonly = node.children.some((c) => c.type === "readonly");
-  const typeAnnotation = node.childForFieldName("type");
-  const typeText = typeAnnotation ? typeAnnotation.text : "";
-  const typeRefs = typeAnnotation ? collectTypeIdentifiers(typeAnnotation) : [];
-  const span = formatSpan2(nameNode);
-  return { name, span, typeText, optional, readonly: isReadonly, typeRefs, parentName, parentKind };
+function getDefaultRegistry() {
+  return defaultRegistry;
 }
-function extractPropertiesFromFile(parser, source, _moduleName) {
-  const tree = parser.parse(source);
-  const result = [];
-  walkDescendants(tree.rootNode, (node) => {
-    if (node.type === "interface_declaration") {
-      const nameNode = node.childForFieldName("name");
-      if (!nameNode) return;
-      const parentName = nameNode.text;
-      const body = node.children.find((c) => c.type === "object_type");
-      if (!body) return;
-      for (const child of body.children) {
-        if (child.type === "property_signature") {
-          const prop = extractPropertyFromNode(child, parentName, "interface");
-          if (prop) result.push(prop);
-        }
-      }
-    } else if (node.type === "type_alias_declaration") {
-      const nameNode = node.childForFieldName("name");
-      if (!nameNode) return;
-      const parentName = nameNode.text;
-      const typeNode = node.childForFieldName("type");
-      if (!typeNode) return;
-      if (typeNode.type === "object_type") {
-        for (const child of typeNode.children) {
-          if (child.type === "property_signature") {
-            const prop = extractPropertyFromNode(child, parentName, "type");
-            if (prop) result.push(prop);
-          }
-        }
-      }
-    } else if (node.type === "class_declaration") {
-      const nameNode = node.childForFieldName("name");
-      if (!nameNode) return;
-      const parentName = nameNode.text;
-      const body = node.children.find((c) => c.type === "class_body");
-      if (!body) return;
-      for (const child of body.children) {
-        if (child.type === "public_field_definition") {
-          const prop = extractPropertyFromNode(child, parentName, "class");
-          if (prop) result.push(prop);
-        }
-      }
-    }
-  });
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
-  return result;
-}
-
-// ../core/src/ingest/project.ts
 var IGNORE_PATTERNS = [
   "**/node_modules/**",
   "**/dist/**",
@@ -1327,39 +1262,7 @@ var IGNORE_PATTERNS = [
   "**/*.d.ts"
 ];
 var ONE_MB = 1024 * 1024;
-function resolveImportSpecifier(specifier, importingFileRelativePath) {
-  if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-    return specifier;
-  }
-  const importingDir = dirname2(importingFileRelativePath);
-  const joined = importingDir + "/" + specifier.replace(/^\.\//, "");
-  const normalized = normalizePath(joined);
-  return normalized.replace(/\.(js|cjs|mjs|jsx)$/, ".ts");
-}
-function normalizePath(path2) {
-  const parts = path2.split("/");
-  const result = [];
-  for (const part of parts) {
-    if (part === "..") {
-      result.pop();
-    } else if (part !== "." && part !== "") {
-      result.push(part);
-    }
-  }
-  return result.join("/");
-}
-var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = dirname2(__filename2);
-var TS_QUERY_PATH = resolve2(__dirname2, "queries", "ts.scm");
-var TSX_QUERY_PATH = resolve2(__dirname2, "queries", "tsx.scm");
-function discoverTsFiles(projectRoot2) {
-  return globSync("**/*.{ts,tsx,mts,cts}", {
-    cwd: projectRoot2,
-    ignore: IGNORE_PATTERNS,
-    absolute: true
-  });
-}
-function ingestProject(projectRoot2, store2) {
+function ingestProject(projectRoot2, store2, registry) {
   const start2 = Date.now();
   let head;
   try {
@@ -1375,10 +1278,10 @@ function ingestProject(projectRoot2, store2) {
       durationMs: Date.now() - start2
     };
   }
-  const result = runIngestion(projectRoot2, store2, head);
+  const result = runIngestion(projectRoot2, store2, head, registry);
   return { ...result, durationMs: Date.now() - start2 };
 }
-function reindexProject(projectRoot2, store2) {
+function reindexProject(projectRoot2, store2, registry) {
   const start2 = Date.now();
   let head;
   try {
@@ -1386,11 +1289,28 @@ function reindexProject(projectRoot2, store2) {
   } catch {
     head = "nogit";
   }
-  const result = runIngestion(projectRoot2, store2, head);
+  const result = runIngestion(projectRoot2, store2, head, registry);
   return { ...result, durationMs: Date.now() - start2 };
 }
-function runIngestion(projectRoot2, store2, head) {
-  const files = discoverTsFiles(projectRoot2);
+function discoverFiles(projectRoot2, registry) {
+  const patterns = registry.allGlobPatterns();
+  let allFiles = [];
+  for (const pattern of patterns) {
+    allFiles = allFiles.concat(globSync(pattern, {
+      cwd: projectRoot2,
+      ignore: IGNORE_PATTERNS,
+      absolute: true
+    }));
+  }
+  return [...new Set(allFiles)];
+}
+function runIngestion(projectRoot2, store2, head, registry) {
+  const effectiveRegistry = registry ?? getDefaultRegistry();
+  if (!effectiveRegistry) {
+    throw new Error("No adapter registry available. Register language adapters or pass a registry.");
+  }
+  setDefaultRegistry(effectiveRegistry);
+  const files = discoverFiles(projectRoot2, effectiveRegistry);
   const elems = [];
   const arrs = [];
   let filesProcessed = 0;
@@ -1420,11 +1340,16 @@ function runIngestion(projectRoot2, store2, head) {
       continue;
     }
     const relativePath = relative(projectRoot2, absolutePath);
-    const parser = parserFor(absolutePath);
-    const queryPath = absolutePath.endsWith(".tsx") ? TSX_QUERY_PATH : TS_QUERY_PATH;
+    const adapter = effectiveRegistry.getForFile(absolutePath);
+    if (!adapter) {
+      console.error(`[olog] Skipping ${absolutePath}: no language adapter for extension`);
+      continue;
+    }
+    const parser = adapter.createParser(absolutePath);
+    const queryPath = adapter.queryPath(absolutePath);
     let extracted;
     try {
-      extracted = extractFromFile(parser, source, queryPath);
+      extracted = adapter.extractElements(parser, source, queryPath);
     } catch (err) {
       console.error(
         `[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`
@@ -1504,7 +1429,7 @@ function runIngestion(projectRoot2, store2, head) {
       if (arrowKindStr === "importsFrom") {
         const srcId = (nameToId.get(rawArrow.srcName) ?? [])[0];
         const rawModule = rawArrow.attrs.module ?? rawArrow.dstModule;
-        const resolvedModule = resolveImportSpecifier(rawModule, relativePath);
+        const resolvedModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(rawModule, relativePath, projectRoot2) ?? rawModule : rawModule;
         const moduleId = `module:${resolvedModule}`;
         if (srcId) {
           if (!createdModuleIds.has(moduleId)) {
@@ -1561,7 +1486,7 @@ function runIngestion(projectRoot2, store2, head) {
         }
         const sourceModule = rawElem.attrs.sourceModule;
         if (sourceModule) {
-          const resolvedSourceModule = resolveImportSpecifier(sourceModule, relativePath);
+          const resolvedSourceModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(sourceModule, relativePath, projectRoot2) ?? sourceModule : sourceModule;
           const moduleId = `module:${resolvedSourceModule}`;
           if (!createdModuleIds.has(moduleId)) {
             createdModuleIds.add(moduleId);
@@ -1586,7 +1511,7 @@ function runIngestion(projectRoot2, store2, head) {
       (e) => e.kind === "interface" || e.kind === "type" || e.kind === "class"
     );
     if (hasStructuredTypes) {
-      filesToExtract.push({ relativePath, source, parser, nameToId });
+      filesToExtract.push({ relativePath, source, adapter, nameToId });
     }
     filesProcessed++;
   }
@@ -1597,10 +1522,12 @@ function runIngestion(projectRoot2, store2, head) {
     }
   }
   const seenPropArrowIds = /* @__PURE__ */ new Set();
-  for (const { relativePath, source, parser: fileParser, nameToId: fileNameToId } of filesToExtract) {
+  for (const { relativePath, source, adapter: fileAdapter, nameToId: fileNameToId } of filesToExtract) {
+    if (!fileAdapter.extractProperties) continue;
     let properties;
     try {
-      properties = extractPropertiesFromFile(fileParser, source, relativePath);
+      const parser = fileAdapter.createParser(relativePath);
+      properties = fileAdapter.extractProperties(parser, source, relativePath);
     } catch (err) {
       console.error(
         `[olog] Failed to extract properties from ${relativePath}: ${err instanceof Error ? err.message : String(err)}`
@@ -1658,12 +1585,6 @@ function parseTreeSitterSpan(span) {
     endCol: parseInt(m[4], 10)
   };
 }
-
-// ../core/src/render/index.ts
-import { readFileSync as readFileSync4 } from "fs";
-import { join as join2 } from "path";
-
-// ../core/src/render/edit.ts
 function offsetAt(source, line, col) {
   let currentLine = 1;
   let offset = 0;
@@ -1701,9 +1622,9 @@ function applyEditsToString(source, edits) {
 }
 async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
   const { readFile: fsReadFile, writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join5 } = await import("path");
-  const readFn = readFile ?? (async (p) => fsReadFile(join5(projectRoot2, p), "utf8"));
-  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join5(projectRoot2, p), c, "utf8"));
+  const { join: join4 } = await import("path");
+  const readFn = readFile ?? (async (p) => fsReadFile(join4(projectRoot2, p), "utf8"));
+  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join4(projectRoot2, p), c, "utf8"));
   let applied = 0;
   let skipped = 0;
   const errors = [];
@@ -1749,16 +1670,14 @@ async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
 }
 async function rollback(snapshots, projectRoot2) {
   const { writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join5 } = await import("path");
+  const { join: join4 } = await import("path");
   for (const snapshot of snapshots) {
     try {
-      await fsWriteFile(join5(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
+      await fsWriteFile(join4(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
     } catch {
     }
   }
 }
-
-// ../core/src/render/strategies/rename.ts
 function computeRenameEdits(store2, elementId, newName, readFile) {
   let edits = [];
   const warnings = [];
@@ -1879,28 +1798,11 @@ function parseSpan(span) {
     endCol: parseInt(m[5], 10)
   };
 }
-
-// ../core/src/render/declaration.ts
-import "tree-sitter";
-import "fs";
-import { resolve as resolve3, dirname as dirname3 } from "path";
-import { fileURLToPath as fileURLToPath3 } from "url";
-var __filename3 = fileURLToPath3(import.meta.url);
-var __dirname3 = dirname3(__filename3);
-var TS_QUERY_PATH2 = resolve3(__dirname3, "..", "ingest", "queries", "ts.scm");
-var TSX_QUERY_PATH2 = resolve3(__dirname3, "..", "ingest", "queries", "tsx.scm");
-var DECLARATION_NODE_TYPES = {
-  function: ["function_declaration", "arrow_function"],
-  method: ["method_definition", "abstract_method_signature"],
-  class: ["class_declaration"],
-  interface: ["interface_declaration"],
-  type: ["type_alias_declaration"],
-  enum: ["enum_declaration"],
-  const: ["variable_declarator"],
-  var: ["variable_declarator"]
-};
-function findEnclosingDeclaration(source, filePath, identifierLine, identifierCol, kind) {
-  const parser = parserFor(filePath);
+function findEnclosingDeclaration(source, filePath, identifierLine, identifierCol, kind, registry) {
+  const adapter = registry.getForFile(filePath);
+  if (!adapter) return null;
+  const parser = adapter.createParser(filePath);
+  const targetTypes = adapter.kindToNodeTypes[kind] ?? [];
   const tree = parser.parse(source);
   const targetRow = identifierLine - 1;
   const targetCol = identifierCol - 1;
@@ -1908,7 +1810,6 @@ function findEnclosingDeclaration(source, filePath, identifierLine, identifierCo
     { row: targetRow, column: targetCol },
     { row: targetRow, column: targetCol + 1 }
   );
-  const targetTypes = DECLARATION_NODE_TYPES[kind] ?? [];
   while (node && !targetTypes.includes(node.type)) {
     node = node.parent;
   }
@@ -1962,8 +1863,6 @@ function findImportStatement(source, startLine) {
     text
   };
 }
-
-// ../core/src/render/imports.ts
 var IMPORT_REGEX = /^import\s+(type\s+)?/;
 function parseImports(source) {
   const lines = source.split("\n");
@@ -2098,8 +1997,6 @@ function formatNamedImport(names, sourcePath, isType) {
   const nameParts = names.map((n) => n.alias !== n.original ? `${n.original} as ${n.alias}` : n.original);
   return `import ${typePrefix}{ ${nameParts.join(", ")} } from '${sourcePath}'`;
 }
-
-// ../core/src/render/strategies/remove-symbol.ts
 function computeRemoveSymbolEdits(store2, elementId, readFile) {
   const edits = [];
   const warnings = [];
@@ -2171,11 +2068,8 @@ function computeRemoveSymbolEdits(store2, elementId, readFile) {
   }
   return { edits, warnings };
 }
-
-// ../core/src/render/paths.ts
-import { dirname as dirname4, relative as relative2 } from "path";
 function computeRelativeImportPath(fromFile, toModule) {
-  const fromDir = dirname4(fromFile);
+  const fromDir = dirname2(fromFile);
   let rel = relative2(fromDir, toModule);
   if (!rel.startsWith(".")) {
     rel = "./" + rel;
@@ -2188,8 +2082,6 @@ function filePathToModule(filePath) {
 function moduleToFilePath(moduleId) {
   return moduleId + ".ts";
 }
-
-// ../core/src/render/strategies/add-symbol.ts
 var STUB_TEMPLATES = {
   function: (name) => `export function ${name}() {
   // TODO: implement
@@ -2261,8 +2153,6 @@ function computeAddSymbolEdits(store2, module, name, symbolKind, readFile) {
   }
   return { edits, warnings };
 }
-
-// ../core/src/render/strategies/move.ts
 function computeMoveEdits(store2, elementId, newModule, readFile) {
   const edits = [];
   const warnings = [];
@@ -2286,12 +2176,18 @@ function computeMoveEdits(store2, elementId, newModule, readFile) {
     warnings.push(`Cannot parse span: ${elem.span}`);
     return { edits, warnings };
   }
+  const registry = getDefaultRegistry();
+  if (!registry) {
+    warnings.push(`No language adapter registry available for ${sourceModule}`);
+    return { edits, warnings };
+  }
   const declarationRange = findEnclosingDeclaration(
     sourceContent,
     sourceModule,
     parsedSpan.startLine,
     parsedSpan.startCol,
-    elem.kind
+    elem.kind,
+    registry
   );
   if (!declarationRange) {
     warnings.push(`Cannot find enclosing declaration for ${elem.name} in ${sourceModule}`);
@@ -2378,8 +2274,6 @@ function computeMoveEdits(store2, elementId, newModule, readFile) {
   }
   return { edits, warnings };
 }
-
-// ../core/src/render/expand.ts
 function expandOperation(store2, operation, readFile) {
   switch (operation.kind) {
     case "rename":
@@ -2410,8 +2304,6 @@ function expandAllOperations(store2, operations, readFile) {
   }
   return { edits: allEdits, warnings: allWarnings };
 }
-
-// ../core/src/render/order.ts
 function orderAndDetectConflicts(edits) {
   const conflicts = [];
   const byFile = /* @__PURE__ */ new Map();
@@ -2450,8 +2342,6 @@ function rangesOverlap(a, b) {
   const bEnd = b.endLine * 1e4 + b.endCol;
   return aStart < bEnd && bStart < aEnd;
 }
-
-// ../core/src/render/index.ts
 function renderPlan(store2, operations, projectRoot2) {
   const readFile = (filePath) => {
     try {
@@ -2476,8 +2366,6 @@ function renderPlan(store2, operations, projectRoot2) {
     affectedFiles
   };
 }
-
-// ../core/src/delegate/context.ts
 function gatherMustCall(store2, targetId) {
   const incoming = store2.incoming(targetId);
   const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
@@ -2597,10 +2485,6 @@ function getModuleFilePath(store2, modulePath) {
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
-// ../core/src/delegate/resolve.ts
-import { readFileSync as readFileSync5 } from "fs";
-import { join as join3 } from "path";
 var SourceResolver = class {
   constructor(projectRoot2) {
     this.projectRoot = projectRoot2;
@@ -2636,12 +2520,15 @@ var SourceResolver = class {
       const range2 = findImportStatement(source, parsed.startLine);
       return range2?.text ?? null;
     }
+    const registry = getDefaultRegistry();
+    if (!registry) return null;
     const range = findEnclosingDeclaration(
       source,
       filePath,
       parsed.startLine,
       parsed.startCol,
-      kind
+      kind,
+      registry
     );
     return range?.text ?? null;
   }
@@ -2713,8 +2600,6 @@ function parseSpan2(span) {
     endCol: parseInt(m[4], 10)
   };
 }
-
-// ../core/src/delegate/analogues.ts
 function findAnalogues(store2, target, limit = 3) {
   const targetCallees = getCalleeSet(store2, target);
   const candidates = store2.queryElements({
@@ -2767,8 +2652,6 @@ function countIntersection(a, b) {
   }
   return count;
 }
-
-// ../core/src/delegate/index.ts
 var TASK_CRITERIA = {
   write_function_body: [
     "Must compile without type errors.",
@@ -2981,8 +2864,6 @@ function parseSpanSimple(span) {
   if (!m) return null;
   return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
 }
-
-// ../core/src/mining/paths.ts
 function getArrowKindsInUse(allArrowKinds, hasArrowKind) {
   return allArrowKinds.filter((k) => hasArrowKind(k));
 }
@@ -3015,16 +2896,14 @@ function enumeratePaths(arrowKinds, maxDepth) {
   }
   return paths;
 }
-
-// ../core/src/mining/candidates.ts
 function generateCandidatePairs(paths) {
   const pairs = [];
   const byDomain = /* @__PURE__ */ new Map();
-  for (const path2 of paths) {
-    if (!path2.domainKind) continue;
-    const existing = byDomain.get(path2.domainKind) ?? [];
-    existing.push(path2);
-    byDomain.set(path2.domainKind, existing);
+  for (const path of paths) {
+    if (!path.domainKind) continue;
+    const existing = byDomain.get(path.domainKind) ?? [];
+    existing.push(path);
+    byDomain.set(path.domainKind, existing);
   }
   for (const [, domainPaths] of byDomain) {
     for (let i = 0; i < domainPaths.length; i++) {
@@ -3084,8 +2963,6 @@ function canonicalKey(lhs, rhs) {
   }
   return `${rhsKey}\u2261${lhsKey}`;
 }
-
-// ../core/src/mining/graph.ts
 function buildInMemoryGraph(store2) {
   const rawArrows = store2.loadAllArrows();
   const outgoing = /* @__PURE__ */ new Map();
@@ -3119,13 +2996,13 @@ function pathKey(arrows) {
 function precomputePathResults(graph, paths, seeds) {
   const cache = /* @__PURE__ */ new Map();
   const seenKeys = /* @__PURE__ */ new Set();
-  for (const path2 of paths) {
-    const key = pathKey(path2.arrows);
+  for (const path of paths) {
+    const key = pathKey(path.arrows);
     if (seenKeys.has(key)) continue;
     seenKeys.add(key);
     const seedResults = /* @__PURE__ */ new Map();
     for (const seed of seeds) {
-      const reached = followPath2(graph, seed.id, path2.arrows);
+      const reached = followPath2(graph, seed.id, path.arrows);
       if (reached.size > 0) {
         seedResults.set(seed.id, reached);
       }
@@ -3134,8 +3011,207 @@ function precomputePathResults(graph, paths, seeds) {
   }
   return cache;
 }
-
-// ../core/src/mining/index.ts
+function extractEgoGraph(graph, seedId, depth, arrowKinds) {
+  const seedElement = graph.elems.get(seedId);
+  if (!seedElement) {
+    throw new Error(`Seed element not found: ${seedId}`);
+  }
+  const elements = /* @__PURE__ */ new Map();
+  elements.set(seedId, { id: seedId, kind: seedElement.kind, name: seedElement.name });
+  const arrows = [];
+  const visited = /* @__PURE__ */ new Set([seedId]);
+  const queue = [{ id: seedId, depth: 0 }];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current.depth >= depth) {
+      continue;
+    }
+    const outgoing = graph.outgoing.get(current.id) ?? [];
+    for (const arrow of outgoing) {
+      if (arrowKinds && !arrowKinds.includes(arrow.kind)) {
+        continue;
+      }
+      arrows.push({ srcId: current.id, kind: arrow.kind, dstId: arrow.dstId });
+      if (!visited.has(arrow.dstId)) {
+        visited.add(arrow.dstId);
+        const destElem = graph.elems.get(arrow.dstId);
+        if (destElem) {
+          elements.set(arrow.dstId, {
+            id: arrow.dstId,
+            kind: destElem.kind,
+            name: destElem.name
+          });
+          queue.push({ id: arrow.dstId, depth: current.depth + 1 });
+        }
+      }
+    }
+  }
+  return {
+    seedId,
+    seedKind: seedElement.kind,
+    elements,
+    arrows
+  };
+}
+function shapeHash(shape) {
+  const canonical = JSON.stringify({ objects: shape.objects, arrows: shape.arrows });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+function abstractToShape(ego) {
+  const sortedElements = Array.from(ego.elements.values()).sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    return a.id.localeCompare(b.id);
+  });
+  const roleMap = /* @__PURE__ */ new Map();
+  const kindCounters = /* @__PURE__ */ new Map();
+  for (const element of sortedElements) {
+    const count = kindCounters.get(element.kind) ?? 0;
+    roleMap.set(element.id, `${element.kind}_${count}`);
+    kindCounters.set(element.kind, count + 1);
+  }
+  const objects = sortedElements.map((element) => ({
+    role: roleMap.get(element.id),
+    kind: element.kind
+  }));
+  const arrows = ego.arrows.map((arrow) => ({
+    fromRole: roleMap.get(arrow.srcId),
+    label: arrow.kind,
+    toRole: roleMap.get(arrow.dstId)
+  }));
+  const sortedObjects = [...objects].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    return a.role.localeCompare(b.role);
+  });
+  const sortedArrows = [...arrows].sort((a, b) => {
+    if (a.fromRole !== b.fromRole) return a.fromRole.localeCompare(b.fromRole);
+    if (a.label !== b.label) return a.label.localeCompare(b.label);
+    return a.toRole.localeCompare(b.toRole);
+  });
+  const hash = shapeHash({ hash: "", objects: sortedObjects, arrows: sortedArrows });
+  return { hash, objects: sortedObjects, arrows: sortedArrows };
+}
+function groupEgoGraphs(egos, minSupport) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const ego of egos) {
+    const shape = abstractToShape(ego);
+    const hash = shape.hash;
+    if (!groups.has(hash)) {
+      groups.set(hash, []);
+    }
+    groups.get(hash).push(ego);
+  }
+  const result = [];
+  for (const [, instances] of groups) {
+    if (instances.length >= minSupport) {
+      const shape = abstractToShape(instances[0]);
+      result.push({
+        shape,
+        instances,
+        support: instances.length
+      });
+    }
+  }
+  result.sort((a, b) => b.support - a.support);
+  return result;
+}
+function verifyInternalEquations(store2, group, options) {
+  const elementIds = /* @__PURE__ */ new Set();
+  for (const instance of group.instances) {
+    for (const id of instance.elements.keys()) {
+      elementIds.add(id);
+    }
+  }
+  const firstInstance = group.instances[0];
+  if (!firstInstance) return [];
+  const elementKinds = [
+    ...new Set(
+      [...elementIds].map((id) => firstInstance.elements.get(id)?.kind).filter((kind) => Boolean(kind))
+    )
+  ];
+  const equations = mineEquations(store2, {
+    elementKinds,
+    sampleSize: elementIds.size,
+    minCoverage: 0.8,
+    ...options
+  });
+  return equations.map((eq) => ({
+    lhsPath: eq.lhsPath,
+    rhsPath: eq.rhsPath,
+    coverage: eq.coverage
+  }));
+}
+function discoverMotifs(store2, options = {}) {
+  const graph = buildInMemoryGraph(store2);
+  const seedKinds = options.seedKinds ?? ["function", "class", "interface"];
+  const depth = options.depth ?? 2;
+  const minSupport = options.minSupport ?? 3;
+  const mineEquationsFlag = options.mineEquations ?? true;
+  const seedIds = [];
+  for (const [id, elem] of graph.elems) {
+    if (!seedKinds.includes(elem.kind)) continue;
+    const module = store2.getElem(id)?.module ?? null;
+    if (options.scopeRegex) {
+      const regex = new RegExp(options.scopeRegex);
+      if (!module || !regex.test(module)) continue;
+    }
+    if (options.excludeModules && options.excludeModules.length > 0) {
+      if (module && options.excludeModules.some((pattern) => new RegExp(pattern).test(module))) {
+        continue;
+      }
+    }
+    seedIds.push(id);
+  }
+  const egos = [];
+  for (const seedId of seedIds) {
+    const ego = extractEgoGraph(graph, seedId, depth, options.arrowKinds);
+    egos.push(ego);
+  }
+  const groups = groupEgoGraphs(egos, minSupport);
+  const candidates = [];
+  for (const group of groups) {
+    const objectKinds = group.shape.objects.map((o) => o.kind).join("_");
+    const arrowLabels = group.shape.arrows.map((a) => a.label).join("_");
+    const proposedName = `Motif_${objectKinds}_${arrowLabels}`;
+    const roleList = group.shape.objects.map((o) => o.role).join(", ");
+    const description = `Recurring pattern with ${group.support} instances: ${roleList}`;
+    const instances = group.instances.map((ego) => {
+      const seedElem = store2.getElem(ego.seedId);
+      const module = seedElem?.module ?? null;
+      const sortedElements = Array.from(ego.elements.values()).sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+        return a.id.localeCompare(b.id);
+      });
+      const mappings = {};
+      for (let i = 0; i < group.shape.objects.length; i++) {
+        const shapeObj = group.shape.objects[i];
+        const elem = sortedElements[i];
+        mappings[shapeObj.role] = elem.id;
+      }
+      return {
+        id: ego.seedId,
+        mappings,
+        module
+      };
+    });
+    const equations = mineEquationsFlag ? verifyInternalEquations(store2, group, options.equationOptions) : [];
+    const questions = [
+      `This motif has ${group.support} instances with ${group.shape.arrows.length} arrow kinds. Consider naming them.`
+    ];
+    candidates.push({
+      id: randomUUID4(),
+      shape: group.shape,
+      proposedName,
+      description,
+      support: group.support,
+      instances,
+      equations,
+      questions,
+      status: "proposed"
+    });
+  }
+  candidates.sort((a, b) => b.support - a.support);
+  return candidates;
+}
 var DEFAULT_MINING_OPTIONS = {
   maxDepth: 3,
   minCoverage: 1,
@@ -3196,8 +3272,8 @@ function mineEquations(store2, options = {}) {
   }
   const cache = precomputePathResults(graph, paths, allSeeds);
   const seedKindMap = new Map(allSeeds.map((e) => [e.id, e.kind]));
-  for (const path2 of paths) {
-    const key = pathKey(path2.arrows);
+  for (const path of paths) {
+    const key = pathKey(path.arrows);
     const seedResults = cache.get(key) ?? /* @__PURE__ */ new Map();
     const domainKinds = /* @__PURE__ */ new Set();
     const codomainKinds = /* @__PURE__ */ new Set();
@@ -3209,8 +3285,8 @@ function mineEquations(store2, options = {}) {
         if (ck) codomainKinds.add(ck);
       }
     }
-    path2.domainKind = domainKinds.size === 1 ? [...domainKinds][0] : null;
-    path2.codomainKind = codomainKinds.size > 0 ? [...codomainKinds].sort().join(",") : null;
+    path.domainKind = domainKinds.size === 1 ? [...domainKinds][0] : null;
+    path.codomainKind = codomainKinds.size > 0 ? [...codomainKinds].sort().join(",") : null;
   }
   const candidates = generateCandidatePairs(paths);
   const results = [];
@@ -3324,9 +3400,6 @@ function canonicalEquationKey(lhs, rhs) {
   }
   return `${rhsKey}\u2261${lhsKey}`;
 }
-
-// ../core/src/domain/discover.ts
-import { randomUUID as randomUUID3 } from "crypto";
 var ABBREV_MAP = {
   Elem: "Element",
   Arr: "Arrow",
@@ -3385,9 +3458,9 @@ function discoverDomainCandidates(store2, options = {}) {
     return true;
   });
   const candidates = filtered.map((elem) => {
-    const candidateId = randomUUID3();
+    const candidateId = randomUUID5();
     const bridgeArrow = {
-      id: randomUUID3(),
+      id: randomUUID5(),
       name: "implemented as",
       domainCandidateId: candidateId,
       codomainName: elem.name,
@@ -3450,7 +3523,7 @@ function discoverDomainCandidates(store2, options = {}) {
         const existingDomain = targetCandidate ? null : existingDomainByCodeId.get(typeArrow.dstId) ?? null;
         const total = !optional && !isArray;
         const proposal = {
-          id: randomUUID3(),
+          id: randomUUID5(),
           name: `has ${propName}`,
           domainCandidateId: candidate.id,
           codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? typeElem.name,
@@ -3483,7 +3556,7 @@ function discoverDomainCandidates(store2, options = {}) {
       if (!targetElem) continue;
       const arrowName = structArrow.kind === "extends" ? "extends" : "implements";
       const proposal = {
-        id: randomUUID3(),
+        id: randomUUID5(),
         name: arrowName,
         domainCandidateId: candidate.id,
         codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? targetElem.name,
@@ -3498,6 +3571,332 @@ function discoverDomainCandidates(store2, options = {}) {
     }
   }
   return candidates;
+}
+
+// ../lang-typescript/dist/index.js
+import Parser3 from "tree-sitter";
+import TS from "tree-sitter-typescript";
+import { resolve as resolve2, dirname as dirname3 } from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
+import Parser from "tree-sitter";
+import fs from "fs";
+import "tree-sitter";
+import "tree-sitter";
+function formatSpan2(node) {
+  const s = node.startPosition;
+  const e = node.endPosition;
+  return `${s.row + 1}:${s.column + 1}-${e.row + 1}:${e.column + 1}`;
+}
+function asKind(kind) {
+  return kind;
+}
+function findContainingFunctionName(node) {
+  let cur = node.parent;
+  while (cur !== null) {
+    switch (cur.type) {
+      case "function_declaration":
+      case "generator_function_declaration":
+      case "method_definition": {
+        const nameNode = cur.childForFieldName("name");
+        if (nameNode) return nameNode.text;
+        break;
+      }
+      case "arrow_function": {
+        if (cur.parent?.type === "variable_declarator") {
+          const varName = cur.parent.childForFieldName("name");
+          if (varName) return varName.text;
+        }
+        break;
+      }
+      case "function_expression": {
+        const nameNode = cur.childForFieldName("name");
+        if (nameNode) return nameNode.text;
+        if (cur.parent?.type === "variable_declarator") {
+          const varName = cur.parent.childForFieldName("name");
+          if (varName) return varName.text;
+        }
+        break;
+      }
+    }
+    cur = cur.parent;
+  }
+  return null;
+}
+function extractFromFile(parser, source, queryPath) {
+  const scmContent = fs.readFileSync(queryPath, "utf-8");
+  const language = parser.getLanguage();
+  const query = new Parser.Query(language, scmContent);
+  const tree = parser.parse(source);
+  if (tree.rootNode.hasError) {
+    console.error("Warning: parse errors detected in source");
+  }
+  const elements = [];
+  const arrows = [];
+  for (const match of query.matches(tree.rootNode)) {
+    const byName = /* @__PURE__ */ new Map();
+    for (const cap of match.captures) {
+      const arr = byName.get(cap.name);
+      if (arr) {
+        arr.push(cap);
+      } else {
+        byName.set(cap.name, [cap]);
+      }
+    }
+    const first = (name) => {
+      const arr = byName.get(name);
+      return arr ? arr[0] : void 0;
+    };
+    for (const cap of byName.get("function.name") ?? []) {
+      const n = cap.node;
+      elements.push({ kind: "function", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
+    }
+    for (const cap of byName.get("class.name") ?? []) {
+      const n = cap.node;
+      elements.push({ kind: "class", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
+    }
+    for (const cap of byName.get("interface.name") ?? []) {
+      const n = cap.node;
+      elements.push({ kind: "interface", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
+    }
+    for (const cap of byName.get("typealias.name") ?? []) {
+      const n = cap.node;
+      elements.push({ kind: "type", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
+    }
+    for (const cap of byName.get("enum.name") ?? []) {
+      const n = cap.node;
+      elements.push({ kind: "enum", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
+    }
+    for (const cap of byName.get("method.name") ?? []) {
+      const n = cap.node;
+      elements.push({ kind: "method", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
+    }
+    for (const cap of byName.get("import.name") ?? []) {
+      const n = cap.node;
+      const sourceCap = first("import.source");
+      const sourceModule = sourceCap ? sourceCap.node.text : "";
+      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
+    }
+    if (first("import.default")) {
+      const n = first("import.default").node;
+      const sourceCap = first("import.source");
+      const sourceModule = sourceCap ? sourceCap.node.text : "";
+      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
+    }
+    if (first("import.namespace")) {
+      const n = first("import.namespace").node;
+      const sourceCap = first("import.source");
+      const sourceModule = sourceCap ? sourceCap.node.text : "";
+      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
+    }
+    for (const srcCap of ["import.source", "reexport.source", "require.source"]) {
+      if (first(srcCap)) {
+        const n = first(srcCap).node;
+        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: n.text, dstName: "", attrs: {} });
+      }
+    }
+    if (first("import.source")) {
+      const moduleNode = first("import.source").node;
+      const moduleStr = moduleNode.text;
+      for (const impCap of byName.get("import.name") ?? []) {
+        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: impCap.node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
+      }
+      if (first("import.default")) {
+        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.default").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
+      }
+      if (first("import.namespace")) {
+        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.namespace").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
+      }
+    }
+    if (first("call.callee")) {
+      const calleeNode = first("call.callee").node;
+      const callNode = first("call")?.node ?? first("call.member")?.node;
+      const fnName = callNode ? findContainingFunctionName(callNode) : null;
+      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: calleeNode.text, attrs: {} });
+      if (fnName) {
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: calleeNode.text, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: calleeNode.text, dstModule: "", dstName: fnName, attrs: {} });
+      }
+    }
+    if (first("call.method")) {
+      const methodNode = first("call.method").node;
+      const callNode = first("call.member")?.node ?? first("call")?.node;
+      const fnName = callNode ? findContainingFunctionName(callNode) : null;
+      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: methodNode.text, attrs: {} });
+      if (fnName) {
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: methodNode.text, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: fnName, attrs: {} });
+      }
+    }
+    if (first("new.ctor")) {
+      const ctorNode = first("new.ctor").node;
+      const newNode = first("new")?.node;
+      const fnName = newNode ? findContainingFunctionName(newNode) : null;
+      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: ctorNode.text, attrs: {} });
+      if (fnName) {
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: ctorNode.text, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: ctorNode.text, dstModule: "", dstName: fnName, attrs: {} });
+      }
+    }
+    if (first("memberof.method") && first("memberof.class")) {
+      const methodNode = first("memberof.method").node;
+      const classNode = first("memberof.class").node;
+      arrows.push({ kind: asKind("memberOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: classNode.text, attrs: {} });
+    }
+  }
+  if ("delete" in tree && typeof tree.delete === "function") {
+    tree.delete();
+  }
+  return { elements, arrows };
+}
+function collectTypeIdentifiers(node) {
+  const result = [];
+  if (node.type === "type_identifier") {
+    result.push(node.text);
+  }
+  for (const child of node.children) {
+    result.push(...collectTypeIdentifiers(child));
+  }
+  return result;
+}
+function walkDescendants(node, visitor) {
+  for (const child of node.children) {
+    visitor(child);
+    walkDescendants(child, visitor);
+  }
+}
+function extractPropertyFromNode(node, parentName, parentKind) {
+  const nameNode = node.childForFieldName("name");
+  if (!nameNode) return null;
+  const name = nameNode.text;
+  const optional = node.children.some((c) => c.type === "?");
+  const isReadonly = node.children.some((c) => c.type === "readonly");
+  const typeAnnotation = node.childForFieldName("type");
+  const typeText = typeAnnotation ? typeAnnotation.text : "";
+  const typeRefs = typeAnnotation ? collectTypeIdentifiers(typeAnnotation) : [];
+  const span = formatSpan2(nameNode);
+  return { name, span, typeText, optional, readonly: isReadonly, typeRefs, parentName, parentKind };
+}
+function extractPropertiesFromFile(parser, source, _moduleName) {
+  const tree = parser.parse(source);
+  const result = [];
+  walkDescendants(tree.rootNode, (node) => {
+    if (node.type === "interface_declaration") {
+      const nameNode = node.childForFieldName("name");
+      if (!nameNode) return;
+      const parentName = nameNode.text;
+      const body = node.children.find((c) => c.type === "object_type");
+      if (!body) return;
+      for (const child of body.children) {
+        if (child.type === "property_signature") {
+          const prop = extractPropertyFromNode(child, parentName, "interface");
+          if (prop) result.push(prop);
+        }
+      }
+    } else if (node.type === "type_alias_declaration") {
+      const nameNode = node.childForFieldName("name");
+      if (!nameNode) return;
+      const parentName = nameNode.text;
+      const typeNode = node.childForFieldName("type");
+      if (!typeNode) return;
+      if (typeNode.type === "object_type") {
+        for (const child of typeNode.children) {
+          if (child.type === "property_signature") {
+            const prop = extractPropertyFromNode(child, parentName, "type");
+            if (prop) result.push(prop);
+          }
+        }
+      }
+    } else if (node.type === "class_declaration") {
+      const nameNode = node.childForFieldName("name");
+      if (!nameNode) return;
+      const parentName = nameNode.text;
+      const body = node.children.find((c) => c.type === "class_body");
+      if (!body) return;
+      for (const child of body.children) {
+        if (child.type === "public_field_definition") {
+          const prop = extractPropertyFromNode(child, parentName, "class");
+          if (prop) result.push(prop);
+        }
+      }
+    }
+  });
+  if ("delete" in tree && typeof tree.delete === "function") {
+    tree.delete();
+  }
+  return result;
+}
+var __filename2 = fileURLToPath2(import.meta.url);
+var __dirname2 = dirname3(__filename2);
+var TS_QUERY_PATH = resolve2(__dirname2, "queries", "ts.scm");
+var TSX_QUERY_PATH = resolve2(__dirname2, "queries", "tsx.scm");
+var NODE_TYPE_TO_KIND = {
+  // These are not directly used by extractFromFile (which uses .scm captures),
+  // but may be needed for future use.
+};
+var DECLARATION_NODE_TYPES = {
+  function: ["function_declaration", "arrow_function"],
+  method: ["method_definition", "abstract_method_signature"],
+  class: ["class_declaration"],
+  interface: ["interface_declaration"],
+  type: ["type_alias_declaration"],
+  enum: ["enum_declaration"],
+  const: ["variable_declarator"],
+  var: ["variable_declarator"]
+};
+var TypeScriptAdapter = class {
+  languageId = "typescript";
+  extensions = [".ts", ".tsx", ".mts", ".cts"];
+  globPattern = "**/*.{ts,tsx,mts,cts}";
+  nodeTypeToKind = NODE_TYPE_TO_KIND;
+  kindToNodeTypes = DECLARATION_NODE_TYPES;
+  createParser(filename) {
+    const parser = new Parser3();
+    const ext = filename.substring(filename.lastIndexOf("."));
+    switch (ext) {
+      case ".ts":
+      case ".mts":
+      case ".cts":
+        parser.setLanguage(TS.typescript);
+        break;
+      case ".tsx":
+        parser.setLanguage(TS.tsx);
+        break;
+      default:
+        throw new Error(`Unsupported file extension: ${ext}`);
+    }
+    return parser;
+  }
+  queryPath(filename) {
+    const ext = filename.substring(filename.lastIndexOf("."));
+    return ext === ".tsx" ? TSX_QUERY_PATH : TS_QUERY_PATH;
+  }
+  extractElements(parser, source, queryPath) {
+    return extractFromFile(parser, source, queryPath);
+  }
+  extractProperties(parser, source, moduleName) {
+    return extractPropertiesFromFile(parser, source, moduleName);
+  }
+  resolveImportSpecifier(specifier, importingFileRelativePath, _projectRoot) {
+    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+      return null;
+    }
+    const importingDir = dirname3(importingFileRelativePath);
+    const joined = importingDir + "/" + specifier.replace(/^\.\//, "");
+    const normalized = normalizePath(joined);
+    return normalized.replace(/\.(js|cjs|mjs|jsx)$/, ".ts");
+  }
+};
+function normalizePath(path) {
+  const parts = path.split("/");
+  const result = [];
+  for (const part of parts) {
+    if (part === "..") {
+      result.pop();
+    } else if (part !== "." && part !== "") {
+      result.push(part);
+    }
+  }
+  return result.join("/");
 }
 
 // src/tools/olog-query.ts
@@ -3854,7 +4253,7 @@ function registerOlogReindex(server2, store2, projectRoot2) {
     },
     async () => {
       try {
-        const result = reindexProject(projectRoot2, store2);
+        const result = reindexProject(projectRoot2, store2, getDefaultRegistry());
         return {
           content: [
             {
@@ -3883,7 +4282,7 @@ import { z as z6 } from "zod";
 // src/tools/olog-plan.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z5 } from "zod";
-import { createHash } from "crypto";
+import { createHash as createHash2 } from "crypto";
 var operationSchema = z5.union([
   z5.object({
     kind: z5.literal("rename"),
@@ -3930,7 +4329,7 @@ function registerOlogPlan(server2, store2) {
     },
     async ({ operations, rationale }) => {
       try {
-        const hash = createHash("sha256").update(JSON.stringify(operations)).digest("hex");
+        const hash = createHash2("sha256").update(JSON.stringify(operations)).digest("hex");
         const targetElementIds = /* @__PURE__ */ new Set();
         const targetKinds = /* @__PURE__ */ new Set();
         const targetModules = /* @__PURE__ */ new Set();
@@ -4131,7 +4530,7 @@ function registerOlogApply(server2, store2, projectRoot2) {
             };
           }
           try {
-            reindexProject(projectRoot2, store2);
+            reindexProject(projectRoot2, store2, getDefaultRegistry());
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             return {
@@ -4321,7 +4720,7 @@ function registerOlogValidate(server2, store2) {
 // src/tools/olog-propose-schema.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z8 } from "zod";
-import { randomUUID as randomUUID4 } from "crypto";
+import { randomUUID as randomUUID6 } from "crypto";
 var objectSchema = z8.object({
   kind: z8.string().describe("Element kind"),
   name: z8.string().describe("Element name (noun phrase)"),
@@ -4436,7 +4835,7 @@ function registerOlogProposeSchema(server2, store2) {
         }
         const createdElemIds = /* @__PURE__ */ new Map();
         for (const obj of objects) {
-          const id = randomUUID4();
+          const id = randomUUID6();
           createdElemIds.set(obj.name, id);
           const kind = STANDARD_KINDS.includes(obj.kind) ? obj.kind : "other";
           const elem = {
@@ -5127,9 +5526,290 @@ Actions:
   );
 }
 
+// src/tools/olog-discover-motifs.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z13 } from "zod";
+function registerOlogDiscoverMotifs(server2, store2) {
+  server2.registerTool(
+    "olog_discover_motifs",
+    {
+      description: 'Motif discovery session tool. Finds recurring structural patterns (motifs) in the olog graph by extracting ego-graphs around seed elements, grouping by shape similarity, and surfacing high-support patterns with optional internal equation mining.\n\nActions:\n- action="start": Begin a new discovery session. Optional: seedKinds (element kinds to use as seeds, default ["function","class","interface"]), depth (ego-graph expansion depth, default 2), arrowKinds (arrow kinds to follow during expansion), minSupport (minimum instance count, default 3), mineEquations (whether to mine internal equations, default true), scopeRegex (regex to restrict seeds to specific modules), excludeModules (module patterns to exclude). Returns sessionId, candidateCount, and the full list of candidates with proposedNames, shapes, support counts, instances, equations, and clarifying questions.\n- action="refine": Accept/reject/rename candidates. Required: sessionId (string, from start), responses (array of objects with candidateId, status ("accepted"|"rejected"|"deferred"), optional nameOverride string). Returns summary with accepted/rejected/pending counts and remaining pendingCandidates.\n- action="commit": Write accepted motif templates as domain elements to the olog. Required: sessionId, provenance (object with source: "manual"|"llm", commitSha: string, confidence: "resolved"|"unresolved"|"tentative"). Returns sessionId, status "committed", and addedTemplates count. At least one candidate must be accepted before committing.\n- action="list": List all motif discovery sessions. Returns array of session summaries.\n- action="get": Get details of a specific session. Required: sessionId. Returns the full session object including candidates and their status.',
+      inputSchema: z13.object({
+        action: z13.enum(["start", "refine", "commit", "list", "get"]).describe(
+          'Action to perform: "start" begins a new session, "refine" accepts/rejects candidates, "commit" writes to the olog, "list" shows all sessions, "get" returns a session by ID.'
+        ),
+        // start
+        seedKinds: z13.array(z13.string()).optional().describe('(start) Element kinds to use as seeds (default: ["function", "class", "interface"])'),
+        depth: z13.number().optional().describe("(start) Ego-graph expansion depth (default: 2)"),
+        arrowKinds: z13.array(z13.string()).optional().describe("(start) Arrow kinds to follow during expansion"),
+        minSupport: z13.number().optional().describe("(start) Minimum support for a motif to be surfaced (default: 3)"),
+        mineEquations: z13.boolean().optional().describe("(start) Whether to mine equations internal to each motif (default: true)"),
+        scopeRegex: z13.string().optional().describe("(start) Regex to restrict seeds to specific modules"),
+        excludeModules: z13.array(z13.string()).optional().describe("(start) Module patterns to exclude"),
+        // refine, commit, get
+        sessionId: z13.string().optional().describe("(refine/commit/get) Session ID returned by start"),
+        // refine
+        responses: z13.array(
+          z13.object({
+            candidateId: z13.string(),
+            status: z13.enum(["accepted", "rejected", "deferred"]),
+            nameOverride: z13.string().optional().describe("Override the proposed noun phrase name")
+          })
+        ).optional().describe("(refine) Array of candidate responses"),
+        // commit
+        provenance: z13.object({
+          source: z13.enum(["manual", "llm"]),
+          commitSha: z13.string(),
+          confidence: z13.enum(["resolved", "unresolved", "tentative"])
+        }).optional().describe("(commit) Provenance metadata")
+      }),
+      annotations: { readOnlyHint: false, idempotentHint: false }
+    },
+    async (params) => {
+      try {
+        if (params.action === "start") {
+          const discoveryOpts = {
+            ...params.seedKinds !== void 0 && { seedKinds: params.seedKinds },
+            ...params.depth !== void 0 && { depth: params.depth },
+            ...params.arrowKinds !== void 0 && { arrowKinds: params.arrowKinds },
+            ...params.minSupport !== void 0 && { minSupport: params.minSupport },
+            ...params.mineEquations !== void 0 && { mineEquations: params.mineEquations },
+            ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
+            ...params.excludeModules !== void 0 && { excludeModules: params.excludeModules }
+          };
+          const candidates = discoverMotifs(store2, discoveryOpts);
+          const sessionId = store2.motifSessions.create({
+            ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
+            candidates,
+            commitSha: store2.commitSha()
+          });
+          const allQuestions = [];
+          for (const c of candidates) {
+            allQuestions.push(...c.questions);
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId,
+                    candidateCount: candidates.length,
+                    candidates: candidates.map((c) => ({
+                      id: c.id,
+                      proposedName: c.proposedName,
+                      shape: {
+                        hash: c.shape.hash,
+                        objects: c.shape.objects,
+                        arrows: c.shape.arrows
+                      },
+                      support: c.support,
+                      instanceCount: c.instances.length,
+                      equations: c.equations,
+                      questions: c.questions,
+                      status: c.status
+                    })),
+                    clarifyingQuestions: [...new Set(allQuestions)].slice(0, 10)
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "refine") {
+          if (!params.sessionId) {
+            return { content: [{ type: "text", text: 'sessionId is required for action="refine"' }], isError: true };
+          }
+          if (!params.responses) {
+            return { content: [{ type: "text", text: 'responses is required for action="refine"' }], isError: true };
+          }
+          const session = store2.motifSessions.get(params.sessionId);
+          if (!session) {
+            return {
+              content: [{ type: "text", text: `Session not found: ${params.sessionId}` }],
+              isError: true
+            };
+          }
+          for (const response of params.responses) {
+            const candidate = session.candidates.find((c) => c.id === response.candidateId);
+            if (!candidate) continue;
+            candidate.status = response.status;
+            if (response.nameOverride) {
+              candidate.proposedName = response.nameOverride;
+            }
+          }
+          store2.motifSessions.update(params.sessionId, { candidates: session.candidates });
+          const pending = session.candidates.filter((c) => c.status === "proposed");
+          const accepted = session.candidates.filter((c) => c.status === "accepted");
+          const rejected = session.candidates.filter((c) => c.status === "rejected");
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId: params.sessionId,
+                    summary: { accepted: accepted.length, rejected: rejected.length, pending: pending.length },
+                    pendingCandidates: pending.map((c) => ({
+                      id: c.id,
+                      proposedName: c.proposedName,
+                      questions: c.questions
+                    }))
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "commit") {
+          if (!params.sessionId) {
+            return { content: [{ type: "text", text: 'sessionId is required for action="commit"' }], isError: true };
+          }
+          if (!params.provenance) {
+            return { content: [{ type: "text", text: 'provenance is required for action="commit"' }], isError: true };
+          }
+          const session = store2.motifSessions.get(params.sessionId);
+          if (!session) {
+            return {
+              content: [{ type: "text", text: `Session not found: ${params.sessionId}` }],
+              isError: true
+            };
+          }
+          if (session.status !== "active") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session is already ${session.status}`
+                }
+              ],
+              isError: true
+            };
+          }
+          const accepted = session.candidates.filter((c) => c.status === "accepted");
+          if (accepted.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: 'No accepted candidates to commit. Use action="refine" to accept candidates first.'
+                }
+              ],
+              isError: true
+            };
+          }
+          const prov = {
+            source: params.provenance.source,
+            commitSha: params.provenance.commitSha,
+            ingestedAt: Date.now(),
+            confidence: params.provenance.confidence
+          };
+          let totalInstances = 0;
+          for (const candidate of accepted) {
+            const templateId = `motif:${candidate.id}`;
+            store2.addMotifTemplate({
+              id: templateId,
+              name: candidate.proposedName,
+              description: candidate.description,
+              shape: candidate.shape,
+              equations: candidate.equations,
+              provenance: prov
+            });
+            for (let i = 0; i < candidate.instances.length; i++) {
+              const instance = candidate.instances[i];
+              if (!instance) continue;
+              store2.addMotifInstance({
+                id: `instance:${candidate.id}:${i}`,
+                templateId,
+                mappings: instance.mappings,
+                provenance: prov
+              });
+              totalInstances++;
+            }
+          }
+          store2.motifSessions.update(params.sessionId, { status: "committed" });
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId: params.sessionId,
+                    status: "committed",
+                    addedTemplates: accepted.length,
+                    addedInstances: totalInstances
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "list") {
+          const sessions = store2.motifSessions.list();
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  sessions.map((s) => ({
+                    id: s.id,
+                    status: s.status,
+                    scopeRegex: s.scopeRegex,
+                    candidateCount: s.candidates.length,
+                    commitSha: s.commitSha,
+                    createdAt: new Date(s.createdAt).toISOString()
+                  })),
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "get") {
+          if (!params.sessionId) {
+            return { content: [{ type: "text", text: 'sessionId is required for action="get"' }], isError: true };
+          }
+          const session = store2.motifSessions.get(params.sessionId);
+          if (!session) {
+            return {
+              content: [{ type: "text", text: `Session not found: ${params.sessionId}` }],
+              isError: true
+            };
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(session, null, 2)
+              }
+            ]
+          };
+        }
+        return {
+          content: [{ type: "text", text: "Unknown action" }],
+          isError: true
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
+          isError: true
+        };
+      }
+    }
+  );
+}
+
 // src/index.ts
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
-var ologDir = join4(projectRoot, ".olog");
+var ologDir = join(projectRoot, ".olog");
 try {
   mkdirSync(ologDir, { recursive: true });
 } catch (err) {
@@ -5138,12 +5818,15 @@ try {
   );
   process.exit(1);
 }
-var dbPath = join4(ologDir, "olog.sqlite");
+var dbPath = join(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 var start = Date.now();
 try {
-  const result = ingestProject(projectRoot, store);
+  const adapterRegistry = new AdapterRegistry();
+  adapterRegistry.register(new TypeScriptAdapter());
+  setDefaultRegistry(adapterRegistry);
+  const result = ingestProject(projectRoot, store, adapterRegistry);
   console.error(
     `[olog] Ingestion complete in ${Date.now() - start}ms: ${result.filesProcessed} files, ${result.elementsCreated} elements, ${result.arrowsCreated} arrows`
   );
@@ -5154,10 +5837,10 @@ try {
   store.close();
   process.exit(1);
 }
-var server = new McpServer13(
+var server = new McpServer14(
   { name: "olog-mcp", version: "0.0.1" },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations in the olog graph; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: discovers domain objects from interface/type/class elements, proposes arrows from field types and extends/implements relationships, links to already-committed domain elements across sessions \u2014 use action=start/refine/commit). The name and module parameters accept JavaScript regex patterns. Domain modeling workflow: (1) start a session with optional scopeRegex, (2) refine candidates by accepting/rejecting/renaming, (3) commit to persist domain elements and arrows to the olog. Subsequent sessions on broader scopes will automatically cross-link to elements committed in prior sessions.`,
+    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations in the olog graph; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: discovers domain objects from interface/type/class elements, proposes arrows from field types and extends/implements relationships, links to already-committed domain elements across sessions \u2014 use action=start/refine/commit), olog_discover_motifs (notion discovery: discovers recurring structural motifs via ego-graph extraction, shape abstraction, and frequency grouping \u2014 use action=start/refine/commit). The name and module parameters accept JavaScript regex patterns. Domain modeling workflow: (1) start a session with optional scopeRegex, (2) refine candidates by accepting/rejecting/renaming, (3) commit to persist domain elements and arrows to the olog. Subsequent sessions on broader scopes will automatically cross-link to elements committed in prior sessions.`,
     capabilities: { logging: {} }
   }
 );
@@ -5173,6 +5856,7 @@ registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
 registerOlogMineEquations(server, store);
 registerOlogDomainDiscover(server, store);
+registerOlogDiscoverMotifs(server, store);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("[olog] MCP server connected on stdio");
