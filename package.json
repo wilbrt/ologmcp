@@ -11,6 +11,8 @@
     "dev": "npm run dev --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces",
-    "clean": "npm run clean --workspaces"
+    "clean": "npm run clean --workspaces",
+    "dot": "OLOG_ROOT=$PWD npm run dot --workspace=packages/mcp-server",
+    "dot:svg": "OLOG_ROOT=$PWD npm run dot:svg --workspace=packages/mcp-server"
   }
 }

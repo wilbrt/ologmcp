@@ -21,7 +21,7 @@
     "tsup": "^8.3.5"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && cp src/schema.sql dist/",
     "typecheck": "tsc --noEmit",
     "test": "echo \"No tests yet\""
   }

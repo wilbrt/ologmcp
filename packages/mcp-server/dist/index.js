@@ -3,7 +3,7 @@
 // src/index.ts
 import { mkdirSync } from "fs";
 import { join } from "path";
-import { McpServer as McpServer14 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer as McpServer15 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // ../core/dist/index.js
@@ -5401,24 +5401,33 @@ Actions:
           };
           const candidateToElemId = /* @__PURE__ */ new Map();
           let addedObjects = 0;
+          let reusedObjects = 0;
           let addedArrows = 0;
           let addedBridges = 0;
+          const existingDomainByCodeId = getExistingDomainElementsByCodeId(store2);
           for (const candidate of accepted) {
-            const elemId2 = `domain:${candidate.id}`;
-            candidateToElemId.set(candidate.id, elemId2);
-            store2.addElement({
-              id: elemId2,
-              kind: "domain",
-              name: candidate.proposedName,
-              module: null,
-              span: null,
-              attrs: { codeElementId: candidate.codeElementId }
-            });
-            store2.addProvenance(elemId2, prov);
-            addedObjects++;
+            const existing = existingDomainByCodeId.get(candidate.codeElementId);
+            if (existing) {
+              candidateToElemId.set(candidate.id, existing.id);
+              reusedObjects++;
+            } else {
+              const elemId2 = `domain:${candidate.id}`;
+              candidateToElemId.set(candidate.id, elemId2);
+              store2.addElement({
+                id: elemId2,
+                kind: "domain",
+                name: candidate.proposedName,
+                module: null,
+                span: null,
+                attrs: { codeElementId: candidate.codeElementId }
+              });
+              store2.addProvenance(elemId2, prov);
+              addedObjects++;
+            }
           }
           for (const candidate of accepted) {
             const srcId = candidateToElemId.get(candidate.id);
+            const isNew = !existingDomainByCodeId.has(candidate.codeElementId);
             for (const arrow of candidate.proposedArrows) {
               if (arrow.status === "rejected") continue;
               let dstId;
@@ -5440,7 +5449,7 @@ Actions:
               addedArrows++;
             }
             const bridgeArrow = candidate.bridgeArrow;
-            if (bridgeArrow.status !== "rejected") {
+            if (bridgeArrow.status !== "rejected" && isNew) {
               const domElemId = candidateToElemId.get(candidate.id);
               const bridgeId = `${domElemId}:implementedAs:${candidate.codeElementId}`;
               store2.addArrow({
@@ -5463,6 +5472,7 @@ Actions:
                     sessionId: params.sessionId,
                     status: "committed",
                     addedObjects,
+                    reusedObjects,
                     addedArrows,
                     addedBridges
                   },
@@ -5811,6 +5821,67 @@ function registerOlogDiscoverMotifs(server2, store2) {
   );
 }
 
+// src/tools/olog-dot.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z14 } from "zod";
+function dotId(name) {
+  return `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+function registerOlogDot(server2, store2) {
+  server2.registerTool(
+    "olog_dot",
+    {
+      description: 'Export domain objects and arrows as a Graphviz DOT graph. Returns a DOT string you can render with `dot -Tsvg` or paste into an online Graphviz renderer. By default includes only elements of kind "domain"; pass additionalKinds to widen the scope.',
+      inputSchema: z14.object({
+        additionalKinds: z14.array(z14.string()).default([]).describe('Extra element kinds to include alongside "domain" elements (e.g. ["type", "interface"])'),
+        nameRegex: z14.string().optional().describe('Regex to filter element names (e.g. "^Order")'),
+        moduleRegex: z14.string().optional().describe("Regex to filter by module path")
+      }),
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ additionalKinds, nameRegex, moduleRegex }) => {
+      try {
+        const kinds = ["domain", ...additionalKinds];
+        const allElems = kinds.flatMap(
+          (kind) => store2.queryElements({
+            kind,
+            nameRegex,
+            moduleRegex,
+            limit: 1e4
+          })
+        );
+        const elemIds = new Set(allElems.map((e) => e.id));
+        const elemById = new Map(allElems.map((e) => [e.id, e]));
+        const lines = ["digraph olog {", "  rankdir=LR;", "  node [shape=box];", ""];
+        for (const elem of allElems) {
+          const label = elem.module ? `${elem.name}\\n[${elem.module}]` : elem.name;
+          lines.push(`  ${dotId(elem.id)} [label=${dotId(label)}];`);
+        }
+        lines.push("");
+        const seenArrows = /* @__PURE__ */ new Set();
+        for (const elem of allElems) {
+          for (const arr of store2.outgoing(elem.id)) {
+            if (!elemIds.has(arr.dstId)) continue;
+            if (seenArrows.has(arr.id)) continue;
+            seenArrows.add(arr.id);
+            lines.push(`  ${dotId(elem.id)} -> ${dotId(arr.dstId)} [label=${dotId(arr.kind)}];`);
+          }
+        }
+        lines.push("}");
+        return {
+          content: [{ type: "text", text: lines.join("\n") }]
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
+          isError: true
+        };
+      }
+    }
+  );
+}
+
 // src/index.ts
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
 var ologDir = join(projectRoot, ".olog");
@@ -5841,7 +5912,7 @@ try {
   store.close();
   process.exit(1);
 }
-var server = new McpServer14(
+var server = new McpServer15(
   { name: "olog-mcp", version: "0.0.1" },
   {
     instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations in the olog graph; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: discovers domain objects from interface/type/class elements, proposes arrows from field types and extends/implements relationships, links to already-committed domain elements across sessions \u2014 use action=start/refine/commit), olog_discover_motifs (notion discovery: discovers recurring structural motifs via ego-graph extraction, shape abstraction, and frequency grouping \u2014 use action=start/refine/commit). The name and module parameters accept JavaScript regex patterns. Domain modeling workflow: (1) start a session with optional scopeRegex, (2) refine candidates by accepting/rejecting/renaming, (3) commit to persist domain elements and arrows to the olog. Subsequent sessions on broader scopes will automatically cross-link to elements committed in prior sessions.`,
@@ -5861,6 +5932,7 @@ registerOlogDelegate(server, store, projectRoot);
 registerOlogMineEquations(server, store);
 registerOlogDomainDiscover(server, store);
 registerOlogDiscoverMotifs(server, store);
+registerOlogDot(server, store);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("[olog] MCP server connected on stdio");

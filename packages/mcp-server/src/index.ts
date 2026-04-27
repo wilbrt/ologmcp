@@ -17,6 +17,7 @@ import { registerOlogDelegate } from './tools/olog-delegate.js';
 import { registerOlogMineEquations } from './tools/olog-mine-equations.js';
 import { registerOlogDomainDiscover } from './tools/olog-domain-discover.js';
 import { registerOlogDiscoverMotifs } from './tools/olog-discover-motifs.js';
+import { registerOlogDot } from './tools/olog-dot.js';
 
 const projectRoot = process.env.OLOG_ROOT || process.cwd();
 
@@ -72,6 +73,7 @@ registerOlogDelegate(server, store, projectRoot);
 registerOlogMineEquations(server, store);
 registerOlogDomainDiscover(server, store);
 registerOlogDiscoverMotifs(server, store);
+registerOlogDot(server, store);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
