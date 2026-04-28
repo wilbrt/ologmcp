@@ -47,12 +47,13 @@ const store = new OlogStore(dbPath);
 
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 const start = Date.now();
+let languages: string[] = [];
 try {
   const adapterRegistry = new AdapterRegistry();
   setDefaultRegistry(adapterRegistry);
 
   const rawLanguages = process.env.OLOG_LANGUAGES;
-  const languages = rawLanguages
+  languages = rawLanguages
     ? rawLanguages.split(',').map((s) => s.trim()).filter(Boolean)
     : detectLanguages(projectRoot);
 
@@ -62,6 +63,7 @@ try {
       const className = ADAPTER_CLASS[lang];
       const AdapterClass = className ? mod[className] : mod.default;
       if (typeof AdapterClass === 'function') {
+        if (typeof mod.init === 'function') await mod.init(); 
         adapterRegistry.register(new AdapterClass());
         console.error(`[olog] Loaded ${lang} adapter`);
       } else {

@@ -10,15 +10,8 @@
   },
   "dependencies": {
     "@olog/core": "*",
-    "tree-sitter": "^0.21.1"
-  },
-  "peerDependencies": {
-    "tree-sitter-clojure": ">=0.1.0"
-  },
-  "peerDependenciesMeta": {
-    "tree-sitter-clojure": {
-      "optional": true
-    }
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-clojure": "npm:@yogthos/tree-sitter-clojure@0.0.14"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
