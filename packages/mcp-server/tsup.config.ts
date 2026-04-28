@@ -15,8 +15,11 @@ export default defineConfig({
     'better-sqlite3',
     'tree-sitter',
     'tree-sitter-typescript',
+    'tree-sitter-clojure',
     '@modelcontextprotocol/sdk',
+    '@olog/lang-typescript',
+    '@olog/lang-clojure',
     'glob'
   ],
-  noExternal: ['@olog/core', '@olog/lang-typescript']
+  noExternal: ['@olog/core']
 });

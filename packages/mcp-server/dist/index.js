@@ -1,8 +1,527 @@
 #!/usr/bin/env node
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/detect.ts
+import { existsSync, readdirSync } from "fs";
+import { join, extname } from "path";
+function detectLanguages(root) {
+  const detected = [];
+  for (const lang of INDICATORS) {
+    const hasFile = lang.files.some((f) => existsSync(join(root, f)));
+    if (hasFile) {
+      detected.push(lang.name);
+      continue;
+    }
+    try {
+      const entries = readdirSync(root, { withFileTypes: true });
+      const hasExt = entries.some(
+        (e) => e.isFile() && lang.extensions.includes(extname(e.name))
+      );
+      if (hasExt) detected.push(lang.name);
+    } catch {
+    }
+  }
+  return detected.length > 0 ? detected : ["typescript"];
+}
+var INDICATORS;
+var init_detect = __esm({
+  "src/detect.ts"() {
+    "use strict";
+    INDICATORS = [
+      {
+        name: "typescript",
+        files: ["tsconfig.json", "package.json"],
+        extensions: [".ts", ".tsx"]
+      },
+      {
+        name: "clojure",
+        files: ["deps.edn", "project.clj", "shadow-cljs.edn", "bb.edn"],
+        extensions: [".clj", ".cljs", ".cljc"]
+      }
+    ];
+  }
+});
+
+// src/init.ts
+var init_exports = {};
+__export(init_exports, {
+  runInit: () => runInit
+});
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
+import { join as join4 } from "path";
+function deepMerge(target, source) {
+  const result = { ...target };
+  for (const [key, value] of Object.entries(source)) {
+    if (value && typeof value === "object" && !Array.isArray(value) && result[key] && typeof result[key] === "object" && !Array.isArray(result[key])) {
+      result[key] = deepMerge(result[key], value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+async function runInit() {
+  const root = process.cwd();
+  console.log("olog-mcp init\n");
+  const languages2 = detectLanguages(root);
+  console.log(`Detected languages: ${languages2.join(", ")}`);
+  const agentsDir = join4(root, ".opencode", "agents");
+  mkdirSync(agentsDir, { recursive: true });
+  const agents = [
+    { file: "olog-ingestion.md", content: AGENT_INGESTION },
+    { file: "olog-planning.md", content: AGENT_PLANNING },
+    { file: "explore.md", content: AGENT_EXPLORE },
+    { file: "edit.md", content: AGENT_EDIT }
+  ];
+  for (const agent of agents) {
+    const dest = join4(agentsDir, agent.file);
+    writeFileSync(dest, agent.content);
+    console.log(`  wrote ${dest.replace(root + "/", "")}`);
+  }
+  const configPath = join4(root, "opencode.json");
+  const existing = existsSync2(configPath) ? JSON.parse(readFileSync3(configPath, "utf8")) : {};
+  const patch = {
+    $schema: "https://opencode.ai/config.json",
+    mcp: {
+      olog: {
+        type: "local",
+        command: ["npx", "-y", "@olog/mcp-server"],
+        environment: { OLOG_LANGUAGES: languages2.join(",") },
+        enabled: true
+      }
+    }
+  };
+  const updated = deepMerge(existing, patch);
+  writeFileSync(configPath, JSON.stringify(updated, null, 2) + "\n");
+  console.log(`  wrote opencode.json`);
+  console.log(`
+Done! Next steps:
+  1. Commit .opencode/agents/ and opencode.json so teammates get the agents automatically.
+  2. Open your project in opencode \u2014 the olog MCP server starts automatically.
+  3. Use @olog-ingestion to begin domain modeling your codebase.
+`);
+}
+var AGENT_INGESTION, AGENT_PLANNING, AGENT_EXPLORE, AGENT_EDIT;
+var init_init = __esm({
+  "src/init.ts"() {
+    "use strict";
+    init_detect();
+    AGENT_INGESTION = `---
+description: >
+  Domain ingestion agent. Runs interactive olog_domain_discover sessions
+  (start \u2192 refine \u2192 commit) and mines path equations. Use this agent to build
+  and maintain the domain layer of the olog \u2014 discovering domain objects,
+  proposing arrows, and formalising structural invariants.
+mode: primary
+permission:
+  edit: deny
+  bash:
+    "*": deny
+  webfetch: deny
+  task:
+    "*": deny
+  question: allow
+---
+<role>
+You are the domain ingestion agent. Your sole purpose is to build and maintain
+the **domain layer** of the olog \u2014 the set of named domain objects, their
+inter-relationships, and the structural invariants that govern them.
+
+You work interactively with the user through three recurring activities:
+
+1. **Domain discovery** \u2014 \`olog_domain_discover\` sessions that surface domain
+   objects from interface/type/class elements, propose arrows (field-level and
+   structural), and commit accepted objects to the olog.
+
+2. **Equation mining** \u2014 \`olog_mine_equations\` runs that find path equations
+   holding in the olog graph, especially at the domain level, which you then
+   curate and propose as formal schema constraints.
+
+3. **Schema extension** \u2014 \`olog_propose_schema\` for any objects, arrows, or
+   equations the user wants to add manually.
+
+You do NOT read or edit source files. You do NOT plan refactors. You do NOT
+delegate to subagents. You are purely an ingestion and formalisation agent.
+</role>
+
+<domain_discovery_workflow>
+The standard session flow for \`olog_domain_discover\`:
+
+**Step 1 \u2014 Start**
+Call \`olog_domain_discover\` with \`action="start"\`. Optionally provide
+\`scopeRegex\` to focus on a subsystem. Without a scope the tool scans all
+interface/type/class elements.
+
+The tool returns:
+- \`sessionId\` \u2014 keep this for all subsequent calls
+- \`candidates\` \u2014 proposed domain objects with \`proposedName\`, \`proposedArrows\`,
+  \`bridgeArrow\`, and \`questions\`
+- \`clarifyingQuestions\` \u2014 cross-cutting questions to ask the user up front
+
+**Step 2 \u2014 Present and ask**
+Before calling \`refine\`, use the \`question\` tool to surface the clarifying
+questions from the session and get initial direction from the user. Summarise
+the candidate count and themes in the question header \u2014 do not dump raw JSON.
+
+For iterative per-candidate decisions, use a \`question\` call per batch:
+present the candidate name, its proposed arrows, and any questions, then offer
+"Accept", "Reject", "Defer", "Rename" as options.
+
+**Step 3 \u2014 Refine (iteratively)**
+Translate user responses into a \`refine\` call with \`action="refine"\`, batching
+as many decisions as possible per call. A single refine call can accept/reject
+multiple candidates and their arrows at once. Continue refining until no
+candidates remain in \`"proposed"\` status.
+
+Arrow refinement guidance:
+- \`extends\`/\`implements\` arrows represent is-a/subtype relationships \u2014 accept
+  them when the supertype is a meaningful domain concept.
+- \`has X\` field arrows \u2014 accept when the field represents a real domain
+  relationship; reject if it's an implementation detail.
+- Total arrows (where \`total: true\`) are strong claims \u2014 confirm with the user
+  that every instance of the domain object always has this relationship.
+
+**Step 4 \u2014 Commit**
+Once the user is satisfied, call \`action="commit"\` with provenance
+\`source="llm"\`, the current commit SHA, and \`confidence="resolved"\` (or
+\`"tentative"\` for speculative additions). Report the counts: added objects,
+arrows, bridge arrows.
+
+**Step 5 \u2014 Follow-up mining**
+After committing, use the \`question\` tool to ask whether to mine domain-level
+equations, with options: "Yes, mine now", "Skip for now". If yes, proceed:
+\`\`\`
+olog_mine_equations({ touchingElementKinds: ["domain"], maxDepth: 3, minCoverage: 1.0 })
+\`\`\`
+Present any strict invariants and ask the user whether they should be formalised
+as schema constraints via \`olog_propose_schema\`.
+</domain_discovery_workflow>
+
+<equation_mining_workflow>
+When the user asks to mine invariants or explore structural patterns:
+
+1. Choose scope. If the user has domain objects in the olog, start with
+   \`touchingElementKinds: ["domain"]\` to find domain-level equations.
+
+2. Start at \`minCoverage: 1.0\` (strict invariants) and \`maxDepth: 3\`. Lower
+   coverage only if the user asks for near-invariants.
+
+3. Filter results before presenting. Omit tautologies. Surface only equations
+   that express a genuine architectural constraint or reveal an unexpected coupling.
+
+4. For each interesting equation, use the \`question\` tool to ask whether it
+   should be formalised as a path equation constraint. Present the equation,
+   its coverage, and example elements. Offer "Add as constraint", "Note but
+   skip", "Investigate counterexamples first".
+
+5. For near-invariants (coverage < 1.0): use the \`question\` tool to present
+   the counterexamples and ask what they reveal.
+</equation_mining_workflow>
+
+<rules>
+1. **Session discipline.** Always carry the \`sessionId\` through a discovery
+   session. Never start a new session when one is in progress.
+
+2. **Batch refinements.** Never call \`refine\` with a single candidate at a time
+   unless the user is deciding interactively one by one.
+
+3. **Arrow judgment.** Prefer fewer, clearer arrows over many noisy ones.
+
+4. **Noun-phrase discipline.** Every committed domain object must read naturally
+   as "a X" or "an X".
+
+5. **Cross-session continuity.** When starting a new session, the tool
+   automatically links to already-committed domain objects from prior sessions.
+
+6. **No source reads.** Answer structural questions from the olog via
+   \`olog_query\` or \`olog_inspect\`. Do not read files.
+</rules>
+`;
+    AGENT_PLANNING = `---
+description: >
+  Planning agent. Interactively plans structural changes with the user, records
+  plans as files in .plans/, validates them against the olog, and delegates
+  implementation slices to the edit subagent via the Task tool. Gathers all
+  structural context by invoking the explore subagent \u2014 never reads source files
+  directly.
+mode: primary
+permission:
+  edit:
+    ".plans/*": allow
+    "*": deny
+  bash:
+    "*": deny
+  webfetch: deny
+  task:
+    "*": deny
+    explore: allow
+    edit: allow
+  question: allow
+---
+<role>
+You are the planning agent. You help the user plan structural changes to the
+codebase through an interactive conversation, track those plans as structured
+files in the \`.plans/\` directory, validate them against the olog, and
+orchestrate their execution by delegating implementation slices to the \`edit\`
+subagent.
+</role>
+
+<critical_rules>
+These rules override everything else. They apply on every turn.
+
+1. **Never use read, write, glob, or grep tools on source files.** You have
+   access to those tools but they are restricted to \`.plans/\`. If you catch
+   yourself about to read a source file, stop and use the Task tool to invoke
+   \`@explore\` instead.
+
+2. **Invoke subagents via the Task tool.** \`@explore\` and \`@edit\` are NOT
+   tools in your tool list \u2014 they are subagents. You reach them by calling
+   the **Task tool** with the agent name \`"explore"\` or \`"edit"\`.
+
+3. **Do not read source files to infer structure.** Every structural fact must
+   come from an \`@explore\` Task result.
+
+4. **Never commit a plan without validation.** Call \`olog_plan\` then
+   \`olog_validate\` before invoking \`@edit\`.
+
+5. **Only write files to \`.plans/\`.** Naming: \`.plans/YYYY-MM-DD-<slug>.md\`.
+</critical_rules>
+
+<subagent_invocation>
+**\`explore\`** \u2014 for structural questions
+- Invoke with the Task tool, agent name \`"explore"\`
+- Pass a single focused structural question as the task
+- Returns: facts with olog entity IDs, gaps where the olog lacks data
+
+**\`edit\`** \u2014 for source file changes
+- Invoke with the Task tool, agent name \`"edit"\`
+- Pass the full DelegationBrief JSON returned by \`olog_delegate\` as the task
+</subagent_invocation>
+
+<planning_workflow>
+
+**Phase 1 \u2014 Understand**
+Use the \`question\` tool to gather requirements. Ask all clarifying questions
+in a single call: goal, scope, known constraints, olog domain concept relevance.
+
+**Phase 2 \u2014 Explore**
+For each structural question, invoke \`@explore\` via Task. Synthesise results
+in plain language \u2014 do not paste raw output to the user.
+
+**Phase 3 \u2014 Draft the plan**
+Write to \`.plans/YYYY-MM-DD-<slug>.md\`:
+
+\`\`\`
+# Plan: <title>
+
+## Intent
+<One paragraph: what changes, why, what must be preserved>
+
+## Olog operations
+- rename \`<element-id>\` \u2192 \`<new-name>\`
+- move \`<element-id>\` \u2192 module \`<new-module>\`
+- addSymbol \`<module>\` \`<name>\` kind \`<kind>\`
+- removeSymbol \`<element-id>\`
+
+## Invariants to preserve
+<Constraints from the olog that touch affected elements>
+
+## Implementation slices
+1. <task-type>: <target element-id> \u2014 <one-line description>
+
+## Acceptance criteria
+<Overall criteria>
+
+## Validation status
+[ ] olog_plan created
+[ ] olog_validate passed
+[ ] Slices delegated
+[ ] olog_reindex run
+\`\`\`
+
+Present the plan and use \`question\` to ask for approval.
+
+**Phase 4 \u2014 Validate**
+Call \`olog_plan\` then \`olog_validate\`. Update the plan file.
+If validation fails: amend operations, re-validate. Use \`question\` for
+judgment calls. Never weaken a constraint to pass validation.
+
+**Phase 5 \u2014 Execute**
+For each slice:
+1. Call \`olog_delegate\` for the slice's target element.
+2. Invoke \`@explore\` via Task with \`PREFETCH: <target.filePath>\`.
+3. Invoke \`@edit\` via Task with the DelegationBrief JSON and prefetched files.
+4. Mark the slice done in the plan file.
+5. Use \`question\` to ask whether to proceed to the next slice.
+
+After all slices: note that \`olog_reindex\` should be run to refresh the model.
+</planning_workflow>
+
+<olog_tool_discipline>
+Direct olog MCP tools available:
+- \`olog_plan\` \u2014 create the structural plan
+- \`olog_validate\` \u2014 check it against constraints
+- \`olog_delegate\` \u2014 assemble a DelegationBrief for \`@edit\`
+
+All structural queries go through \`@explore\` via Task. Do not call
+\`olog_query\` or \`olog_inspect\` directly.
+</olog_tool_discipline>
+`;
+    AGENT_EXPLORE = `---
+description: >
+  Read-only structural explorer. Answers a specific structural question by
+  querying the olog (olog_query, olog_inspect, olog_dump). Returns grounded
+  facts with olog entity references. Invoke with a single focused question; do
+  not use for planning or editing.
+mode: subagent
+hidden: true
+permission:
+  edit: deny
+  bash:
+    "*": deny
+  webfetch: deny
+  task:
+    "*": deny
+  mcp:
+    olog: allow
+---
+<role>
+You are the structural explorer. You answer a single focused structural question
+about the codebase by querying the olog. You do not plan, edit, or infer \u2014 you
+retrieve and report grounded facts.
+
+Your output is consumed by the planning agent. Be precise, terse, and grounded.
+Every fact you report must be backed by an olog entity or arrow ID.
+</role>
+
+<instructions>
+You operate in one of two modes depending on the task prefix:
+
+---
+
+### Mode A \u2014 Structural query (default)
+
+If the task does NOT start with \`PREFETCH:\`, answer a structural question:
+
+1. Identify the minimal set of olog queries needed to answer it.
+2. Use \`olog_query\` for traversal questions. Use \`olog_inspect\` for detail on
+   a specific element. Use \`olog_dump\` only for a broad overview.
+3. Run your queries. If a query returns nothing, say so \u2014 do not speculate.
+4. Return your answer in this format:
+
+\`\`\`
+## Facts
+
+- <fact 1> [ref: <entity-or-arrow-id>]
+- <fact 2> [ref: <entity-or-arrow-id>]
+
+## Gaps
+<Anything the olog does not contain. State "none" if fully answered.>
+\`\`\`
+
+5. Do not add interpretation, recommendations, or planning commentary.
+
+---
+
+### Mode B \u2014 File prefetch
+
+If the task starts with \`PREFETCH: <filepath>\`, read the file and return its
+full hashline-annotated content verbatim so the edit agent can use the refs.
+
+1. Call \`read\` on the specified file path.
+2. Return the output **verbatim** \u2014 do not summarise or reformat.
+3. Prepend a single line: \`## Prefetched: <filepath>\`
+4. Do not make any olog queries in prefetch mode.
+</instructions>
+
+<constraints>
+- No edits. No subagent calls.
+- Mode A: all information from olog MCP tools only. No file reads.
+- Mode B: read the specified file only. No olog queries.
+- If confidence is \`unresolved\` or \`tentative\`, flag it: \`[ref: <id>, confidence: unresolved]\`
+- Cite element IDs, not just names.
+</constraints>
+`;
+    AGENT_EDIT = `---
+description: >
+  Source editor. Receives a fully-resolved DelegationBrief JSON from
+  olog_delegate and writes the corresponding source changes. All context is in
+  the brief \u2014 no olog access needed. Verifies changes with tsc after editing.
+mode: subagent
+hidden: true
+steps: 20
+permission:
+  edit: allow
+  bash:
+    "*": deny
+    "npx tsc --noEmit *": allow
+    "npx vitest run *": allow
+    "npm run build *": allow
+  webfetch: deny
+  task:
+    "*": deny
+---
+# Edit Agent
+
+You receive a task containing a \`DelegationBrief\` JSON and, optionally,
+prefetched file content. Write or modify source code to satisfy the brief.
+
+---
+
+## IMPORTANT: Using prefetched file content
+
+Your task may include a \`<prefetched_files>\` block. **If a file appears in
+\`<prefetched_files>\`, do NOT call \`read\` on it.** Extract the \`REV\` token and
+\`#HL\` refs directly from the prefetched block. Only call \`read\` for files that
+were NOT prefetched, or after an edit makes existing refs stale.
+
+---
+
+## Brief rules
+
+1. **Follow analogues.** The \`analogues\` field contains complete implementations
+   of similar functions. Match their style: naming, error handling, return patterns.
+
+2. **Call every function in \`mustCall\`.** These are mandatory.
+
+3. **Satisfy every interface in \`mustImplement\`.** Implement every property and
+   method \u2014 do not omit any.
+
+4. **Preserve existing code.** Keep signatures exactly.
+
+5. **Use imports from \`importsInTargetFile\`** before adding new ones.
+
+6. **No structural changes.** Do not rename, move, or delete any symbols.
+
+7. **Acceptance criteria are hard constraints.** Every item must be satisfied.
+
+8. **Verify after editing.** Run \`npx tsc --noEmit\` after all edits.
+
+9. **Keep it simple.** Match the patterns in the analogues exactly where possible.
+
+---
+
+## Output
+
+After editing, confirm:
+- Which files were changed and what was done in each
+- Whether \`tsc --noEmit\` passed
+- Any acceptance criteria you could not fully satisfy, with explanation
+`;
+  }
+});
 
 // src/index.ts
-import { mkdirSync } from "fs";
-import { join } from "path";
+import { mkdirSync as mkdirSync2 } from "fs";
+import { join as join5 } from "path";
 import { McpServer as McpServer15 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -633,8 +1152,8 @@ var OlogStore = class {
       params.push(opts.minConfidence);
     }
     const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
-    const join4 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
-    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join4} ${where} ORDER BY e.module, e.name LIMIT ?`;
+    const join42 = opts.minConfidence ? " INNER JOIN olog_prov p ON e.id = p.elem_id" : "";
+    const sql = `SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_elem e${join42} ${where} ORDER BY e.module, e.name LIMIT ?`;
     params.push(opts.limit);
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => this.rowToElem(r));
@@ -1622,9 +2141,9 @@ function applyEditsToString(source, edits) {
 }
 async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
   const { readFile: fsReadFile, writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join4 } = await import("path");
-  const readFn = readFile ?? (async (p) => fsReadFile(join4(projectRoot2, p), "utf8"));
-  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join4(projectRoot2, p), c, "utf8"));
+  const { join: join42 } = await import("path");
+  const readFn = readFile ?? (async (p) => fsReadFile(join42(projectRoot2, p), "utf8"));
+  const writeFn = writeFile ?? (async (p, c) => fsWriteFile(join42(projectRoot2, p), c, "utf8"));
   let applied = 0;
   let skipped = 0;
   const errors = [];
@@ -1670,10 +2189,10 @@ async function applySourceEdits(edits, projectRoot2, readFile, writeFile) {
 }
 async function rollback(snapshots, projectRoot2) {
   const { writeFile: fsWriteFile } = await import("fs/promises");
-  const { join: join4 } = await import("path");
+  const { join: join42 } = await import("path");
   for (const snapshot of snapshots) {
     try {
-      await fsWriteFile(join4(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
+      await fsWriteFile(join42(projectRoot2, snapshot.filePath), snapshot.originalContent, "utf8");
     } catch {
     }
   }
@@ -3577,331 +4096,8 @@ function discoverDomainCandidates(store2, options = {}) {
   return candidates;
 }
 
-// ../lang-typescript/dist/index.js
-import Parser3 from "tree-sitter";
-import TS from "tree-sitter-typescript";
-import { resolve as resolve2, dirname as dirname3 } from "path";
-import { fileURLToPath as fileURLToPath2 } from "url";
-import Parser from "tree-sitter";
-import fs from "fs";
-import "tree-sitter";
-import "tree-sitter";
-function formatSpan2(node) {
-  const s = node.startPosition;
-  const e = node.endPosition;
-  return `${s.row + 1}:${s.column + 1}-${e.row + 1}:${e.column + 1}`;
-}
-function asKind(kind) {
-  return kind;
-}
-function findContainingFunctionName(node) {
-  let cur = node.parent;
-  while (cur !== null) {
-    switch (cur.type) {
-      case "function_declaration":
-      case "generator_function_declaration":
-      case "method_definition": {
-        const nameNode = cur.childForFieldName("name");
-        if (nameNode) return nameNode.text;
-        break;
-      }
-      case "arrow_function": {
-        if (cur.parent?.type === "variable_declarator") {
-          const varName = cur.parent.childForFieldName("name");
-          if (varName) return varName.text;
-        }
-        break;
-      }
-      case "function_expression": {
-        const nameNode = cur.childForFieldName("name");
-        if (nameNode) return nameNode.text;
-        if (cur.parent?.type === "variable_declarator") {
-          const varName = cur.parent.childForFieldName("name");
-          if (varName) return varName.text;
-        }
-        break;
-      }
-    }
-    cur = cur.parent;
-  }
-  return null;
-}
-function extractFromFile(parser, source, queryPath) {
-  const scmContent = fs.readFileSync(queryPath, "utf-8");
-  const language = parser.getLanguage();
-  const query = new Parser.Query(language, scmContent);
-  const tree = parser.parse(source);
-  if (tree.rootNode.hasError) {
-    console.error("Warning: parse errors detected in source");
-  }
-  const elements = [];
-  const arrows = [];
-  for (const match of query.matches(tree.rootNode)) {
-    const byName = /* @__PURE__ */ new Map();
-    for (const cap of match.captures) {
-      const arr = byName.get(cap.name);
-      if (arr) {
-        arr.push(cap);
-      } else {
-        byName.set(cap.name, [cap]);
-      }
-    }
-    const first = (name) => {
-      const arr = byName.get(name);
-      return arr ? arr[0] : void 0;
-    };
-    for (const cap of byName.get("function.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "function", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("class.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "class", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("interface.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "interface", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("typealias.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "type", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("enum.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "enum", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("method.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "method", name: n.text, module: "", span: formatSpan2(n), attrs: {} });
-    }
-    for (const cap of byName.get("import.name") ?? []) {
-      const n = cap.node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.default")) {
-      const n = first("import.default").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.namespace")) {
-      const n = first("import.namespace").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan2(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    for (const srcCap of ["import.source", "reexport.source", "require.source"]) {
-      if (first(srcCap)) {
-        const n = first(srcCap).node;
-        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: n.text, dstName: "", attrs: {} });
-      }
-    }
-    if (first("import.source")) {
-      const moduleNode = first("import.source").node;
-      const moduleStr = moduleNode.text;
-      for (const impCap of byName.get("import.name") ?? []) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: impCap.node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.default")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.default").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.namespace")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.namespace").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-    }
-    if (first("call.callee")) {
-      const calleeNode = first("call.callee").node;
-      const callNode = first("call")?.node ?? first("call.member")?.node;
-      const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: calleeNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: calleeNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: calleeNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("call.method")) {
-      const methodNode = first("call.method").node;
-      const callNode = first("call.member")?.node ?? first("call")?.node;
-      const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: methodNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: methodNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("new.ctor")) {
-      const ctorNode = first("new.ctor").node;
-      const newNode = first("new")?.node;
-      const fnName = newNode ? findContainingFunctionName(newNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: ctorNode.text, attrs: {} });
-      if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: ctorNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: ctorNode.text, dstModule: "", dstName: fnName, attrs: {} });
-      }
-    }
-    if (first("memberof.method") && first("memberof.class")) {
-      const methodNode = first("memberof.method").node;
-      const classNode = first("memberof.class").node;
-      arrows.push({ kind: asKind("memberOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: classNode.text, attrs: {} });
-    }
-  }
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
-  return { elements, arrows };
-}
-function collectTypeIdentifiers(node) {
-  const result = [];
-  if (node.type === "type_identifier") {
-    result.push(node.text);
-  }
-  for (const child of node.children) {
-    result.push(...collectTypeIdentifiers(child));
-  }
-  return result;
-}
-function walkDescendants(node, visitor) {
-  for (const child of node.children) {
-    visitor(child);
-    walkDescendants(child, visitor);
-  }
-}
-function extractPropertyFromNode(node, parentName, parentKind) {
-  const nameNode = node.childForFieldName("name");
-  if (!nameNode) return null;
-  const name = nameNode.text;
-  const optional = node.children.some((c) => c.type === "?");
-  const isReadonly = node.children.some((c) => c.type === "readonly");
-  const typeAnnotation = node.childForFieldName("type");
-  const typeText = typeAnnotation ? typeAnnotation.text : "";
-  const typeRefs = typeAnnotation ? collectTypeIdentifiers(typeAnnotation) : [];
-  const span = formatSpan2(nameNode);
-  return { name, span, typeText, optional, readonly: isReadonly, typeRefs, parentName, parentKind };
-}
-function extractPropertiesFromFile(parser, source, _moduleName) {
-  const tree = parser.parse(source);
-  const result = [];
-  walkDescendants(tree.rootNode, (node) => {
-    if (node.type === "interface_declaration") {
-      const nameNode = node.childForFieldName("name");
-      if (!nameNode) return;
-      const parentName = nameNode.text;
-      const body = node.children.find((c) => c.type === "object_type");
-      if (!body) return;
-      for (const child of body.children) {
-        if (child.type === "property_signature") {
-          const prop = extractPropertyFromNode(child, parentName, "interface");
-          if (prop) result.push(prop);
-        }
-      }
-    } else if (node.type === "type_alias_declaration") {
-      const nameNode = node.childForFieldName("name");
-      if (!nameNode) return;
-      const parentName = nameNode.text;
-      const typeNode = node.childForFieldName("type");
-      if (!typeNode) return;
-      if (typeNode.type === "object_type") {
-        for (const child of typeNode.children) {
-          if (child.type === "property_signature") {
-            const prop = extractPropertyFromNode(child, parentName, "type");
-            if (prop) result.push(prop);
-          }
-        }
-      }
-    } else if (node.type === "class_declaration") {
-      const nameNode = node.childForFieldName("name");
-      if (!nameNode) return;
-      const parentName = nameNode.text;
-      const body = node.children.find((c) => c.type === "class_body");
-      if (!body) return;
-      for (const child of body.children) {
-        if (child.type === "public_field_definition") {
-          const prop = extractPropertyFromNode(child, parentName, "class");
-          if (prop) result.push(prop);
-        }
-      }
-    }
-  });
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
-  return result;
-}
-var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = dirname3(__filename2);
-var TS_QUERY_PATH = resolve2(__dirname2, "queries", "ts.scm");
-var TSX_QUERY_PATH = resolve2(__dirname2, "queries", "tsx.scm");
-var NODE_TYPE_TO_KIND = {
-  // These are not directly used by extractFromFile (which uses .scm captures),
-  // but may be needed for future use.
-};
-var DECLARATION_NODE_TYPES = {
-  function: ["function_declaration", "arrow_function"],
-  method: ["method_definition", "abstract_method_signature"],
-  class: ["class_declaration"],
-  interface: ["interface_declaration"],
-  type: ["type_alias_declaration"],
-  enum: ["enum_declaration"],
-  const: ["variable_declarator"],
-  var: ["variable_declarator"]
-};
-var TypeScriptAdapter = class {
-  languageId = "typescript";
-  extensions = [".ts", ".tsx", ".mts", ".cts"];
-  globPattern = "**/*.{ts,tsx,mts,cts}";
-  nodeTypeToKind = NODE_TYPE_TO_KIND;
-  kindToNodeTypes = DECLARATION_NODE_TYPES;
-  createParser(filename) {
-    const parser = new Parser3();
-    const ext = filename.substring(filename.lastIndexOf("."));
-    switch (ext) {
-      case ".ts":
-      case ".mts":
-      case ".cts":
-        parser.setLanguage(TS.typescript);
-        break;
-      case ".tsx":
-        parser.setLanguage(TS.tsx);
-        break;
-      default:
-        throw new Error(`Unsupported file extension: ${ext}`);
-    }
-    return parser;
-  }
-  queryPath(filename) {
-    const ext = filename.substring(filename.lastIndexOf("."));
-    return ext === ".tsx" ? TSX_QUERY_PATH : TS_QUERY_PATH;
-  }
-  extractElements(parser, source, queryPath) {
-    return extractFromFile(parser, source, queryPath);
-  }
-  extractProperties(parser, source, moduleName) {
-    return extractPropertiesFromFile(parser, source, moduleName);
-  }
-  resolveImportSpecifier(specifier, importingFileRelativePath, _projectRoot) {
-    if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-      return null;
-    }
-    const importingDir = dirname3(importingFileRelativePath);
-    const joined = importingDir + "/" + specifier.replace(/^\.\//, "");
-    const normalized = normalizePath(joined);
-    return normalized.replace(/\.(js|cjs|mjs|jsx)$/, ".ts");
-  }
-};
-function normalizePath(path) {
-  const parts = path.split("/");
-  const result = [];
-  for (const part of parts) {
-    if (part === "..") {
-      result.pop();
-    } else if (part !== "." && part !== "") {
-      result.push(part);
-    }
-  }
-  return result.join("/");
-}
+// src/index.ts
+init_detect();
 
 // src/tools/olog-query.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
@@ -5883,24 +6079,49 @@ function registerOlogDot(server2, store2) {
 }
 
 // src/index.ts
+if (process.argv[2] === "init") {
+  const { runInit: runInit2 } = await Promise.resolve().then(() => (init_init(), init_exports));
+  await runInit2();
+  process.exit(0);
+}
+var ADAPTER_CLASS = {
+  typescript: "TypeScriptAdapter",
+  clojure: "ClojureAdapter"
+};
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
-var ologDir = join(projectRoot, ".olog");
+var ologDir = join5(projectRoot, ".olog");
 try {
-  mkdirSync(ologDir, { recursive: true });
+  mkdirSync2(ologDir, { recursive: true });
 } catch (err) {
   console.error(
     `[olog] Failed to create ${ologDir}: ${err instanceof Error ? err.message : String(err)}`
   );
   process.exit(1);
 }
-var dbPath = join(ologDir, "olog.sqlite");
+var dbPath = join5(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 var start = Date.now();
 try {
   const adapterRegistry = new AdapterRegistry();
-  adapterRegistry.register(new TypeScriptAdapter());
   setDefaultRegistry(adapterRegistry);
+  const rawLanguages = process.env.OLOG_LANGUAGES;
+  const languages2 = rawLanguages ? rawLanguages.split(",").map((s) => s.trim()).filter(Boolean) : detectLanguages(projectRoot);
+  for (const lang of languages2) {
+    try {
+      const mod = await import(`@olog/lang-${lang}`);
+      const className = ADAPTER_CLASS[lang];
+      const AdapterClass = className ? mod[className] : mod.default;
+      if (typeof AdapterClass === "function") {
+        adapterRegistry.register(new AdapterClass());
+        console.error(`[olog] Loaded ${lang} adapter`);
+      } else {
+        console.error(`[olog] Warning: no adapter class found in @olog/lang-${lang}`);
+      }
+    } catch (err) {
+      console.error(`[olog] Warning: could not load @olog/lang-${lang}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   const result = ingestProject(projectRoot, store, adapterRegistry);
   console.error(
     `[olog] Ingestion complete in ${Date.now() - start}ms: ${result.filesProcessed} files, ${result.elementsCreated} elements, ${result.arrowsCreated} arrows`
@@ -5915,7 +6136,7 @@ try {
 var server = new McpServer15(
   { name: "olog-mcp", version: "0.0.1" },
   {
-    instructions: `This server provides a structural model (ontology log) of the TypeScript codebase at ${projectRoot}. Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_mine_equations (discover path equations in the olog graph; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: discovers domain objects from interface/type/class elements, proposes arrows from field types and extends/implements relationships, links to already-committed domain elements across sessions \u2014 use action=start/refine/commit), olog_discover_motifs (notion discovery: discovers recurring structural motifs via ego-graph extraction, shape abstraction, and frequency grouping \u2014 use action=start/refine/commit). The name and module parameters accept JavaScript regex patterns. Domain modeling workflow: (1) start a session with optional scopeRegex, (2) refine candidates by accepting/rejecting/renaming, (3) commit to persist domain elements and arrows to the olog. Subsequent sessions on broader scopes will automatically cross-link to elements committed in prior sessions.`,
+    instructions: `This server provides a structural model (ontology log) of the codebase at ${projectRoot} (languages: ${languages.join(", ")}). Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_dot (export domain graph as Graphviz DOT), olog_mine_equations (discover path equations in the olog graph; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: discovers domain objects from interface/type/class elements, proposes arrows from field types and extends/implements relationships, links to already-committed domain elements across sessions \u2014 use action=start/refine/commit), olog_discover_motifs (motif discovery: discovers recurring structural motifs via ego-graph extraction, shape abstraction, and frequency grouping \u2014 use action=start/refine/commit). The name and module parameters accept JavaScript regex patterns. Domain modeling workflow: (1) start a session with optional scopeRegex, (2) refine candidates by accepting/rejecting/renaming, (3) commit to persist domain elements and arrows to the olog. Subsequent sessions on broader scopes will automatically cross-link to elements committed in prior sessions.`,
     capabilities: { logging: {} }
   }
 );
