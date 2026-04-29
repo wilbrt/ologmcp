@@ -100,10 +100,13 @@ export function extractFromFile(
  * Programmatically walk the tree to find defn/def/ns/etc. forms.
  * Uses the enclosing list node span so the full function body is captured.
  */
-function walkForDefinitions(node: Parser.SyntaxNode, elements: RawElement[]): void {
-  if (node.type === 'list' && node.children.length >= 2) {
-    const firstChild = node.children[0];
-    const secondChild = node.children[1];
+function walkForDefinitions(node: Parser.SyntaxNode | null | undefined, elements: RawElement[]): void {
+  if (!node) return;
+  const children = node.namedChildren;
+  if (!children) return;
+  if (node.type === 'list' && children.length >= 2) {
+    const firstChild = children[0];
+    const secondChild = children[1];
 
     if (firstChild?.type === 'symbol' && secondChild?.type === 'symbol') {
       const sym = firstChild.text;
@@ -165,8 +168,8 @@ function walkForDefinitions(node: Parser.SyntaxNode, elements: RawElement[]): vo
     }
   }
 
-  for (const child of node.children) {
-    walkForDefinitions(child, elements);
+  for (const child of children) {
+    if (child) walkForDefinitions(child, elements);
   }
 }
 
@@ -179,15 +182,18 @@ const DEFINITION_FORMS = new Set([
  * Walk the tree to emit callerOf/calleeOf arrows for function calls.
  * Tracks the enclosing defn to attribute each call to its containing function.
  */
-function walkForCalls(node: Parser.SyntaxNode, arrows: RawArrow[], enclosingFn: string | null): void {
-  if (node.type === 'list' && node.children.length >= 1) {
-    const firstChild = node.children[0];
+function walkForCalls(node: Parser.SyntaxNode | null | undefined, arrows: RawArrow[], enclosingFn: string | null): void {
+  if (!node) return;
+  const children = node.namedChildren;
+  if (!children) return;
+  if (node.type === 'list' && children.length >= 1) {
+    const firstChild = children[0];
     if (firstChild?.type === 'symbol') {
       const sym = firstChild.text;
 
-      if ((sym === 'defn' || sym === 'defn-' || sym === 'defmacro') && node.children[1]?.type === 'symbol') {
-        const newFnName = node.children[1]!.text;
-        for (const child of node.children) {
+      if ((sym === 'defn' || sym === 'defn-' || sym === 'defmacro') && children[1]?.type === 'symbol') {
+        const newFnName = children[1]!.text;
+        for (const child of children) {
           walkForCalls(child, arrows, newFnName);
         }
         return;
@@ -201,7 +207,7 @@ function walkForCalls(node: Parser.SyntaxNode, arrows: RawArrow[], enclosingFn: 
     }
   }
 
-  for (const child of node.children) {
-    walkForCalls(child, arrows, enclosingFn);
+  for (const child of children) {
+    if (child) walkForCalls(child, arrows, enclosingFn);
   }
 }

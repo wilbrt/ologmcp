@@ -76,9 +76,12 @@ function extractFromFile(parser, source, queryPath) {
   return { elements, arrows };
 }
 function walkForDefinitions(node, elements) {
-  if (node.type === "list" && node.children.length >= 2) {
-    const firstChild = node.children[0];
-    const secondChild = node.children[1];
+  if (!node) return;
+  const children = node.namedChildren;
+  if (!children) return;
+  if (node.type === "list" && children.length >= 2) {
+    const firstChild = children[0];
+    const secondChild = children[1];
     if (firstChild?.type === "symbol" && secondChild?.type === "symbol") {
       const sym = firstChild.text;
       const name = secondChild.text;
@@ -137,8 +140,8 @@ function walkForDefinitions(node, elements) {
       }
     }
   }
-  for (const child of node.children) {
-    walkForDefinitions(child, elements);
+  for (const child of children) {
+    if (child) walkForDefinitions(child, elements);
   }
 }
 var DEFINITION_FORMS = /* @__PURE__ */ new Set([
@@ -156,13 +159,16 @@ var DEFINITION_FORMS = /* @__PURE__ */ new Set([
   "declare"
 ]);
 function walkForCalls(node, arrows, enclosingFn) {
-  if (node.type === "list" && node.children.length >= 1) {
-    const firstChild = node.children[0];
+  if (!node) return;
+  const children = node.namedChildren;
+  if (!children) return;
+  if (node.type === "list" && children.length >= 1) {
+    const firstChild = children[0];
     if (firstChild?.type === "symbol") {
       const sym = firstChild.text;
-      if ((sym === "defn" || sym === "defn-" || sym === "defmacro") && node.children[1]?.type === "symbol") {
-        const newFnName = node.children[1].text;
-        for (const child of node.children) {
+      if ((sym === "defn" || sym === "defn-" || sym === "defmacro") && children[1]?.type === "symbol") {
+        const newFnName = children[1].text;
+        for (const child of children) {
           walkForCalls(child, arrows, newFnName);
         }
         return;
@@ -174,8 +180,8 @@ function walkForCalls(node, arrows, enclosingFn) {
       }
     }
   }
-  for (const child of node.children) {
-    walkForCalls(child, arrows, enclosingFn);
+  for (const child of children) {
+    if (child) walkForCalls(child, arrows, enclosingFn);
   }
 }
 
