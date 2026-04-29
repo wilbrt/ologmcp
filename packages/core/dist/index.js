@@ -254,6 +254,7 @@ var OlogStore = class {
   _sessions;
   _motifSessions;
   getElemStmt;
+  getArrStmt;
   outgoingStmt;
   incomingStmt;
   insertEquationStmt;
@@ -353,6 +354,9 @@ var OlogStore = class {
     `);
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
+    );
+    this.getArrStmt = this.db.prepare(
+      "SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE id = ?"
     );
     this.outgoingStmt = this.db.prepare(
       "SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE src_id = ?"
@@ -468,6 +472,11 @@ var OlogStore = class {
     const row = this.getElemStmt.get(id);
     if (!row) return null;
     return this.rowToElem(row);
+  }
+  getArr(id) {
+    const row = this.getArrStmt.get(id);
+    if (!row) return null;
+    return this.rowToArr(row);
   }
   outgoing(srcId) {
     const rows = this.outgoingStmt.all(srcId);
@@ -2102,6 +2111,7 @@ function filePathToModule(filePath) {
   return filePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "");
 }
 function moduleToFilePath(moduleId) {
+  if (/\.\w+$/.test(moduleId)) return moduleId;
   return moduleId + ".ts";
 }
 
@@ -2134,10 +2144,41 @@ var STUB_TEMPLATES = {
   var: (name) => `export var ${name}: unknown;
 `
 };
+var CLJ_STUB_TEMPLATES = {
+  function: (name) => `(defn ${name}
+  []
+  ;; TODO: implement
+  )
+`,
+  method: (name) => `(defn ${name}
+  [this]
+  ;; TODO: implement
+  )
+`,
+  class: (name) => `(defrecord ${name} []
+  ;; TODO: add protocol implementations
+  )
+`,
+  interface: (name) => `(defprotocol ${name}
+  ;; TODO: define methods
+  )
+`,
+  type: (name) => `(defrecord ${name} [])
+`,
+  const: (name) => `(def ${name} nil)
+`,
+  var: (name) => `(def ^:dynamic *${name}* nil)
+`
+};
+function isClojureFile(path) {
+  return /\.(clj|cljs|cljc)$/.test(path);
+}
 function computeAddSymbolEdits(store, module, name, symbolKind, readFile) {
   const edits = [];
   const warnings = [];
-  const templateFn = STUB_TEMPLATES[symbolKind];
+  const clojure = isClojureFile(module);
+  const templates = clojure ? CLJ_STUB_TEMPLATES : STUB_TEMPLATES;
+  const templateFn = templates[symbolKind];
   if (!templateFn) {
     warnings.push(`Unknown symbol kind: ${symbolKind}. No stub template available.`);
     return { edits, warnings };
@@ -2156,13 +2197,14 @@ function computeAddSymbolEdits(store, module, name, symbolKind, readFile) {
       endCol: 1
     });
   } else {
-    const insertLine = findImportInsertionPoint(source);
-    const lines = source.split("\n");
-    let insertPosition = insertLine;
-    for (let i = insertLine; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line === "" || line.startsWith("//") || line.startsWith("/*")) continue;
-      break;
+    let insertLine;
+    if (clojure) {
+      const lines = source.split("\n");
+      let lastNonEmpty = lines.length - 1;
+      while (lastNonEmpty > 0 && lines[lastNonEmpty].trim() === "") lastNonEmpty--;
+      insertLine = lastNonEmpty + 1;
+    } else {
+      insertLine = findImportInsertionPoint(source);
     }
     edits.push({
       filePath: module,
@@ -2479,24 +2521,20 @@ function verifyOperation(store, op) {
 
 // src/delegate/context.ts
 function gatherMustCall(store, targetId) {
-  const incoming = store.incoming(targetId);
-  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  const outgoing = store.outgoing(targetId);
+  const callerOfArrows = outgoing.filter((a) => a.kind === "callerOf");
   const callees = [];
   for (const arrow of callerOfArrows) {
-    const callSiteOutgoing = store.outgoing(arrow.srcId);
-    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
-    if (calleeOfArrow) {
-      const calleeElem = store.getElem(calleeOfArrow.dstId);
-      if (calleeElem) {
-        callees.push({
-          id: calleeElem.id,
-          name: calleeElem.name,
-          kind: calleeElem.kind,
-          module: calleeElem.module,
-          span: calleeElem.span,
-          attrs: calleeElem.attrs
-        });
-      }
+    const callee = store.getElem(arrow.dstId);
+    if (callee) {
+      callees.push({
+        id: callee.id,
+        name: callee.name,
+        kind: callee.kind,
+        module: callee.module,
+        span: callee.span,
+        attrs: callee.attrs
+      });
     }
   }
   return callees;
@@ -2535,24 +2573,20 @@ function gatherMustImplement(store, targetId) {
 }
 function gatherUsedBy(store, targetId) {
   const incoming = store.incoming(targetId);
-  const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
   const callers = [];
   const seen = /* @__PURE__ */ new Set();
-  for (const arrow of calleeOfArrows) {
-    const callSiteOutgoing = store.outgoing(arrow.srcId);
-    const callerOfArrow = callSiteOutgoing.find((a) => a.kind === "callerOf");
-    if (callerOfArrow) {
-      const callerElem = store.getElem(callerOfArrow.dstId);
-      if (callerElem && !seen.has(callerElem.id)) {
-        seen.add(callerElem.id);
-        callers.push({
-          id: callerElem.id,
-          name: callerElem.name,
-          kind: callerElem.kind,
-          module: callerElem.module,
-          span: callerElem.span
-        });
-      }
+  for (const arrow of callerOfArrows) {
+    const caller = store.getElem(arrow.srcId);
+    if (caller && !seen.has(caller.id)) {
+      seen.add(caller.id);
+      callers.push({
+        id: caller.id,
+        name: caller.name,
+        kind: caller.kind,
+        module: caller.module,
+        span: caller.span
+      });
     }
   }
   return callers;
@@ -2748,18 +2782,11 @@ function findAnalogues(store, target, limit = 3) {
 }
 function getCalleeSet(store, elem) {
   const result = /* @__PURE__ */ new Set();
-  const incoming = store.incoming(elem.id);
-  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
-  for (const arrow of callerOfArrows) {
-    const callSiteOutgoing = store.outgoing(arrow.srcId);
-    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
-    if (calleeOfArrow) {
-      result.add(calleeOfArrow.dstId);
+  const outgoing = store.outgoing(elem.id);
+  for (const arrow of outgoing) {
+    if (arrow.kind === "callerOf" || arrow.kind === "calls") {
+      result.add(arrow.dstId);
     }
-  }
-  const directCalls = store.outgoing(elem.id).filter((a) => a.kind === "calls");
-  for (const arrow of directCalls) {
-    result.add(arrow.dstId);
   }
   return result;
 }
@@ -2847,24 +2874,8 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
   });
   const resolvedUsedBy = usedByEntries.map((entry) => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
-    const incoming = store.incoming(targetId);
-    const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
-    let callSiteSnippet = "";
-    for (const arrow of calleeOfArrows) {
-      const csOutgoing = store.outgoing(arrow.srcId);
-      const callerOfArrow = csOutgoing.find((a) => a.kind === "callerOf");
-      if (callerOfArrow?.dstId === entry.id) {
-        const csElem = store.getElem(arrow.srcId);
-        if (csElem?.span) {
-          callSiteSnippet = resolver.readContext(entryFilePath, csElem.span, 2) ?? "";
-          break;
-        }
-      }
-    }
-    return {
-      name: entry.name,
-      callSiteSnippet
-    };
+    const callSiteSnippet = entry.span ? resolver.readSpan(entryFilePath, entry.span) ?? "" : "";
+    return { name: entry.name, callSiteSnippet };
   });
   const resolvedImports = importEntries.map((imp) => {
     if (imp.sourceModule) {
@@ -2977,7 +2988,8 @@ function determineConfidence(store, targetId) {
   return "mixed";
 }
 function localModuleToFilePath(modulePath) {
-  return modulePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "") + ".ts";
+  if (/\.\w+$/.test(modulePath)) return modulePath;
+  return modulePath + ".ts";
 }
 function parseSpanSimple(span) {
   const m = span.match(/^(\d+):\d+-(\d+):\d+$/);

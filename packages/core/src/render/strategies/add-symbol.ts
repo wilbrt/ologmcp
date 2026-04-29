@@ -19,6 +19,20 @@ const STUB_TEMPLATES: Record<string, (name: string) => string> = {
   var: (name) => `export var ${name}: unknown;\n`,
 };
 
+const CLJ_STUB_TEMPLATES: Record<string, (name: string) => string> = {
+  function: (name) => `(defn ${name}\n  []\n  ;; TODO: implement\n  )\n`,
+  method: (name) => `(defn ${name}\n  [this]\n  ;; TODO: implement\n  )\n`,
+  class: (name) => `(defrecord ${name} []\n  ;; TODO: add protocol implementations\n  )\n`,
+  interface: (name) => `(defprotocol ${name}\n  ;; TODO: define methods\n  )\n`,
+  type: (name) => `(defrecord ${name} [])\n`,
+  const: (name) => `(def ${name} nil)\n`,
+  var: (name) => `(def ^:dynamic *${name}* nil)\n`,
+};
+
+function isClojureFile(path: string): boolean {
+  return /\.(clj|cljs|cljc)$/.test(path);
+}
+
 export function computeAddSymbolEdits(
   store: OlogStore,
   module: string,
@@ -29,7 +43,9 @@ export function computeAddSymbolEdits(
   const edits: SourceEdit[] = [];
   const warnings: string[] = [];
 
-  const templateFn = STUB_TEMPLATES[symbolKind];
+  const clojure = isClojureFile(module);
+  const templates = clojure ? CLJ_STUB_TEMPLATES : STUB_TEMPLATES;
+  const templateFn = templates[symbolKind];
   if (!templateFn) {
     warnings.push(`Unknown symbol kind: ${symbolKind}. No stub template available.`);
     return { edits, warnings };
@@ -37,10 +53,8 @@ export function computeAddSymbolEdits(
 
   const stubText = templateFn(name);
 
-  // Find the insertion point
   const source = readFile(module);
   if (source === null) {
-    // File doesn't exist yet — create it
     edits.push({
       filePath: module,
       label: `create file and add symbol: ${name}`,
@@ -52,17 +66,16 @@ export function computeAddSymbolEdits(
       endCol: 1,
     });
   } else {
-    const insertLine = findImportInsertionPoint(source);
-    // Insert after imports, at the start of the line after them
-    // Find where to insert: after imports section + blank line
-    const lines = source.split('\n');
-    let insertPosition = insertLine;
-
-    // Skip past the imports section to find a good insertion point
-    for (let i = insertLine; i < lines.length; i++) {
-      const line = lines[i]!.trim();
-      if (line === '' || line.startsWith('//') || line.startsWith('/*')) continue;
-      break;
+    // For Clojure, append after the last non-empty line to avoid inserting inside the ns form.
+    // For TS/JS, insert after the import block.
+    let insertLine: number;
+    if (clojure) {
+      const lines = source.split('\n');
+      let lastNonEmpty = lines.length - 1;
+      while (lastNonEmpty > 0 && lines[lastNonEmpty]!.trim() === '') lastNonEmpty--;
+      insertLine = lastNonEmpty + 1;
+    } else {
+      insertLine = findImportInsertionPoint(source);
     }
 
     edits.push({

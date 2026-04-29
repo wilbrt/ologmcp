@@ -89,6 +89,7 @@ export class OlogStore {
   private readonly _sessions: DomainSessionStore;
   private readonly _motifSessions: MotifSessionStore;
   private readonly getElemStmt: Database.Statement;
+  private readonly getArrStmt: Database.Statement;
   private readonly outgoingStmt: Database.Statement;
   private readonly incomingStmt: Database.Statement;
   private readonly insertEquationStmt: Database.Statement;
@@ -203,6 +204,9 @@ export class OlogStore {
 
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
+    );
+    this.getArrStmt = this.db.prepare(
+      "SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE id = ?"
     );
     this.outgoingStmt = this.db.prepare(
       "SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE src_id = ?"
@@ -340,6 +344,12 @@ export class OlogStore {
     const row = this.getElemStmt.get(id) as ElemRow | undefined;
     if (!row) return null;
     return this.rowToElem(row);
+  }
+
+  getArr(id: string): OlogArr | null {
+    const row = this.getArrStmt.get(id) as ArrRow | undefined;
+    if (!row) return null;
+    return this.rowToArr(row);
   }
 
   outgoing(srcId: string): OlogArr[] {

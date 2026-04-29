@@ -11,7 +11,7 @@ export function registerOlogReindex(
     'olog_reindex',
     {
       description:
-        'Force a full re-ingestion of the TypeScript codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.',
+        'Force a full re-ingestion of the codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.',
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: false,

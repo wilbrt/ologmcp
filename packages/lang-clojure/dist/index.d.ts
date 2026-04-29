@@ -28,11 +28,6 @@ declare class ClojureAdapter implements LanguageAdapter {
 
 /**
  * Extract semantic elements and arrows from Clojure source code.
- *
- * Strategy: Since tree-sitter-clojure has limited query support for
- * capturing defn/def/defmacro etc. by name, we use a combination of
- * .scm queries for structural patterns and programmatic extraction
- * as a fallback.
  */
 declare function extractFromFile(parser: Parser, source: string, queryPath: string): {
     elements: RawElement[];

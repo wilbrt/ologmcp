@@ -259,6 +259,7 @@ permission:
     "*": deny
   bash:
     "*": deny
+    "git *": allow
   webfetch: deny
   task:
     "*": deny
@@ -278,21 +279,25 @@ subagent.
 These rules override everything else. They apply on every turn.
 
 1. **Never use read, write, glob, or grep tools on source files.** You have
-   access to those tools but they are restricted to \`.plans/\`. If you catch
-   yourself about to read a source file, stop and use the Task tool to invoke
-   \`@explore\` instead.
+   access to those tools but they are restricted to \`.plans/\`. Use \`git log\`,
+   \`git diff\`, or \`git show\` for historical context. Use \`@explore\` via Task
+   for live structural questions.
 
 2. **Invoke subagents via the Task tool.** \`@explore\` and \`@edit\` are NOT
    tools in your tool list \u2014 they are subagents. You reach them by calling
    the **Task tool** with the agent name \`"explore"\` or \`"edit"\`.
 
-3. **Do not read source files to infer structure.** Every structural fact must
-   come from an \`@explore\` Task result.
+3. **Never commit a plan without validation.** Call \`olog_plan\` then
+   \`olog_validate\` before invoking \`@edit\`. Validation checks the projected
+   post-plan state \u2014 cross-operation conflicts (e.g. addArrow whose src is
+   created by an earlier addSymbol) are caught correctly.
 
-4. **Never commit a plan without validation.** Call \`olog_plan\` then
-   \`olog_validate\` before invoking \`@edit\`.
+4. **Only write files to \`.plans/\`.** Naming: \`.plans/YYYY-MM-DD-<slug>.md\`.
 
-5. **Only write files to \`.plans/\`.** Naming: \`.plans/YYYY-MM-DD-<slug>.md\`.
+5. **Never write code.** You are a planning agent, not an implementation agent.
+   Do not write, sketch, or suggest implementation code \u2014 not in plan files, not
+   in messages to the user, not in tasks to \`@edit\`. The edit agent works from
+   the DelegationBrief only.
 </critical_rules>
 
 <subagent_invocation>
@@ -303,7 +308,12 @@ These rules override everything else. They apply on every turn.
 
 **\`edit\`** \u2014 for source file changes
 - Invoke with the Task tool, agent name \`"edit"\`
-- Pass the full DelegationBrief JSON returned by \`olog_delegate\` as the task
+- Pass the raw DelegationBrief JSON returned by \`olog_delegate\` \u2014 nothing else
+- **Do NOT add code, pseudocode, implementation notes, or analysis to the task.**
+  The brief is self-contained. Any extra content you add will override the
+  brief's analogues and acceptance criteria, producing worse results.
+- The brief includes \`targetFileContent\` (up to 500 lines) and \`lineRange\`;
+  no separate prefetch call is needed unless the file exceeds that limit
 </subagent_invocation>
 
 <planning_workflow>
@@ -311,10 +321,12 @@ These rules override everything else. They apply on every turn.
 **Phase 1 \u2014 Understand**
 Use the \`question\` tool to gather requirements. Ask all clarifying questions
 in a single call: goal, scope, known constraints, olog domain concept relevance.
+Use \`git log --oneline -20\` to understand recent activity before asking.
 
 **Phase 2 \u2014 Explore**
-For each structural question, invoke \`@explore\` via Task. Synthesise results
-in plain language \u2014 do not paste raw output to the user.
+For each structural question, invoke \`@explore\` via Task. For quick ID lookups
+you may call \`olog_query\` or \`olog_inspect\` directly. Synthesise results in
+plain language \u2014 do not paste raw output to the user.
 
 **Phase 3 \u2014 Draft the plan**
 Write to \`.plans/YYYY-MM-DD-<slug>.md\`:
@@ -330,6 +342,8 @@ Write to \`.plans/YYYY-MM-DD-<slug>.md\`:
 - move \`<element-id>\` \u2192 module \`<new-module>\`
 - addSymbol \`<module>\` \`<name>\` kind \`<kind>\`
 - removeSymbol \`<element-id>\`
+- addArrow \`<kind>\` \`<src-id>\` \u2192 \`<dst-id>\`
+- removeArrow \`<arrow-id>\`
 
 ## Invariants to preserve
 <Constraints from the olog that touch affected elements>
@@ -344,6 +358,7 @@ Write to \`.plans/YYYY-MM-DD-<slug>.md\`:
 [ ] olog_plan created
 [ ] olog_validate passed
 [ ] Slices delegated
+[ ] olog_apply run
 [ ] olog_reindex run
 \`\`\`
 
@@ -357,22 +372,29 @@ judgment calls. Never weaken a constraint to pass validation.
 **Phase 5 \u2014 Execute**
 For each slice:
 1. Call \`olog_delegate\` for the slice's target element.
-2. Invoke \`@explore\` via Task with \`PREFETCH: <target.filePath>\`.
-3. Invoke \`@edit\` via Task with the DelegationBrief JSON and prefetched files.
-4. Mark the slice done in the plan file.
-5. Use \`question\` to ask whether to proceed to the next slice.
+2. Invoke \`@edit\` via Task. The task body must be **only** the raw JSON from
+   \`olog_delegate\` \u2014 no preamble, no code, no extra instructions. If the target
+   file exceeds ~500 lines and the relevant region is outside the brief's
+   \`targetFileContent\`, prepend a single \`PREFETCH: <filepath>\` line and let
+   \`@explore\` handle it first.
+3. Mark the slice done in the plan file.
+4. Use \`question\` to ask whether to proceed to the next slice.
 
-After all slices: note that \`olog_reindex\` should be run to refresh the model.
+After all slices:
+- Call \`olog_apply\` with \`render=false\` to apply the plan's olog operations
+  (arrows, renames, etc.) to the DB.
+- Call \`olog_reindex\` to re-derive the structural model from the updated source.
 </planning_workflow>
 
 <olog_tool_discipline>
 Direct olog MCP tools available:
 - \`olog_plan\` \u2014 create the structural plan
-- \`olog_validate\` \u2014 check it against constraints
+- \`olog_validate\` \u2014 check it against projected post-plan state
+- \`olog_render\` \u2014 preview source edits a plan would produce (optional)
+- \`olog_apply\` \u2014 apply plan operations to the olog DB (use render=false after @edit)
 - \`olog_delegate\` \u2014 assemble a DelegationBrief for \`@edit\`
-
-All structural queries go through \`@explore\` via Task. Do not call
-\`olog_query\` or \`olog_inspect\` directly.
+- \`olog_query\` / \`olog_inspect\` \u2014 quick structural lookups (no subagent needed)
+- \`olog_reindex\` \u2014 refresh the structural model after source changes
 </olog_tool_discipline>
 `;
     AGENT_EXPLORE = `---
@@ -433,8 +455,11 @@ If the task does NOT start with \`PREFETCH:\`, answer a structural question:
 
 ### Mode B \u2014 File prefetch
 
-If the task starts with \`PREFETCH: <filepath>\`, read the file and return its
-full hashline-annotated content verbatim so the edit agent can use the refs.
+Use this only when the planning agent explicitly needs file content beyond what
+\`olog_delegate\` already provides in \`targetFileContent\` (e.g. the target file
+exceeds 500 lines and the relevant region is outside the brief's excerpt).
+
+If the task starts with \`PREFETCH: <filepath>\`:
 
 1. Call \`read\` on the specified file path.
 2. Return the output **verbatim** \u2014 do not summarise or reformat.
@@ -454,7 +479,8 @@ full hashline-annotated content verbatim so the edit agent can use the refs.
 description: >
   Source editor. Receives a fully-resolved DelegationBrief JSON from
   olog_delegate and writes the corresponding source changes. All context is in
-  the brief \u2014 no olog access needed. Verifies changes with tsc after editing.
+  the brief \u2014 no olog access needed. Verifies changes with tsc or a build
+  command after editing.
 mode: subagent
 hidden: true
 steps: 20
@@ -465,47 +491,86 @@ permission:
     "npx tsc --noEmit *": allow
     "npx vitest run *": allow
     "npm run build *": allow
+    "clj -M *": allow
+    "clojure *": allow
   webfetch: deny
   task:
     "*": deny
 ---
 # Edit Agent
 
-You receive a task containing a \`DelegationBrief\` JSON and, optionally,
-prefetched file content. Write or modify source code to satisfy the brief.
+You receive a task containing a \`DelegationBrief\` JSON. Write or modify source
+code to satisfy the brief. All necessary context is in the brief itself.
 
 ---
 
-## IMPORTANT: Using prefetched file content
+## Reading the brief
 
-Your task may include a \`<prefetched_files>\` block. **If a file appears in
-\`<prefetched_files>\`, do NOT call \`read\` on it.** Extract the \`REV\` token and
-\`#HL\` refs directly from the prefetched block. Only call \`read\` for files that
-were NOT prefetched, or after an edit makes existing refs stale.
+| Field | What it contains |
+|---|---|
+| \`target.filePath\` | File to edit |
+| \`target.lineRange\` | Start/end lines of the declaration to rewrite |
+| \`targetFileContent\` | Up to 500 lines of the target file \u2014 read this before calling \`read\` |
+| \`analogues\` | Complete implementations of similar functions \u2014 match their style |
+| \`mustCall\` | Functions the implementation must call (with signatures and body snippets) |
+| \`mustImplement\` | Interfaces the implementation must satisfy |
+| \`importsInTargetFile\` | Existing imports \u2014 prefer these before adding new ones |
+| \`acceptanceCriteria\` | Hard constraints every item must be satisfied |
+
+If \`targetFileContent\` covers the region you need to edit, use it directly and
+skip calling \`read\`. Only call \`read\` if you need lines beyond what the brief
+provides.
+
+---
+
+## Prime directive: reuse and simplicity
+
+Before writing a single line, scan \`targetFileContent\`, \`analogues\`, and
+\`mustCall\` body snippets for code that already does what you need. Reuse it.
+
+- **Copy the analogue pattern exactly** unless the acceptance criteria require
+  a specific deviation. If an analogue solves the same problem in 5 lines, your
+  implementation should also be ~5 lines \u2014 not a cleaner 15-line version.
+- **Prefer calling \`mustCall\` functions** over reimplementing their logic inline.
+- **Do not introduce helpers, abstractions, or utilities** that don't exist in
+  the analogues. Three lines of obvious code beats a named helper.
+- **Do not add error handling, logging, or validation** beyond what the analogues
+  show. If the analogues don't guard against nil, neither should you.
+- **Do not import new dependencies** if the existing imports already provide
+  what you need.
+
+When in doubt, ask: *does the simplest analogue-matching implementation satisfy
+all acceptance criteria?* If yes, ship that.
 
 ---
 
 ## Brief rules
 
-1. **Follow analogues.** The \`analogues\` field contains complete implementations
-   of similar functions. Match their style: naming, error handling, return patterns.
+1. **Follow analogues precisely.** Match their style: naming, error handling,
+   return patterns, line count. They are the ground truth for this codebase.
 
 2. **Call every function in \`mustCall\`.** These are mandatory.
 
 3. **Satisfy every interface in \`mustImplement\`.** Implement every property and
    method \u2014 do not omit any.
 
-4. **Preserve existing code.** Keep signatures exactly.
+4. **Preserve signatures exactly.** Do not rename, move, or delete any symbols.
 
 5. **Use imports from \`importsInTargetFile\`** before adding new ones.
+   For non-TypeScript targets (Clojure, etc.) the \`importStatement\` fields in
+   \`mustCall\` use TS syntax \u2014 ignore them and use the project's actual require
+   conventions instead.
 
-6. **No structural changes.** Do not rename, move, or delete any symbols.
+6. **Acceptance criteria are hard constraints.** Every item must be satisfied.
 
-7. **Acceptance criteria are hard constraints.** Every item must be satisfied.
+---
 
-8. **Verify after editing.** Run \`npx tsc --noEmit\` after all edits.
+## Verification
 
-9. **Keep it simple.** Match the patterns in the analogues exactly where possible.
+After editing, verify based on the target language:
+- **TypeScript/JavaScript**: \`npx tsc --noEmit\`
+- **Clojure**: \`clj -M --main clojure.main -e "(compile 'ns.name)"\` or equivalent
+- If no verifier is available, state that explicitly
 
 ---
 
@@ -513,7 +578,7 @@ were NOT prefetched, or after an edit makes existing refs stale.
 
 After editing, confirm:
 - Which files were changed and what was done in each
-- Whether \`tsc --noEmit\` passed
+- Verification result (pass / fail / not available)
 - Any acceptance criteria you could not fully satisfy, with explanation
 `;
   }
@@ -786,6 +851,7 @@ var OlogStore = class {
   _sessions;
   _motifSessions;
   getElemStmt;
+  getArrStmt;
   outgoingStmt;
   incomingStmt;
   insertEquationStmt;
@@ -885,6 +951,9 @@ var OlogStore = class {
     `);
     this.getElemStmt = this.db.prepare(
       "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id = ?"
+    );
+    this.getArrStmt = this.db.prepare(
+      "SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE id = ?"
     );
     this.outgoingStmt = this.db.prepare(
       "SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE src_id = ?"
@@ -1000,6 +1069,11 @@ var OlogStore = class {
     const row = this.getElemStmt.get(id);
     if (!row) return null;
     return this.rowToElem(row);
+  }
+  getArr(id) {
+    const row = this.getArrStmt.get(id);
+    if (!row) return null;
+    return this.rowToArr(row);
   }
   outgoing(srcId) {
     const rows = this.outgoingStmt.all(srcId);
@@ -2599,6 +2673,7 @@ function filePathToModule(filePath) {
   return filePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "");
 }
 function moduleToFilePath(moduleId) {
+  if (/\.\w+$/.test(moduleId)) return moduleId;
   return moduleId + ".ts";
 }
 var STUB_TEMPLATES = {
@@ -2629,10 +2704,41 @@ var STUB_TEMPLATES = {
   var: (name) => `export var ${name}: unknown;
 `
 };
+var CLJ_STUB_TEMPLATES = {
+  function: (name) => `(defn ${name}
+  []
+  ;; TODO: implement
+  )
+`,
+  method: (name) => `(defn ${name}
+  [this]
+  ;; TODO: implement
+  )
+`,
+  class: (name) => `(defrecord ${name} []
+  ;; TODO: add protocol implementations
+  )
+`,
+  interface: (name) => `(defprotocol ${name}
+  ;; TODO: define methods
+  )
+`,
+  type: (name) => `(defrecord ${name} [])
+`,
+  const: (name) => `(def ${name} nil)
+`,
+  var: (name) => `(def ^:dynamic *${name}* nil)
+`
+};
+function isClojureFile(path) {
+  return /\.(clj|cljs|cljc)$/.test(path);
+}
 function computeAddSymbolEdits(store2, module, name, symbolKind, readFile) {
   const edits = [];
   const warnings = [];
-  const templateFn = STUB_TEMPLATES[symbolKind];
+  const clojure = isClojureFile(module);
+  const templates = clojure ? CLJ_STUB_TEMPLATES : STUB_TEMPLATES;
+  const templateFn = templates[symbolKind];
   if (!templateFn) {
     warnings.push(`Unknown symbol kind: ${symbolKind}. No stub template available.`);
     return { edits, warnings };
@@ -2651,13 +2757,14 @@ function computeAddSymbolEdits(store2, module, name, symbolKind, readFile) {
       endCol: 1
     });
   } else {
-    const insertLine = findImportInsertionPoint(source);
-    const lines = source.split("\n");
-    let insertPosition = insertLine;
-    for (let i = insertLine; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line === "" || line.startsWith("//") || line.startsWith("/*")) continue;
-      break;
+    let insertLine;
+    if (clojure) {
+      const lines = source.split("\n");
+      let lastNonEmpty = lines.length - 1;
+      while (lastNonEmpty > 0 && lines[lastNonEmpty].trim() === "") lastNonEmpty--;
+      insertLine = lastNonEmpty + 1;
+    } else {
+      insertLine = findImportInsertionPoint(source);
     }
     edits.push({
       filePath: module,
@@ -2886,24 +2993,20 @@ function renderPlan(store2, operations, projectRoot2) {
   };
 }
 function gatherMustCall(store2, targetId) {
-  const incoming = store2.incoming(targetId);
-  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
+  const outgoing = store2.outgoing(targetId);
+  const callerOfArrows = outgoing.filter((a) => a.kind === "callerOf");
   const callees = [];
   for (const arrow of callerOfArrows) {
-    const callSiteOutgoing = store2.outgoing(arrow.srcId);
-    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
-    if (calleeOfArrow) {
-      const calleeElem = store2.getElem(calleeOfArrow.dstId);
-      if (calleeElem) {
-        callees.push({
-          id: calleeElem.id,
-          name: calleeElem.name,
-          kind: calleeElem.kind,
-          module: calleeElem.module,
-          span: calleeElem.span,
-          attrs: calleeElem.attrs
-        });
-      }
+    const callee = store2.getElem(arrow.dstId);
+    if (callee) {
+      callees.push({
+        id: callee.id,
+        name: callee.name,
+        kind: callee.kind,
+        module: callee.module,
+        span: callee.span,
+        attrs: callee.attrs
+      });
     }
   }
   return callees;
@@ -2942,24 +3045,20 @@ function gatherMustImplement(store2, targetId) {
 }
 function gatherUsedBy(store2, targetId) {
   const incoming = store2.incoming(targetId);
-  const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
+  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
   const callers = [];
   const seen = /* @__PURE__ */ new Set();
-  for (const arrow of calleeOfArrows) {
-    const callSiteOutgoing = store2.outgoing(arrow.srcId);
-    const callerOfArrow = callSiteOutgoing.find((a) => a.kind === "callerOf");
-    if (callerOfArrow) {
-      const callerElem = store2.getElem(callerOfArrow.dstId);
-      if (callerElem && !seen.has(callerElem.id)) {
-        seen.add(callerElem.id);
-        callers.push({
-          id: callerElem.id,
-          name: callerElem.name,
-          kind: callerElem.kind,
-          module: callerElem.module,
-          span: callerElem.span
-        });
-      }
+  for (const arrow of callerOfArrows) {
+    const caller = store2.getElem(arrow.srcId);
+    if (caller && !seen.has(caller.id)) {
+      seen.add(caller.id);
+      callers.push({
+        id: caller.id,
+        name: caller.name,
+        kind: caller.kind,
+        module: caller.module,
+        span: caller.span
+      });
     }
   }
   return callers;
@@ -3149,18 +3248,11 @@ function findAnalogues(store2, target, limit = 3) {
 }
 function getCalleeSet(store2, elem) {
   const result = /* @__PURE__ */ new Set();
-  const incoming = store2.incoming(elem.id);
-  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
-  for (const arrow of callerOfArrows) {
-    const callSiteOutgoing = store2.outgoing(arrow.srcId);
-    const calleeOfArrow = callSiteOutgoing.find((a) => a.kind === "calleeOf");
-    if (calleeOfArrow) {
-      result.add(calleeOfArrow.dstId);
+  const outgoing = store2.outgoing(elem.id);
+  for (const arrow of outgoing) {
+    if (arrow.kind === "callerOf" || arrow.kind === "calls") {
+      result.add(arrow.dstId);
     }
-  }
-  const directCalls = store2.outgoing(elem.id).filter((a) => a.kind === "calls");
-  for (const arrow of directCalls) {
-    result.add(arrow.dstId);
   }
   return result;
 }
@@ -3246,24 +3338,8 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
   });
   const resolvedUsedBy = usedByEntries.map((entry) => {
     const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
-    const incoming = store2.incoming(targetId);
-    const calleeOfArrows = incoming.filter((a) => a.kind === "calleeOf");
-    let callSiteSnippet = "";
-    for (const arrow of calleeOfArrows) {
-      const csOutgoing = store2.outgoing(arrow.srcId);
-      const callerOfArrow = csOutgoing.find((a) => a.kind === "callerOf");
-      if (callerOfArrow?.dstId === entry.id) {
-        const csElem = store2.getElem(arrow.srcId);
-        if (csElem?.span) {
-          callSiteSnippet = resolver.readContext(entryFilePath, csElem.span, 2) ?? "";
-          break;
-        }
-      }
-    }
-    return {
-      name: entry.name,
-      callSiteSnippet
-    };
+    const callSiteSnippet = entry.span ? resolver.readSpan(entryFilePath, entry.span) ?? "" : "";
+    return { name: entry.name, callSiteSnippet };
   });
   const resolvedImports = importEntries.map((imp) => {
     if (imp.sourceModule) {
@@ -3376,7 +3452,8 @@ function determineConfidence(store2, targetId) {
   return "mixed";
 }
 function localModuleToFilePath(modulePath) {
-  return modulePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "") + ".ts";
+  if (/\.\w+$/.test(modulePath)) return modulePath;
+  return modulePath + ".ts";
 }
 function parseSpanSimple(span) {
   const m = span.match(/^(\d+):\d+-(\d+):\d+$/);
@@ -4443,7 +4520,7 @@ function registerOlogReindex(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_reindex",
     {
-      description: "Force a full re-ingestion of the TypeScript codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.",
+      description: "Force a full re-ingestion of the codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.",
       inputSchema: z4.object({}),
       annotations: {
         readOnlyHint: false,
@@ -4822,11 +4899,83 @@ import { z as z7 } from "zod";
 function escapeRegex3(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+var ProjectedState = class {
+  constructor(store2, ops) {
+    this.store = store2;
+    for (const op of ops) {
+      if (op.kind === "addSymbol") {
+        const id = `projected:${op.module}:${op.symbolKind}:${op.name}`;
+        this.addedElems.set(id, { id, kind: op.symbolKind, name: op.name, module: op.module });
+      } else if (op.kind === "removeSymbol") {
+        this.removedElemIds.add(op.target);
+      } else if (op.kind === "rename") {
+        this.renames.set(op.target, op.newName);
+      } else if (op.kind === "move") {
+        this.moves.set(op.target, op.newModule);
+      } else if (op.kind === "addArrow") {
+        this.addedArrIds.add(`${op.src}:${op.arrowKind}:${op.dst}`);
+      } else if (op.kind === "removeArrow") {
+        this.removedArrIds.add(op.arrowId);
+      }
+    }
+  }
+  store;
+  addedElems = /* @__PURE__ */ new Map();
+  removedElemIds = /* @__PURE__ */ new Set();
+  renames = /* @__PURE__ */ new Map();
+  moves = /* @__PURE__ */ new Map();
+  addedArrIds = /* @__PURE__ */ new Set();
+  removedArrIds = /* @__PURE__ */ new Set();
+  elemExists(id) {
+    if (this.removedElemIds.has(id)) return false;
+    if (this.addedElems.has(id)) return true;
+    return this.store.getElem(id) !== null;
+  }
+  arrowExists(id) {
+    if (this.removedArrIds.has(id)) return false;
+    if (this.addedArrIds.has(id)) return true;
+    return this.store.getArr(id) !== null;
+  }
+  /** Returns IDs of arrows that will still reference elemId after the plan runs. */
+  survivingArrowsFor(elemId2) {
+    const fromStore = [
+      ...this.store.outgoing(elemId2),
+      ...this.store.incoming(elemId2)
+    ].filter((a) => !this.removedArrIds.has(a.id)).map((a) => a.id);
+    const fromPlan = [...this.addedArrIds].filter((arrId) => {
+      const parts = arrId.split(":");
+      return parts[0] === elemId2 || parts[parts.length - 1] === elemId2;
+    });
+    return [.../* @__PURE__ */ new Set([...fromStore, ...fromPlan])];
+  }
+  /**
+   * Returns true if any element OTHER than excludeId will have the given name
+   * in the given module after the plan runs.
+   */
+  nameConflicts(name, module, excludeId) {
+    const stored = this.store.queryElements({
+      nameRegex: `^${escapeRegex3(name)}$`,
+      limit: 500
+    });
+    for (const e of stored) {
+      if (e.id === excludeId) continue;
+      if (this.removedElemIds.has(e.id)) continue;
+      const effectiveName = this.renames.get(e.id) ?? e.name;
+      const effectiveModule = this.moves.get(e.id) ?? e.module;
+      if (effectiveName === name && effectiveModule === module) return true;
+    }
+    for (const added of this.addedElems.values()) {
+      if (added.id === excludeId) continue;
+      if (added.name === name && added.module === module) return true;
+    }
+    return false;
+  }
+};
 function registerOlogValidate(server2, store2) {
   server2.registerTool(
     "olog_validate",
     {
-      description: "Validate a plan against constraints. Returns {ok: true, plan} on success, or {ok: false, violations} on failure. Checks name uniqueness, referential integrity, path equations, and integrity constraints.",
+      description: "Validate a plan against constraints. Returns {ok: true, plan} on success, or {ok: false, violations} on failure. Checks name uniqueness, referential integrity, path equations, and integrity constraints. All checks operate on the projected post-plan state, not the current store.",
       inputSchema: z7.object({
         planHash: z7.string().describe("Hash of the plan to validate (as returned by olog_plan)")
       }),
@@ -4847,46 +4996,86 @@ function registerOlogValidate(server2, store2) {
           };
         }
         const violations = [];
-        for (const op of plan.operations) {
+        const ops = plan.operations;
+        const projected = new ProjectedState(store2, ops);
+        for (const op of ops) {
           if (op.kind === "rename") {
             const existing = store2.getElem(op.target);
             if (existing) {
-              const candidates = store2.queryElements({
-                nameRegex: `^${escapeRegex3(op.newName)}$`,
-                limit: 100
-              });
-              const conflicting = candidates.filter(
-                (e) => e.id !== op.target && e.name === op.newName && e.module === existing.module
-              );
-              if (conflicting.length > 0) {
+              const effectiveModule = projected["moves"].get(op.target) ?? existing.module;
+              if (projected.nameConflicts(op.newName, effectiveModule, op.target)) {
                 violations.push({
                   id: crypto.randomUUID(),
                   kind: "uniqueness",
-                  humanMessage: `Rename would create duplicate: "${op.newName}" already exists in module "${existing.module ?? "(root)"}"`,
-                  involved: [op.target, ...conflicting.map((e) => e.id)]
+                  humanMessage: `rename: "${op.newName}" would conflict with an existing element in module "${effectiveModule ?? "(root)"}"`,
+                  involved: [op.target]
                 });
               }
             }
           }
-        }
-        for (const op of plan.operations) {
+          if (op.kind === "move") {
+            if (!projected.elemExists(op.target)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `move: element not found: "${op.target}"`,
+                involved: [op.target]
+              });
+            }
+          }
+          if (op.kind === "addSymbol") {
+            if (projected.nameConflicts(op.name, op.module, `projected:${op.module}:${op.symbolKind}:${op.name}`)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "uniqueness",
+                humanMessage: `addSymbol: "${op.name}" (${op.symbolKind}) would conflict with an existing element in "${op.module}"`,
+                involved: []
+              });
+            }
+          }
           if (op.kind === "removeSymbol") {
-            const outgoing = store2.outgoing(op.target);
-            const incoming = store2.incoming(op.target);
-            const allArrows = [...outgoing, ...incoming];
-            if (allArrows.length > 0) {
+            const surviving = projected.survivingArrowsFor(op.target);
+            if (surviving.length > 0) {
               violations.push({
                 id: crypto.randomUUID(),
                 kind: "referential",
-                humanMessage: `Removing element "${op.target}" would orphan ${allArrows.length} arrow(s)`,
-                involved: [op.target, ...allArrows.map((a) => a.id)]
+                humanMessage: `removeSymbol: "${op.target}" would still have ${surviving.length} arrow(s) after the plan runs`,
+                involved: [op.target, ...surviving]
+              });
+            }
+          }
+          if (op.kind === "addArrow") {
+            if (!projected.elemExists(op.src)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `addArrow: source element not found: "${op.src}"`,
+                involved: [op.src]
+              });
+            }
+            if (!projected.elemExists(op.dst)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `addArrow: destination element not found: "${op.dst}"`,
+                involved: [op.dst]
+              });
+            }
+          }
+          if (op.kind === "removeArrow") {
+            if (!projected.arrowExists(op.arrowId)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `removeArrow: arrow not found: "${op.arrowId}"`,
+                involved: [op.arrowId]
               });
             }
           }
         }
-        const equationResult = evaluatePathEquations(store2, plan.operations);
+        const equationResult = evaluatePathEquations(store2, ops);
         violations.push(...equationResult.violations);
-        const constraintResult = evaluateConstraints(store2, plan.operations);
+        const constraintResult = evaluateConstraints(store2, ops);
         violations.push(...constraintResult.violations);
         if (violations.length === 0) {
           return {
@@ -6102,17 +6291,19 @@ var dbPath = join5(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 var start = Date.now();
+var languages = [];
 try {
   const adapterRegistry = new AdapterRegistry();
   setDefaultRegistry(adapterRegistry);
   const rawLanguages = process.env.OLOG_LANGUAGES;
-  const languages2 = rawLanguages ? rawLanguages.split(",").map((s) => s.trim()).filter(Boolean) : detectLanguages(projectRoot);
-  for (const lang of languages2) {
+  languages = rawLanguages ? rawLanguages.split(",").map((s) => s.trim()).filter(Boolean) : detectLanguages(projectRoot);
+  for (const lang of languages) {
     try {
       const mod = await import(`@olog/lang-${lang}`);
       const className = ADAPTER_CLASS[lang];
       const AdapterClass = className ? mod[className] : mod.default;
       if (typeof AdapterClass === "function") {
+        if (typeof mod.init === "function") await mod.init();
         adapterRegistry.register(new AdapterClass());
         console.error(`[olog] Loaded ${lang} adapter`);
       } else {

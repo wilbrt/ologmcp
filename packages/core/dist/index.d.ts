@@ -592,6 +592,7 @@ declare class OlogStore {
     private readonly _sessions;
     private readonly _motifSessions;
     private readonly getElemStmt;
+    private readonly getArrStmt;
     private readonly outgoingStmt;
     private readonly incomingStmt;
     private readonly insertEquationStmt;
@@ -613,6 +614,7 @@ declare class OlogStore {
     isFresh(head: string): boolean;
     ingestFull(elems: ElemRow[], arrs: ArrRow[], sha: string): number;
     getElem(id: string): OlogElem | null;
+    getArr(id: string): OlogArr | null;
     outgoing(srcId: string): OlogArr[];
     incoming(dstId: string): OlogArr[];
     queryElements(opts: {

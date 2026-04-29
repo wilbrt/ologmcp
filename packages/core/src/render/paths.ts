@@ -26,11 +26,12 @@ export function filePathToModule(filePath: string): string {
 }
 
 /**
- * Given a module identifier like "src/tools/olog-query", produce a
- * likely file path by appending ".ts". This is a heuristic — the
- * actual extension may differ.
+ * Given a module identifier, produce a likely file path.
+ * If the identifier already has an extension, return it unchanged.
+ * Otherwise append ".ts" as a heuristic for TypeScript projects.
  */
 export function moduleToFilePath(moduleId: string): string {
+  if (/\.\w+$/.test(moduleId)) return moduleId;
   return moduleId + '.ts';
 }
 

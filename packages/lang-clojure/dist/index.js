@@ -42,15 +42,18 @@ function extractFromFile(parser, source, queryPath) {
       };
       if (first("function.name")) {
         const n = first("function.name").node;
-        elements.push({ kind: "function", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+        const spanNode = n.parent ?? n;
+        elements.push({ kind: "function", name: n.text, module: "", span: formatSpan(spanNode), attrs: {} });
       }
       if (first("namespace.name")) {
         const n = first("namespace.name").node;
-        elements.push({ kind: "namespace", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+        const spanNode = n.parent ?? n;
+        elements.push({ kind: "namespace", name: n.text, module: "", span: formatSpan(spanNode), attrs: {} });
       }
       if (first("variable.name")) {
         const n = first("variable.name").node;
-        elements.push({ kind: "const", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+        const spanNode = n.parent ?? n;
+        elements.push({ kind: "const", name: n.text, module: "", span: formatSpan(spanNode), attrs: {} });
       }
       if (first("import.source")) {
         const n = first("import.source").node;
@@ -66,6 +69,7 @@ function extractFromFile(parser, source, queryPath) {
     }
   }
   walkForDefinitions(tree.rootNode, elements);
+  walkForCalls(tree.rootNode, arrows, null);
   if ("delete" in tree && typeof tree.delete === "function") {
     tree.delete();
   }
@@ -80,54 +84,98 @@ function walkForDefinitions(node, elements) {
       const name = secondChild.text;
       switch (sym) {
         case "defn":
-        case "defn-":
+        case "defn-": {
           const existingFn = elements.find((e) => e.name === name && e.kind === "function");
           if (!existingFn) {
-            elements.push({ kind: "function", name, module: "", span: formatSpan(secondChild), attrs: {} });
+            elements.push({ kind: "function", name, module: "", span: formatSpan(node), attrs: {} });
           }
           break;
-        case "defmacro":
+        }
+        case "defmacro": {
           const existingMacro = elements.find((e) => e.name === name && e.kind === "function");
           if (!existingMacro) {
-            elements.push({ kind: "function", name, module: "", span: formatSpan(secondChild), attrs: { macro: true } });
+            elements.push({ kind: "function", name, module: "", span: formatSpan(node), attrs: { macro: true } });
           }
           break;
-        case "def":
+        }
+        case "def": {
           const existingVar = elements.find((e) => e.name === name && e.kind === "const");
           if (!existingVar) {
-            elements.push({ kind: "const", name, module: "", span: formatSpan(secondChild), attrs: {} });
+            elements.push({ kind: "const", name, module: "", span: formatSpan(node), attrs: {} });
           }
           break;
-        case "defmethod":
+        }
+        case "defmethod": {
           const existingMethod = elements.find((e) => e.name === name && e.kind === "method");
           if (!existingMethod) {
-            elements.push({ kind: "method", name, module: "", span: formatSpan(secondChild), attrs: {} });
+            elements.push({ kind: "method", name, module: "", span: formatSpan(node), attrs: {} });
           }
           break;
-        case "ns":
+        }
+        case "ns": {
           const existingNs = elements.find((e) => e.name === name && e.kind === "namespace");
           if (!existingNs) {
-            elements.push({ kind: "namespace", name, module: "", span: formatSpan(secondChild), attrs: {} });
+            elements.push({ kind: "namespace", name, module: "", span: formatSpan(node), attrs: {} });
           }
           break;
-        case "defprotocol":
+        }
+        case "defprotocol": {
           const existingProto = elements.find((e) => e.name === name && e.kind === "interface");
           if (!existingProto) {
-            elements.push({ kind: "interface", name, module: "", span: formatSpan(secondChild), attrs: {} });
+            elements.push({ kind: "interface", name, module: "", span: formatSpan(node), attrs: {} });
           }
           break;
+        }
         case "defrecord":
-        case "deftype":
+        case "deftype": {
           const existingRec = elements.find((e) => e.name === name && e.kind === "class");
           if (!existingRec) {
-            elements.push({ kind: "class", name, module: "", span: formatSpan(secondChild), attrs: {} });
+            elements.push({ kind: "class", name, module: "", span: formatSpan(node), attrs: {} });
           }
           break;
+        }
       }
     }
   }
   for (const child of node.children) {
     walkForDefinitions(child, elements);
+  }
+}
+var DEFINITION_FORMS = /* @__PURE__ */ new Set([
+  "defn",
+  "defn-",
+  "defmacro",
+  "defmethod",
+  "defmulti",
+  "defprotocol",
+  "defrecord",
+  "deftype",
+  "def",
+  "defonce",
+  "ns",
+  "declare"
+]);
+function walkForCalls(node, arrows, enclosingFn) {
+  if (node.type === "list" && node.children.length >= 1) {
+    const firstChild = node.children[0];
+    if (firstChild?.type === "symbol") {
+      const sym = firstChild.text;
+      if ((sym === "defn" || sym === "defn-" || sym === "defmacro") && node.children[1]?.type === "symbol") {
+        const newFnName = node.children[1].text;
+        for (const child of node.children) {
+          walkForCalls(child, arrows, newFnName);
+        }
+        return;
+      }
+      if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
+        arrows.push({ kind: "calls", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: sym, dstModule: "", dstName: enclosingFn, attrs: {} });
+      }
+    }
+  }
+  for (const child of node.children) {
+    walkForCalls(child, arrows, enclosingFn);
   }
 }
 
