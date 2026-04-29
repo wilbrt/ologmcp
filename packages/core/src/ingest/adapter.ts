@@ -1,4 +1,3 @@
-import type Parser from 'tree-sitter';
 import type { RawElement, RawArrow, OlogKind } from '../ontology.js';
 
 /**
@@ -17,11 +16,73 @@ export interface PropertyExtract {
 }
 
 /**
+ * Minimal parser interface shared by tree-sitter bindings.
+ * Both native `tree-sitter` and `web-tree-sitter` satisfy this.
+ */
+export interface TreeSitterParser {
+  parse(input: string): {
+    rootNode: TreeSitterNode;
+    delete?(): void;
+  };
+}
+
+/**
+ * Minimal node interface shared by tree-sitter bindings.
+ */
+export interface TreeSitterNode {
+  type: string;
+  text: string;
+  startPosition: { row: number; column: number };
+  endPosition: { row: number; column: number };
+  parent: TreeSitterNode | null;
+  namedChildren: TreeSitterNode[];
+  childForFieldName(fieldName: string): TreeSitterNode | null;
+  descendantForPosition(start: { row: number; column: number }, end: { row: number; column: number }): TreeSitterNode | null;
+  hasError: boolean;
+  walk(): TreeSitterCursor;
+}
+
+export interface TreeSitterCursor {
+  nodeType: string;
+  nodeText: string;
+  nodeId: number;
+  nodeIsNamed: boolean;
+  nodeIsMissing: boolean;
+  startPosition: { row: number; column: number };
+  endPosition: { row: number; column: number };
+  currentNode: TreeSitterNode;
+  currentFieldName: string;
+  gotoParent(): boolean;
+  gotoFirstChild(): boolean;
+  gotoNextSibling(): boolean;
+}
+
+/**
+ * Minimal query interface shared by tree-sitter bindings.
+ */
+export interface TreeSitterQuery {
+  matches(node: TreeSitterNode): TreeSitterQueryMatch[];
+  captures(node: TreeSitterNode): TreeSitterQueryCapture[];
+  delete(): void;
+}
+
+export interface TreeSitterQueryMatch {
+  pattern: number;
+  captures: TreeSitterQueryCapture[];
+}
+
+export interface TreeSitterQueryCapture {
+  name: string;
+  node: TreeSitterNode;
+  text?: string;
+}
+
+/**
  * Language adapter interface — each supported language provides an
  * implementation that knows how to parse source files, extract elements
  * and arrows, and resolve imports for that language.
  */
-export interface LanguageAdapter {
+export interface LanguageAdapter<ParserT = TreeSitterParser> {
   /** Unique language identifier (e.g. 'typescript', 'clojure') */
   languageId: string;
 
@@ -32,13 +93,13 @@ export interface LanguageAdapter {
   globPattern: string;
 
   /** Create a configured tree-sitter Parser for the given file */
-  createParser(filename: string): Parser;
+  createParser(filename: string): ParserT;
 
   /** Get the .scm query file path for a given source file */
   queryPath(filename: string): string;
 
   /** Extract raw elements and arrows from source via tree-sitter queries */
-  extractElements(parser: Parser, source: string, queryPath: string): {
+  extractElements(parser: ParserT, source: string, queryPath: string): {
     elements: RawElement[];
     arrows: RawArrow[];
   };
@@ -50,10 +111,10 @@ export interface LanguageAdapter {
   kindToNodeTypes: Record<string, string[]>;
 
   /** Extract properties (interface fields, class members, etc.) — optional */
-  extractProperties?(parser: Parser, source: string, moduleName: string): PropertyExtract[];
+  extractProperties?(parser: ParserT, source: string, moduleName: string): PropertyExtract[];
 
   /** Find the containing function/method name for a position — optional */
-  findContainingFunctionName?(node: Parser.SyntaxNode, row: number, col: number): string | null;
+  findContainingFunctionName?(node: unknown, row: number, col: number): string | null;
 
   /** Resolve an import specifier to a file path — optional */
   resolveImportSpecifier?(importPath: string, fromFile: string, projectRoot: string): string | null;

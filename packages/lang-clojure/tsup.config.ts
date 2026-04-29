@@ -6,5 +6,5 @@ export default defineConfig({
   target: 'node20',
   clean: true,
   dts: true,
-  external: ['tree-sitter', 'tree-sitter-clojure'],
+  external: ['web-tree-sitter'],
 });

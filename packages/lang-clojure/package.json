@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@olog/core": "*",
-    "tree-sitter": "^0.21.1",
-    "tree-sitter-clojure": "npm:@yogthos/tree-sitter-clojure@0.0.14"
+    "web-tree-sitter": "^0.26.8"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
@@ -19,7 +18,7 @@
     "tsup": "^8.3.5"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && cp src/tree-sitter-clojure.wasm dist/ && cp -r src/queries dist/queries",
     "typecheck": "tsc --noEmit",
     "test": "echo \"No tests yet\""
   }

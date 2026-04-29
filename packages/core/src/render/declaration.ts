@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { AdapterRegistry } from '../ingest/adapter.js';
+import type { AdapterRegistry, TreeSitterNode } from '../ingest/adapter.js';
 
 export interface DeclarationRange {
   startLine: number;
@@ -33,19 +33,17 @@ export function findEnclosingDeclaration(
   const targetRow = identifierLine - 1;
   const targetCol = identifierCol - 1;
 
-  let node: { parent: { type: string; parent: { type: string; parent: unknown } | null; startPosition: { row: number; column: number }; endPosition: { row: number; column: number }; text: string } | null; type: string; startPosition: { row: number; column: number }; endPosition: { row: number; column: number }; text: string } | null = tree.rootNode.descendantForPosition(
+  let node: TreeSitterNode | null = tree.rootNode.descendantForPosition(
     { row: targetRow, column: targetCol },
     { row: targetRow, column: targetCol + 1 },
   );
 
   while (node && !targetTypes.includes(node.type)) {
-    node = node.parent as typeof node;
+    node = node.parent;
   }
 
   if (!node) {
-    if ('delete' in tree && typeof (tree as unknown as { delete?: unknown }).delete === 'function') {
-      (tree as unknown as { delete: () => void }).delete();
-    }
+    tree.delete?.();
     return null;
   }
 
@@ -57,9 +55,7 @@ export function findEnclosingDeclaration(
     text: node.text,
   };
 
-  if ('delete' in tree && typeof (tree as unknown as { delete?: unknown }).delete === 'function') {
-    (tree as unknown as { delete: () => void }).delete();
-  }
+  tree.delete?.();
 
   return range;
 }

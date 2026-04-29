@@ -1,10 +1,12 @@
 // src/adapter.ts
-import Parser2 from "tree-sitter";
+import { Parser as Parser2, Language as Language2 } from "web-tree-sitter";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
+import { readFileSync } from "fs";
 
 // src/extract.ts
-import Parser from "tree-sitter";
+import { Query } from "web-tree-sitter";
 import fs from "fs";
 function asKind(kind) {
   return kind;
@@ -18,13 +20,16 @@ function extractFromFile(parser, source, queryPath) {
   const elements = [];
   const arrows = [];
   let query = null;
-  try {
-    const scmContent = fs.readFileSync(queryPath, "utf-8");
-    const language = parser.getLanguage();
-    query = new Parser.Query(language, scmContent);
-  } catch {
+  const language = parser.language;
+  if (language) {
+    try {
+      const scmContent = fs.readFileSync(queryPath, "utf-8");
+      query = new Query(language, scmContent);
+    } catch {
+    }
   }
   const tree = parser.parse(source);
+  if (!tree) return { elements, arrows };
   if (query) {
     for (const match of query.matches(tree.rootNode)) {
       const byName = /* @__PURE__ */ new Map();
@@ -70,79 +75,11 @@ function extractFromFile(parser, source, queryPath) {
   }
   walkForDefinitions(tree.rootNode, elements);
   walkForCalls(tree.rootNode, arrows, null);
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
+  tree.delete();
   return { elements, arrows };
 }
-function walkForDefinitions(node, elements) {
-  if (!node) return;
-  const children = node.namedChildren;
-  if (!children) return;
-  if (node.type === "list" && children.length >= 2) {
-    const firstChild = children[0];
-    const secondChild = children[1];
-    if (firstChild?.type === "symbol" && secondChild?.type === "symbol") {
-      const sym = firstChild.text;
-      const name = secondChild.text;
-      switch (sym) {
-        case "defn":
-        case "defn-": {
-          const existingFn = elements.find((e) => e.name === name && e.kind === "function");
-          if (!existingFn) {
-            elements.push({ kind: "function", name, module: "", span: formatSpan(node), attrs: {} });
-          }
-          break;
-        }
-        case "defmacro": {
-          const existingMacro = elements.find((e) => e.name === name && e.kind === "function");
-          if (!existingMacro) {
-            elements.push({ kind: "function", name, module: "", span: formatSpan(node), attrs: { macro: true } });
-          }
-          break;
-        }
-        case "def": {
-          const existingVar = elements.find((e) => e.name === name && e.kind === "const");
-          if (!existingVar) {
-            elements.push({ kind: "const", name, module: "", span: formatSpan(node), attrs: {} });
-          }
-          break;
-        }
-        case "defmethod": {
-          const existingMethod = elements.find((e) => e.name === name && e.kind === "method");
-          if (!existingMethod) {
-            elements.push({ kind: "method", name, module: "", span: formatSpan(node), attrs: {} });
-          }
-          break;
-        }
-        case "ns": {
-          const existingNs = elements.find((e) => e.name === name && e.kind === "namespace");
-          if (!existingNs) {
-            elements.push({ kind: "namespace", name, module: "", span: formatSpan(node), attrs: {} });
-          }
-          break;
-        }
-        case "defprotocol": {
-          const existingProto = elements.find((e) => e.name === name && e.kind === "interface");
-          if (!existingProto) {
-            elements.push({ kind: "interface", name, module: "", span: formatSpan(node), attrs: {} });
-          }
-          break;
-        }
-        case "defrecord":
-        case "deftype": {
-          const existingRec = elements.find((e) => e.name === name && e.kind === "class");
-          if (!existingRec) {
-            elements.push({ kind: "class", name, module: "", span: formatSpan(node), attrs: {} });
-          }
-          break;
-        }
-      }
-    }
-  }
-  for (const child of children) {
-    if (child) walkForDefinitions(child, elements);
-  }
+function listValues(node) {
+  return node.childrenForFieldName("value");
 }
 var DEFINITION_FORMS = /* @__PURE__ */ new Set([
   "defn",
@@ -158,73 +95,123 @@ var DEFINITION_FORMS = /* @__PURE__ */ new Set([
   "ns",
   "declare"
 ]);
-function walkForCalls(node, arrows, enclosingFn) {
+function walkForDefinitions(node, elements) {
   if (!node) return;
-  const children = node.namedChildren;
-  if (!children) return;
-  if (node.type === "list" && children.length >= 1) {
-    const firstChild = children[0];
-    if (firstChild?.type === "symbol") {
-      const sym = firstChild.text;
-      if ((sym === "defn" || sym === "defn-" || sym === "defmacro") && children[1]?.type === "symbol") {
-        const newFnName = children[1].text;
-        for (const child of children) {
-          walkForCalls(child, arrows, newFnName);
+  if (node.type === "list_lit") {
+    const vals = listValues(node);
+    if (vals.length >= 2) {
+      const first = vals[0];
+      const second = vals[1];
+      if (first?.type === "sym_lit" && second?.type === "sym_lit") {
+        const sym = first.text;
+        const name = second.text;
+        switch (sym) {
+          case "defn":
+          case "defn-":
+            if (!elements.find((e) => e.name === name && e.kind === "function"))
+              elements.push({ kind: "function", name, module: "", span: formatSpan(node), attrs: {} });
+            break;
+          case "defmacro":
+            if (!elements.find((e) => e.name === name && e.kind === "function"))
+              elements.push({ kind: "function", name, module: "", span: formatSpan(node), attrs: { macro: true } });
+            break;
+          case "def":
+            if (!elements.find((e) => e.name === name && e.kind === "const"))
+              elements.push({ kind: "const", name, module: "", span: formatSpan(node), attrs: {} });
+            break;
+          case "defmethod":
+            if (!elements.find((e) => e.name === name && e.kind === "method"))
+              elements.push({ kind: "method", name, module: "", span: formatSpan(node), attrs: {} });
+            break;
+          case "ns":
+            if (!elements.find((e) => e.name === name && e.kind === "namespace"))
+              elements.push({ kind: "namespace", name, module: "", span: formatSpan(node), attrs: {} });
+            break;
+          case "defprotocol":
+            if (!elements.find((e) => e.name === name && e.kind === "interface"))
+              elements.push({ kind: "interface", name, module: "", span: formatSpan(node), attrs: {} });
+            break;
+          case "defrecord":
+          case "deftype":
+            if (!elements.find((e) => e.name === name && e.kind === "class"))
+              elements.push({ kind: "class", name, module: "", span: formatSpan(node), attrs: {} });
+            break;
         }
-        return;
-      }
-      if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
-        arrows.push({ kind: "calls", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: sym, dstModule: "", dstName: enclosingFn, attrs: {} });
       }
     }
   }
-  for (const child of children) {
-    if (child) walkForCalls(child, arrows, enclosingFn);
+  for (const child of node.namedChildren) {
+    walkForDefinitions(child, elements);
+  }
+}
+function walkForCalls(node, arrows, enclosingFn) {
+  if (!node) return;
+  if (node.type === "list_lit") {
+    const vals = listValues(node);
+    if (vals.length >= 1) {
+      const head = vals[0];
+      if (head?.type === "sym_lit") {
+        const sym = head.text;
+        if ((sym === "defn" || sym === "defn-" || sym === "defmacro") && vals[1]?.type === "sym_lit") {
+          const newFnName = vals[1].text;
+          for (const child of node.namedChildren) {
+            walkForCalls(child, arrows, newFnName);
+          }
+          return;
+        }
+        if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
+          arrows.push({ kind: "calls", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
+          arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
+          arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: sym, dstModule: "", dstName: enclosingFn, attrs: {} });
+        }
+      }
+    }
+  }
+  for (const child of node.namedChildren) {
+    walkForCalls(child, arrows, enclosingFn);
   }
 }
 
 // src/adapter.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname(__filename);
+var _require = createRequire(import.meta.url);
 var CLJ_QUERY_PATH = resolve(__dirname, "queries", "clj.scm");
+var CLJ_WASM_PATH = resolve(__dirname, "tree-sitter-clojure.wasm");
 var KIND_TO_NODE_TYPES = {
-  function: ["list"],
-  method: ["list"],
-  variable: ["list"],
-  namespace: ["list"]
+  function: ["list_lit"],
+  method: ["list_lit"],
+  variable: ["list_lit"],
+  namespace: ["list_lit"]
 };
-var clojureGrammar = null;
+var clojureLanguage = null;
+var parserInstance = null;
 async function init() {
-  if (clojureGrammar) return;
+  if (clojureLanguage) return;
   try {
-    const mod = await import("tree-sitter-clojure");
-    clojureGrammar = mod.default ?? mod;
-  } catch (_err) {
-    throw new Error(
-      "tree-sitter-clojure is not installed. Install it with: npm install tree-sitter-clojure\nNote: this package requires a compatible Node.js version for native module compilation."
-    );
+    await Parser2.init();
+  } catch {
+    const webTreeSitterDir = dirname(_require.resolve("web-tree-sitter"));
+    await Parser2.init({
+      locateFile: (name) => resolve(webTreeSitterDir, name)
+    });
   }
+  const wasmBytes = readFileSync(CLJ_WASM_PATH);
+  clojureLanguage = await Language2.load(wasmBytes);
+  parserInstance = new Parser2();
+  parserInstance.setLanguage(clojureLanguage);
 }
 var ClojureAdapter = class {
   languageId = "clojure";
   extensions = [".clj", ".cljs", ".cljc"];
   globPattern = "**/*.{clj,cljs,cljc}";
-  nodeTypeToKind = {
-    // Clojure queries will set the kind directly via captures
-    // This mapping is less relevant since we determine kind from the symbol name
-  };
+  nodeTypeToKind = {};
   kindToNodeTypes = KIND_TO_NODE_TYPES;
-  createParser(filename) {
-    if (!clojureGrammar) {
-      throw new Error(
-        "Clojure grammar not loaded. Call init() first, or install tree-sitter-clojure.\nSee https://github.com/wilbrdt/ologmcp for details."
-      );
+  createParser(_filename) {
+    if (!parserInstance) {
+      throw new Error("Clojure parser not initialized. Call init() first.");
     }
-    const parser = new Parser2();
-    parser.setLanguage(clojureGrammar);
-    return parser;
+    return parserInstance;
   }
   queryPath(_filename) {
     return CLJ_QUERY_PATH;
@@ -232,8 +219,6 @@ var ClojureAdapter = class {
   extractElements(parser, source, queryPath) {
     return extractFromFile(parser, source, queryPath);
   }
-  // Clojure doesn't have TypeScript-style interface/class property extraction
-  // This can be expanded later for defrecord/deftype fields
   extractProperties(_parser, _source, _moduleName) {
     return [];
   }

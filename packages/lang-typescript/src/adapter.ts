@@ -34,7 +34,7 @@ const DECLARATION_NODE_TYPES: Record<string, string[]> = {
 /**
  * Language adapter for TypeScript and TSX files.
  */
-export class TypeScriptAdapter implements LanguageAdapter {
+export class TypeScriptAdapter implements LanguageAdapter<Parser> {
   languageId = 'typescript';
   extensions = ['.ts', '.tsx', '.mts', '.cts'];
   globPattern = '**/*.{ts,tsx,mts,cts}';

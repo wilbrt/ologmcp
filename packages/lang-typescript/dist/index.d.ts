@@ -5,7 +5,7 @@ export { PropertyExtract } from '@olog/core';
 /**
  * Language adapter for TypeScript and TSX files.
  */
-declare class TypeScriptAdapter implements LanguageAdapter {
+declare class TypeScriptAdapter implements LanguageAdapter<Parser> {
     languageId: string;
     extensions: string[];
     globPattern: string;

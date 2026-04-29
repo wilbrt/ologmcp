@@ -32,9 +32,10 @@ export function registerOlogReindex(
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? (err.stack ?? '') : '';
         return {
           content: [
-            { type: 'text' as const, text: `Reindex failed: ${message}` },
+            { type: 'text' as const, text: `Reindex failed: ${message}\n${stack}` },
           ],
           isError: true,
         };

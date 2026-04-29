@@ -1838,9 +1838,7 @@ function findEnclosingDeclaration(source, filePath, identifierLine, identifierCo
     node = node.parent;
   }
   if (!node) {
-    if ("delete" in tree && typeof tree.delete === "function") {
-      tree.delete();
-    }
+    tree.delete?.();
     return null;
   }
   const range = {
@@ -1850,9 +1848,7 @@ function findEnclosingDeclaration(source, filePath, identifierLine, identifierCo
     endCol: node.endPosition.column + 1,
     text: node.text
   };
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
+  tree.delete?.();
   return range;
 }
 function findImportStatement(source, startLine) {

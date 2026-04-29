@@ -2407,9 +2407,7 @@ function findEnclosingDeclaration(source, filePath, identifierLine, identifierCo
     node = node.parent;
   }
   if (!node) {
-    if ("delete" in tree && typeof tree.delete === "function") {
-      tree.delete();
-    }
+    tree.delete?.();
     return null;
   }
   const range = {
@@ -2419,9 +2417,7 @@ function findEnclosingDeclaration(source, filePath, identifierLine, identifierCo
     endCol: node.endPosition.column + 1,
     text: node.text
   };
-  if ("delete" in tree && typeof tree.delete === "function") {
-    tree.delete();
-  }
+  tree.delete?.();
   return range;
 }
 function findImportStatement(source, startLine) {
@@ -4541,9 +4537,11 @@ function registerOlogReindex(server2, store2, projectRoot2) {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack ?? "" : "";
         return {
           content: [
-            { type: "text", text: `Reindex failed: ${message}` }
+            { type: "text", text: `Reindex failed: ${message}
+${stack}` }
           ],
           isError: true
         };

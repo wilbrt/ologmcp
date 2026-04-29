@@ -43,6 +43,11 @@ export {
 export {
   type LanguageAdapter,
   type PropertyExtract,
+  type TreeSitterParser,
+  type TreeSitterNode,
+  type TreeSitterQuery,
+  type TreeSitterQueryMatch,
+  type TreeSitterQueryCapture,
   AdapterRegistry,
   setDefaultRegistry,
   getDefaultRegistry,

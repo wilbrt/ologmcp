@@ -1,5 +1,4 @@
 import Database from 'better-sqlite3';
-import Parser from 'tree-sitter';
 
 /**
  * Ontology type definitions for the olog (ontology log).
@@ -798,11 +797,85 @@ interface PropertyExtract {
     parentKind: string;
 }
 /**
+ * Minimal parser interface shared by tree-sitter bindings.
+ * Both native `tree-sitter` and `web-tree-sitter` satisfy this.
+ */
+interface TreeSitterParser {
+    parse(input: string): {
+        rootNode: TreeSitterNode;
+        delete?(): void;
+    };
+}
+/**
+ * Minimal node interface shared by tree-sitter bindings.
+ */
+interface TreeSitterNode {
+    type: string;
+    text: string;
+    startPosition: {
+        row: number;
+        column: number;
+    };
+    endPosition: {
+        row: number;
+        column: number;
+    };
+    parent: TreeSitterNode | null;
+    namedChildren: TreeSitterNode[];
+    childForFieldName(fieldName: string): TreeSitterNode | null;
+    descendantForPosition(start: {
+        row: number;
+        column: number;
+    }, end: {
+        row: number;
+        column: number;
+    }): TreeSitterNode | null;
+    hasError: boolean;
+    walk(): TreeSitterCursor;
+}
+interface TreeSitterCursor {
+    nodeType: string;
+    nodeText: string;
+    nodeId: number;
+    nodeIsNamed: boolean;
+    nodeIsMissing: boolean;
+    startPosition: {
+        row: number;
+        column: number;
+    };
+    endPosition: {
+        row: number;
+        column: number;
+    };
+    currentNode: TreeSitterNode;
+    currentFieldName: string;
+    gotoParent(): boolean;
+    gotoFirstChild(): boolean;
+    gotoNextSibling(): boolean;
+}
+/**
+ * Minimal query interface shared by tree-sitter bindings.
+ */
+interface TreeSitterQuery {
+    matches(node: TreeSitterNode): TreeSitterQueryMatch[];
+    captures(node: TreeSitterNode): TreeSitterQueryCapture[];
+    delete(): void;
+}
+interface TreeSitterQueryMatch {
+    pattern: number;
+    captures: TreeSitterQueryCapture[];
+}
+interface TreeSitterQueryCapture {
+    name: string;
+    node: TreeSitterNode;
+    text?: string;
+}
+/**
  * Language adapter interface — each supported language provides an
  * implementation that knows how to parse source files, extract elements
  * and arrows, and resolve imports for that language.
  */
-interface LanguageAdapter {
+interface LanguageAdapter<ParserT = TreeSitterParser> {
     /** Unique language identifier (e.g. 'typescript', 'clojure') */
     languageId: string;
     /** File extensions this adapter handles, with leading dot */
@@ -810,11 +883,11 @@ interface LanguageAdapter {
     /** Glob pattern for file discovery (e.g. 'any .ts, .tsx, .mts or .cts file') */
     globPattern: string;
     /** Create a configured tree-sitter Parser for the given file */
-    createParser(filename: string): Parser;
+    createParser(filename: string): ParserT;
     /** Get the .scm query file path for a given source file */
     queryPath(filename: string): string;
     /** Extract raw elements and arrows from source via tree-sitter queries */
-    extractElements(parser: Parser, source: string, queryPath: string): {
+    extractElements(parser: ParserT, source: string, queryPath: string): {
         elements: RawElement[];
         arrows: RawArrow[];
     };
@@ -823,9 +896,9 @@ interface LanguageAdapter {
     /** Map an olog element kind to tree-sitter node types (reverse mapping) */
     kindToNodeTypes: Record<string, string[]>;
     /** Extract properties (interface fields, class members, etc.) — optional */
-    extractProperties?(parser: Parser, source: string, moduleName: string): PropertyExtract[];
+    extractProperties?(parser: ParserT, source: string, moduleName: string): PropertyExtract[];
     /** Find the containing function/method name for a position — optional */
-    findContainingFunctionName?(node: Parser.SyntaxNode, row: number, col: number): string | null;
+    findContainingFunctionName?(node: unknown, row: number, col: number): string | null;
     /** Resolve an import specifier to a file path — optional */
     resolveImportSpecifier?(importPath: string, fromFile: string, projectRoot: string): string | null;
 }
@@ -1137,4 +1210,4 @@ declare function verifyInternalEquations(store: OlogStore, group: ShapeGroup, op
     coverage: number;
 }>;
 
-export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extractEgoGraph, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, traverse, validateEquation, verifyInternalEquations };
+export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extractEgoGraph, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, traverse, validateEquation, verifyInternalEquations };

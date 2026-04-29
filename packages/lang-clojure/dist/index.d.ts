@@ -1,22 +1,15 @@
-import Parser from 'tree-sitter';
+import { Parser } from 'web-tree-sitter';
 import { LanguageAdapter, OlogKind, RawElement, RawArrow, PropertyExtract } from '@olog/core';
 export { PropertyExtract } from '@olog/core';
 
-/**
- * Load the tree-sitter-clojure grammar dynamically.
- * Call this before using createParser if tree-sitter-clojure is not a hard dependency.
- */
 declare function init(): Promise<void>;
-/**
- * Language adapter for Clojure (.clj, .cljs, .cljc) files.
- */
-declare class ClojureAdapter implements LanguageAdapter {
+declare class ClojureAdapter implements LanguageAdapter<Parser> {
     languageId: string;
     extensions: string[];
     globPattern: string;
     nodeTypeToKind: Record<string, OlogKind>;
     kindToNodeTypes: Record<string, string[]>;
-    createParser(filename: string): Parser;
+    createParser(_filename: string): Parser;
     queryPath(_filename: string): string;
     extractElements(parser: Parser, source: string, queryPath: string): {
         elements: RawElement[];
@@ -26,9 +19,6 @@ declare class ClojureAdapter implements LanguageAdapter {
     resolveImportSpecifier(specifier: string, _fromFile: string, _projectRoot: string): string | null;
 }
 
-/**
- * Extract semantic elements and arrows from Clojure source code.
- */
 declare function extractFromFile(parser: Parser, source: string, queryPath: string): {
     elements: RawElement[];
     arrows: RawArrow[];
