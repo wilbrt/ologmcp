@@ -53,20 +53,11 @@ export function findAnalogues(
 function getCalleeSet(store: OlogStore, elem: OlogElem): Set<string> {
   const result = new Set<string>();
 
-  const incoming = store.incoming(elem.id);
-  const callerOfArrows = incoming.filter(a => a.kind === 'callerOf');
-
-  for (const arrow of callerOfArrows) {
-    const callSiteOutgoing = store.outgoing(arrow.srcId);
-    const calleeOfArrow = callSiteOutgoing.find(a => a.kind === 'calleeOf');
-    if (calleeOfArrow) {
-      result.add(calleeOfArrow.dstId);
+  const outgoing = store.outgoing(elem.id);
+  for (const arrow of outgoing) {
+    if (arrow.kind === 'callerOf' || arrow.kind === 'calls') {
+      result.add(arrow.dstId);
     }
-  }
-
-  const directCalls = store.outgoing(elem.id).filter(a => a.kind === 'calls');
-  for (const arrow of directCalls) {
-    result.add(arrow.dstId);
   }
 
   return result;

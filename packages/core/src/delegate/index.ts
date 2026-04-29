@@ -181,26 +181,8 @@ export function assembleBrief(
 
   const resolvedUsedBy = usedByEntries.map(entry => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? '') ?? localModuleToFilePath(entry.module ?? '');
-
-    const incoming = store.incoming(targetId);
-    const calleeOfArrows = incoming.filter(a => a.kind === 'calleeOf');
-    let callSiteSnippet = '';
-    for (const arrow of calleeOfArrows) {
-      const csOutgoing = store.outgoing(arrow.srcId);
-      const callerOfArrow = csOutgoing.find(a => a.kind === 'callerOf');
-      if (callerOfArrow?.dstId === entry.id) {
-        const csElem = store.getElem(arrow.srcId);
-        if (csElem?.span) {
-          callSiteSnippet = resolver.readContext(entryFilePath, csElem.span, 2) ?? '';
-          break;
-        }
-      }
-    }
-
-    return {
-      name: entry.name,
-      callSiteSnippet,
-    };
+    const callSiteSnippet = entry.span ? resolver.readSpan(entryFilePath, entry.span) ?? '' : '';
+    return { name: entry.name, callSiteSnippet };
   });
 
   const resolvedImports = importEntries.map(imp => {
@@ -324,7 +306,8 @@ function determineConfidence(store: OlogStore, targetId: string): 'resolved' | '
 }
 
 function localModuleToFilePath(modulePath: string): string {
-  return modulePath.replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, '') + '.ts';
+  if (/\.\w+$/.test(modulePath)) return modulePath;
+  return modulePath + '.ts';
 }
 
 function parseSpanSimple(span: string): { start: number; end: number } | null {

@@ -49,43 +49,25 @@ export interface StructuralContext {
 /**
  * Gather mustCall: the functions/methods that `target` calls.
  *
- * Traversal: target --calleeOf--> CallSite, then each CallSite --callerOf--> Symbol
- * (the call site is in the target and points to the function being called).
- *
- * Wait — the arrow semantics:
- *   callerOf: CallSite --callerOf--> Symbol (the site is IN the caller function)
- *   calleeOf: CallSite --calleeOf--> Symbol (the site calls the callee function)
- *
- * So to find what `target` calls:
- *   Find CallSites where callerOf points to target → then follow calleeOf to the callee.
+ * callerOf arrows are stored as caller→callee (direct function-to-function).
+ * Outgoing callerOf from target gives all functions it calls.
  */
 export function gatherMustCall(store: OlogStore, targetId: string): MustCallEntry[] {
-  // Find call sites where target is the caller (callerOf arrow pointing TO target means
-  // the CallSite's callerOf arrow has dstId = targetId)
-  const incoming = store.incoming(targetId);
-
-  // Filter for callerOf arrows — these are CallSites that are IN the target function
-  const callerOfArrows = incoming.filter(a => a.kind === 'callerOf');
-
+  const outgoing = store.outgoing(targetId);
+  const callerOfArrows = outgoing.filter(a => a.kind === 'callerOf');
   const callees: MustCallEntry[] = [];
 
   for (const arrow of callerOfArrows) {
-    // arrow.srcId is the CallSite; follow its calleeOf arrow to get the callee symbol
-    const callSiteOutgoing = store.outgoing(arrow.srcId);
-    const calleeOfArrow = callSiteOutgoing.find(a => a.kind === 'calleeOf');
-
-    if (calleeOfArrow) {
-      const calleeElem = store.getElem(calleeOfArrow.dstId);
-      if (calleeElem) {
-        callees.push({
-          id: calleeElem.id,
-          name: calleeElem.name,
-          kind: calleeElem.kind,
-          module: calleeElem.module,
-          span: calleeElem.span,
-          attrs: calleeElem.attrs,
-        });
-      }
+    const callee = store.getElem(arrow.dstId);
+    if (callee) {
+      callees.push({
+        id: callee.id,
+        name: callee.name,
+        kind: callee.kind,
+        module: callee.module,
+        span: callee.span,
+        attrs: callee.attrs,
+      });
     }
   }
 
@@ -138,34 +120,26 @@ export function gatherMustImplement(store: OlogStore, targetId: string): MustImp
 /**
  * Gather usedBy: functions/methods that call `target`.
  *
- * Traversal: find CallSites whose calleeOf points to target,
- * then follow each CallSite's callerOf to find the caller.
+ * callerOf arrows are stored as caller→callee (direct function-to-function).
+ * Incoming callerOf to target means srcId is a function that calls target.
  */
 export function gatherUsedBy(store: OlogStore, targetId: string): UsedByEntry[] {
-  // Find CallSites where calleeOf points to target (these sites call our target)
   const incoming = store.incoming(targetId);
-  const calleeOfArrows = incoming.filter(a => a.kind === 'calleeOf');
-
+  const callerOfArrows = incoming.filter(a => a.kind === 'callerOf');
   const callers: UsedByEntry[] = [];
   const seen = new Set<string>();
 
-  for (const arrow of calleeOfArrows) {
-    // arrow.srcId is the CallSite
-    const callSiteOutgoing = store.outgoing(arrow.srcId);
-    const callerOfArrow = callSiteOutgoing.find(a => a.kind === 'callerOf');
-
-    if (callerOfArrow) {
-      const callerElem = store.getElem(callerOfArrow.dstId);
-      if (callerElem && !seen.has(callerElem.id)) {
-        seen.add(callerElem.id);
-        callers.push({
-          id: callerElem.id,
-          name: callerElem.name,
-          kind: callerElem.kind,
-          module: callerElem.module,
-          span: callerElem.span,
-        });
-      }
+  for (const arrow of callerOfArrows) {
+    const caller = store.getElem(arrow.srcId);
+    if (caller && !seen.has(caller.id)) {
+      seen.add(caller.id);
+      callers.push({
+        id: caller.id,
+        name: caller.name,
+        kind: caller.kind,
+        module: caller.module,
+        span: caller.span,
+      });
     }
   }
 
