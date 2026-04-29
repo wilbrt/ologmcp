@@ -86,7 +86,7 @@ export function extractFromFile(
   }
 
   walkForDefinitions(tree.rootNode, elements);
-  walkForCalls(tree.rootNode, arrows, null);
+  walkForCalls(tree.rootNode, elements, arrows, null);
 
   tree.delete();
 
@@ -127,6 +127,10 @@ function walkForDefinitions(node: Node | null | undefined, elements: RawElement[
             if (!elements.find(e => e.name === name && e.kind === 'const'))
               elements.push({ kind: 'const', name, module: '', span: formatSpan(node), attrs: {} });
             break;
+          case 'defonce':
+            if (!elements.find(e => e.name === name && e.kind === 'const'))
+              elements.push({ kind: 'const', name, module: '', span: formatSpan(node), attrs: { once: true } });
+            break;
           case 'defmethod':
             if (!elements.find(e => e.name === name && e.kind === 'method'))
               elements.push({ kind: 'method', name, module: '', span: formatSpan(node), attrs: {} });
@@ -154,7 +158,17 @@ function walkForDefinitions(node: Node | null | undefined, elements: RawElement[
   }
 }
 
-function walkForCalls(node: Node | null | undefined, arrows: RawArrow[], enclosingFn: string | null): void {
+/**
+ * Walk tree recording call arrows. Enters all top-level definition forms
+ * (defn, def, defonce, defmethod) and tracks the enclosing name as context
+ * so calls/callerOf/calleeOf arrows are symmetrically populated for every form.
+ */
+function walkForCalls(
+  node: Node | null | undefined,
+  elements: RawElement[],
+  arrows: RawArrow[],
+  enclosingFn: string | null,
+): void {
   if (!node) return;
   if (node.type === 'list_lit') {
     const vals = listValues(node);
@@ -162,13 +176,44 @@ function walkForCalls(node: Node | null | undefined, arrows: RawArrow[], enclosi
       const head = vals[0];
       if (head?.type === 'sym_lit') {
         const sym = head.text;
+
+        // defn / defmacro: enter body with function name as context
         if ((sym === 'defn' || sym === 'defn-' || sym === 'defmacro') && vals[1]?.type === 'sym_lit') {
           const newFnName = vals[1]!.text;
           for (const child of node.namedChildren) {
-            walkForCalls(child, arrows, newFnName);
+            walkForCalls(child, elements, arrows, newFnName);
           }
           return;
         }
+
+        // def / defonce: enter value expression with def name as context;
+        // also emit references for symbols in data (non-call-head) positions.
+        if ((sym === 'def' || sym === 'defonce') && vals[1]?.type === 'sym_lit') {
+          const defName = vals[1]!.text;
+          for (const child of node.namedChildren) {
+            walkForCalls(child, elements, arrows, defName);
+          }
+          for (let i = 2; i < vals.length; i++) {
+            walkForRefs(vals[i]!, arrows, defName);
+          }
+          return;
+        }
+
+        // defmethod: enter body with multi-method name as context
+        if (sym === 'defmethod' && vals[1]?.type === 'sym_lit') {
+          const methodName = vals[1]!.text;
+          for (const child of node.namedChildren) {
+            walkForCalls(child, elements, arrows, methodName);
+          }
+          return;
+        }
+
+        // throw: extract namespaced error keywords as throws arrows
+        if (sym === 'throw' && enclosingFn) {
+          collectThrowKeywords(node, elements, arrows, enclosingFn);
+          // fall through to also walk children and record the throw call itself
+        }
+
         if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
           arrows.push({ kind: 'calls', srcModule: '', srcName: enclosingFn, dstModule: '', dstName: sym, attrs: {} });
           arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: enclosingFn, dstModule: '', dstName: sym, attrs: {} });
@@ -179,6 +224,75 @@ function walkForCalls(node: Node | null | undefined, arrows: RawArrow[], enclosi
   }
 
   for (const child of node.namedChildren) {
-    walkForCalls(child, arrows, enclosingFn);
+    walkForCalls(child, elements, arrows, enclosingFn);
   }
+}
+
+/**
+ * Walk a def/defonce value expression emitting `references` arrows for every
+ * sym_lit found outside call-head position. This links signal/action maps and
+ * other data constants to the defns they name as values.
+ */
+function walkForRefs(node: Node | null | undefined, arrows: RawArrow[], srcName: string): void {
+  if (!node) return;
+
+  if (node.type === 'list_lit') {
+    const vals = listValues(node);
+    // Skip position 0 (call head) — it generates a `calls` arrow, not a reference
+    for (let i = 1; i < vals.length; i++) {
+      walkForRefs(vals[i]!, arrows, srcName);
+    }
+    return;
+  }
+
+  if (node.type === 'sym_lit') {
+    const sym = node.text;
+    if (!DEFINITION_FORMS.has(sym) && sym !== srcName) {
+      arrows.push({ kind: 'references', srcModule: '', srcName, dstModule: '', dstName: sym, attrs: {} });
+    }
+    return;
+  }
+
+  for (const child of node.namedChildren) {
+    walkForRefs(child, arrows, srcName);
+  }
+}
+
+/**
+ * Walk a (throw ...) node and emit `throws` arrows for namespaced keywords
+ * found in value positions (not map keys) inside it.
+ * Creates a `symbol` element for each new keyword so the arrow resolves.
+ */
+function collectThrowKeywords(
+  throwNode: Node,
+  elements: RawElement[],
+  arrows: RawArrow[],
+  enclosingFn: string,
+): void {
+  function walk(n: Node, isMapKey: boolean): void {
+    if (isMapKey) return; // skip map keys — they're schema labels, not error identifiers
+
+    if (n.type === 'kwd_lit') {
+      const kwd = n.text;
+      if (kwd.includes('/')) {
+        if (!elements.find(e => e.name === kwd && e.kind === 'symbol')) {
+          elements.push({ kind: 'symbol', name: kwd, module: '', span: formatSpan(n), attrs: { errorKeyword: true } });
+        }
+        arrows.push({ kind: 'throws', srcModule: '', srcName: enclosingFn, dstModule: '', dstName: kwd, attrs: {} });
+      }
+      return;
+    }
+
+    if (n.type === 'map_lit') {
+      // namedChildren alternate: key at even indices, value at odd indices
+      const children = n.namedChildren;
+      for (let i = 0; i < children.length; i++) {
+        walk(children[i]!, i % 2 === 0);
+      }
+      return;
+    }
+
+    for (const child of n.namedChildren) walk(child, false);
+  }
+  for (const child of throwNode.namedChildren) walk(child, false);
 }

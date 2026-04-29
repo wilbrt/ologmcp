@@ -24,6 +24,7 @@ export interface DelegationBrief {
     signature: string;
     importStatement: string;
     calleeBodySnippet: string;
+    calleeCallees: Array<{ name: string; module: string; snippet: string }>;
   }>;
 
   mustImplement: Array<{
@@ -162,11 +163,18 @@ export function assembleBrief(
 
   const resolvedMustCall = mustCallEntries.map(entry => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? '') ?? localModuleToFilePath(entry.module ?? '');
+    const calleeCallees = getDirectCallees(store, entry.id).slice(0, 5).flatMap(tc => {
+      const tcFilePath = getModuleFilePath(store, tc.module ?? '') ?? localModuleToFilePath(tc.module ?? '');
+      const snippet = resolver.readBody(tcFilePath, tc.span ?? '', tc.kind, Math.ceil(snippetLines / 2)) ?? '';
+      if (!snippet) return [];
+      return [{ name: tc.name, module: tc.module ?? '', snippet }];
+    });
     return {
       name: entry.name,
       signature: resolver.readSignature(entryFilePath, entry.span ?? '', entry.kind) ?? entry.name,
       importStatement: resolver.computeImportStatement(entry.name, entry.module ?? '', targetModule),
       calleeBodySnippet: resolver.readBody(entryFilePath, entry.span ?? '', entry.kind, snippetLines) ?? '',
+      calleeCallees,
     };
   });
 
@@ -278,6 +286,21 @@ function resolveAnalogueList(store: OlogStore, ids: string[]): AnalogueCandidate
         span: elem.span,
         similarity: 1.0, // manually overridden, max similarity
       });
+    }
+  }
+  return results;
+}
+
+function getDirectCallees(store: OlogStore, elemId: string): Array<{ id: string; name: string; kind: string; module: string | null; span: string | null }> {
+  const seen = new Set<string>();
+  const results: Array<{ id: string; name: string; kind: string; module: string | null; span: string | null }> = [];
+  for (const arrow of store.outgoing(elemId)) {
+    if (arrow.kind === 'callerOf') {
+      const callee = store.getElem(arrow.dstId);
+      if (callee && !seen.has(callee.id)) {
+        seen.add(callee.id);
+        results.push({ id: callee.id, name: callee.name, kind: callee.kind, module: callee.module, span: callee.span });
+      }
     }
   }
   return results;

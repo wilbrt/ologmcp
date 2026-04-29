@@ -74,7 +74,7 @@ function extractFromFile(parser, source, queryPath) {
     }
   }
   walkForDefinitions(tree.rootNode, elements);
-  walkForCalls(tree.rootNode, arrows, null);
+  walkForCalls(tree.rootNode, elements, arrows, null);
   tree.delete();
   return { elements, arrows };
 }
@@ -119,6 +119,10 @@ function walkForDefinitions(node, elements) {
             if (!elements.find((e) => e.name === name && e.kind === "const"))
               elements.push({ kind: "const", name, module: "", span: formatSpan(node), attrs: {} });
             break;
+          case "defonce":
+            if (!elements.find((e) => e.name === name && e.kind === "const"))
+              elements.push({ kind: "const", name, module: "", span: formatSpan(node), attrs: { once: true } });
+            break;
           case "defmethod":
             if (!elements.find((e) => e.name === name && e.kind === "method"))
               elements.push({ kind: "method", name, module: "", span: formatSpan(node), attrs: {} });
@@ -144,7 +148,7 @@ function walkForDefinitions(node, elements) {
     walkForDefinitions(child, elements);
   }
 }
-function walkForCalls(node, arrows, enclosingFn) {
+function walkForCalls(node, elements, arrows, enclosingFn) {
   if (!node) return;
   if (node.type === "list_lit") {
     const vals = listValues(node);
@@ -155,9 +159,29 @@ function walkForCalls(node, arrows, enclosingFn) {
         if ((sym === "defn" || sym === "defn-" || sym === "defmacro") && vals[1]?.type === "sym_lit") {
           const newFnName = vals[1].text;
           for (const child of node.namedChildren) {
-            walkForCalls(child, arrows, newFnName);
+            walkForCalls(child, elements, arrows, newFnName);
           }
           return;
+        }
+        if ((sym === "def" || sym === "defonce") && vals[1]?.type === "sym_lit") {
+          const defName = vals[1].text;
+          for (const child of node.namedChildren) {
+            walkForCalls(child, elements, arrows, defName);
+          }
+          for (let i = 2; i < vals.length; i++) {
+            walkForRefs(vals[i], arrows, defName);
+          }
+          return;
+        }
+        if (sym === "defmethod" && vals[1]?.type === "sym_lit") {
+          const methodName = vals[1].text;
+          for (const child of node.namedChildren) {
+            walkForCalls(child, elements, arrows, methodName);
+          }
+          return;
+        }
+        if (sym === "throw" && enclosingFn) {
+          collectThrowKeywords(node, elements, arrows, enclosingFn);
         }
         if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
           arrows.push({ kind: "calls", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: sym, attrs: {} });
@@ -168,8 +192,52 @@ function walkForCalls(node, arrows, enclosingFn) {
     }
   }
   for (const child of node.namedChildren) {
-    walkForCalls(child, arrows, enclosingFn);
+    walkForCalls(child, elements, arrows, enclosingFn);
   }
+}
+function walkForRefs(node, arrows, srcName) {
+  if (!node) return;
+  if (node.type === "list_lit") {
+    const vals = listValues(node);
+    for (let i = 1; i < vals.length; i++) {
+      walkForRefs(vals[i], arrows, srcName);
+    }
+    return;
+  }
+  if (node.type === "sym_lit") {
+    const sym = node.text;
+    if (!DEFINITION_FORMS.has(sym) && sym !== srcName) {
+      arrows.push({ kind: "references", srcModule: "", srcName, dstModule: "", dstName: sym, attrs: {} });
+    }
+    return;
+  }
+  for (const child of node.namedChildren) {
+    walkForRefs(child, arrows, srcName);
+  }
+}
+function collectThrowKeywords(throwNode, elements, arrows, enclosingFn) {
+  function walk(n, isMapKey) {
+    if (isMapKey) return;
+    if (n.type === "kwd_lit") {
+      const kwd = n.text;
+      if (kwd.includes("/")) {
+        if (!elements.find((e) => e.name === kwd && e.kind === "symbol")) {
+          elements.push({ kind: "symbol", name: kwd, module: "", span: formatSpan(n), attrs: { errorKeyword: true } });
+        }
+        arrows.push({ kind: "throws", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: kwd, attrs: {} });
+      }
+      return;
+    }
+    if (n.type === "map_lit") {
+      const children = n.namedChildren;
+      for (let i = 0; i < children.length; i++) {
+        walk(children[i], i % 2 === 0);
+      }
+      return;
+    }
+    for (const child of n.namedChildren) walk(child, false);
+  }
+  for (const child of throwNode.namedChildren) walk(child, false);
 }
 
 // src/adapter.ts

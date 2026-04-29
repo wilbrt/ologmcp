@@ -50,6 +50,7 @@ export type ArrowKind =
   | 'hasProperty'
   | 'hasType'
   | 'implementedAs'
+  | 'throws'
   | 'other';
 
 /**

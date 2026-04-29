@@ -11,7 +11,7 @@ type OlogKind = 'file' | 'module' | 'symbol' | 'callsite' | 'import' | 'type' | 
 /**
  * Union of all arrow kinds in the ontology.
  */
-type ArrowKind = 'extends' | 'implements' | 'calls' | 'imports' | 'exports' | 'references' | 'contains' | 'returns' | 'param' | 'typeof' | 'instanceof' | 'definedIn' | 'inModule' | 'memberOf' | 'callerOf' | 'calleeOf' | 'importsFrom' | 'locatedIn' | 'hasProperty' | 'hasType' | 'implementedAs' | 'other';
+type ArrowKind = 'extends' | 'implements' | 'calls' | 'imports' | 'exports' | 'references' | 'contains' | 'returns' | 'param' | 'typeof' | 'instanceof' | 'definedIn' | 'inModule' | 'memberOf' | 'callerOf' | 'calleeOf' | 'importsFrom' | 'locatedIn' | 'hasProperty' | 'hasType' | 'implementedAs' | 'throws' | 'other';
 /**
  * Represents an element in the ontology.
  */
@@ -1007,6 +1007,11 @@ interface DelegationBrief {
         signature: string;
         importStatement: string;
         calleeBodySnippet: string;
+        calleeCallees: Array<{
+            name: string;
+            module: string;
+            snippet: string;
+        }>;
     }>;
     mustImplement: Array<{
         name: string;
