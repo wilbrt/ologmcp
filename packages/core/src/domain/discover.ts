@@ -44,6 +44,25 @@ export function toNounPhrase(pascalName: string): string {
 }
 
 /**
+ * Convert any function name style (kebab-case, snake_case, camelCase, PascalCase)
+ * to an olog noun phrase. Strips namespace qualifiers before converting.
+ */
+export function toNounPhraseFromName(name: string): string {
+  const local = name.includes('/') ? (name.split('/').pop() ?? name) : name;
+  if (local.includes('-')) {
+    const words = local.split('-').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1));
+    const noun = words.join(' ');
+    return (/^[aeiouAEIOU]/.test(noun) ? 'an ' : 'a ') + noun;
+  }
+  if (local.includes('_')) {
+    const words = local.split('_').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1));
+    const noun = words.join(' ');
+    return (/^[aeiouAEIOU]/.test(noun) ? 'an ' : 'a ') + noun;
+  }
+  return toNounPhrase(local.charAt(0).toUpperCase() + local.slice(1));
+}
+
+/**
  * Returns true if the module path represents an external (non-project) module.
  */
 export function isExternalModule(module: string | null, excludeModules?: string[]): boolean {
@@ -243,4 +262,142 @@ export function discoverDomainCandidates(
   }
 
   return candidates;
+}
+
+const WALKABLE_KINDS = new Set(['function', 'method', 'const']);
+
+/**
+ * Left Kan extension of the implementedAs functor along the code call graph.
+ *
+ * Starting from every committed domain element, follows callerOf edges in the
+ * code graph up to maxDepth hops. For each reachable code element:
+ * - If it already has a domain label: propose a "calls" arrow between the two
+ *   domain concepts (stored on a shell candidate for the source domain element).
+ * - If it has no domain label: propose a new domain candidate and a "calls"
+ *   arrow from the source concept to it.
+ *
+ * Returns a mix of shell candidates (status="accepted", existing domain elements
+ * that gain new arrows) and new candidates (status="proposed") for review.
+ */
+export function extendDomainByKan(
+  store: OlogStore,
+  options: { maxDepth?: number; excludeModules?: string[] } = {},
+): DomainCandidate[] {
+  const maxDepth = options.maxDepth ?? 2;
+
+  // code element id → existing domain element
+  const codeIdToDomain = new Map<string, { id: string; name: string }>();
+  for (const domElem of store.queryElements({ kind: 'domain', limit: 10000 })) {
+    for (const arr of store.outgoing(domElem.id)) {
+      if (arr.kind === 'implementedAs') {
+        codeIdToDomain.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  if (codeIdToDomain.size === 0) return [];
+
+  const shellsByDomainId = new Map<string, DomainCandidate>();
+  const newCandsByCodeId = new Map<string, DomainCandidate>();
+  const seenArrows = new Set<string>();
+
+  function getShell(domainId: string, domainName: string, codeId: string): DomainCandidate {
+    let shell = shellsByDomainId.get(domainId);
+    if (!shell) {
+      const cid = randomUUID();
+      shell = {
+        id: cid,
+        codeElementId: codeId,
+        proposedName: domainName,
+        proposedArrows: [],
+        bridgeArrow: {
+          id: randomUUID(), name: 'implemented as', domainCandidateId: cid,
+          codomainName: domainName, codomainCandidateId: null, codomainExistingElemId: null,
+          total: true, source: 'kan_extension', confidence: 'resolved', status: 'proposed',
+        },
+        questions: [],
+        status: 'accepted', // existing element — auto-accept so its new arrows get written on commit
+      };
+      shellsByDomainId.set(domainId, shell);
+    }
+    return shell;
+  }
+
+  function getOrCreateNewCand(id: string, name: string, kind: string): DomainCandidate {
+    let cand = newCandsByCodeId.get(id);
+    if (!cand) {
+      const cid = randomUUID();
+      cand = {
+        id: cid,
+        codeElementId: id,
+        proposedName: toNounPhraseFromName(name),
+        proposedArrows: [],
+        bridgeArrow: {
+          id: randomUUID(), name: 'implemented as', domainCandidateId: cid,
+          codomainName: name, codomainCandidateId: null, codomainExistingElemId: null,
+          total: true, source: 'kan_extension', confidence: 'tentative', status: 'proposed',
+        },
+        questions: [`Discovered via Kan extension from call graph. Is "${toNounPhraseFromName(name)}" a meaningful domain concept?`],
+        status: 'proposed',
+      };
+      newCandsByCodeId.set(id, cand);
+    }
+    return cand;
+  }
+
+  function proposeArrow(
+    src: DomainCandidate,
+    dstCandId: string | null,
+    dstExistingId: string | null,
+    dstName: string,
+    confidence: 'resolved' | 'tentative',
+  ): void {
+    const key = `${src.id}:${dstCandId ?? dstExistingId}`;
+    if (seenArrows.has(key)) return;
+    seenArrows.add(key);
+    src.proposedArrows.push({
+      id: randomUUID(), name: 'calls',
+      domainCandidateId: src.id,
+      codomainName: dstName,
+      codomainCandidateId: dstCandId,
+      codomainExistingElemId: dstExistingId,
+      total: false, source: 'kan_extension', confidence, status: 'proposed',
+    });
+  }
+
+  for (const [startCodeId, startDomain] of codeIdToDomain) {
+    const queue: Array<{ codeId: string; domCand: DomainCandidate; depth: number }> = [
+      { codeId: startCodeId, domCand: getShell(startDomain.id, startDomain.name, startCodeId), depth: 0 },
+    ];
+    const visited = new Set<string>([startCodeId]);
+
+    while (queue.length > 0) {
+      const item = queue.shift()!;
+      if (item.depth >= maxDepth) continue;
+
+      for (const arr of store.outgoing(item.codeId)) {
+        if (arr.kind !== 'callerOf') continue;
+        const calleeId = arr.dstId;
+        if (visited.has(calleeId)) continue;
+        visited.add(calleeId);
+
+        const callee = store.getElem(calleeId);
+        if (!callee) continue;
+        if (!WALKABLE_KINDS.has(callee.kind)) continue;
+        if (isExternalModule(callee.module, options.excludeModules)) continue;
+
+        const existingDomain = codeIdToDomain.get(calleeId);
+        if (existingDomain) {
+          proposeArrow(item.domCand, null, existingDomain.id, existingDomain.name, 'resolved');
+          const calleeShell = getShell(existingDomain.id, existingDomain.name, calleeId);
+          queue.push({ codeId: calleeId, domCand: calleeShell, depth: item.depth + 1 });
+        } else {
+          const newCand = getOrCreateNewCand(calleeId, callee.name, callee.kind);
+          proposeArrow(item.domCand, newCand.id, null, newCand.proposedName, 'tentative');
+          queue.push({ codeId: calleeId, domCand: newCand, depth: item.depth + 1 });
+        }
+      }
+    }
+  }
+
+  return [...shellsByDomainId.values(), ...newCandsByCodeId.values()];
 }

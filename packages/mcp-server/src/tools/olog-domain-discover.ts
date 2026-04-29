@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, discoverDomainCandidates, getExistingDomainElementsByCodeId } from '@olog/core';
+import { OlogStore, discoverDomainCandidates, extendDomainByKan, getExistingDomainElementsByCodeId } from '@olog/core';
 
 export function registerOlogDomainDiscover(server: McpServer, store: OlogStore): void {
   server.registerTool(
@@ -35,9 +35,11 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
         'session object including candidates and their status.',
       inputSchema: z.object({
         action: z
-          .enum(['start', 'refine', 'commit', 'list', 'get'])
+          .enum(['start', 'extend', 'refine', 'commit', 'list', 'get'])
           .describe(
-            'Action to perform: "start" begins a new session, "refine" accepts/rejects candidates, ' +
+            'Action to perform: "start" begins a new session from type definitions, ' +
+            '"extend" runs the Kan extension pass to propagate domain labels along the call graph, ' +
+            '"refine" accepts/rejects candidates, ' +
             '"commit" writes to the olog, "list" shows all sessions, "get" returns a session by ID.',
           ),
         // start
@@ -48,7 +50,14 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
         excludeModules: z
           .array(z.string())
           .optional()
-          .describe('(start) Module path patterns to exclude from discovery'),
+          .describe('(start/extend) Module path patterns to exclude from discovery'),
+        maxDepth: z
+          .number()
+          .int()
+          .min(1)
+          .max(5)
+          .optional()
+          .describe('(extend) Maximum call-graph hops to follow from each labeled domain element. Default 2.'),
         // refine, commit, get
         sessionId: z
           .string()
@@ -143,6 +152,54 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
                 ),
               },
             ],
+          };
+        }
+
+        if (params.action === 'extend') {
+          const kanOpts = {
+            ...(params.maxDepth !== undefined && { maxDepth: params.maxDepth }),
+            ...(params.excludeModules !== undefined && { excludeModules: params.excludeModules }),
+          };
+          const candidates = extendDomainByKan(store, kanOpts);
+
+          if (candidates.length === 0) {
+            return {
+              content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: 'No committed domain elements found. Run action="start" and commit a session first.' }, null, 2) }],
+              isError: true,
+            };
+          }
+
+          const shells = candidates.filter(c => c.status === 'accepted');
+          const newCands = candidates.filter(c => c.status === 'proposed');
+
+          const sessionId = store.sessions.create({
+            candidates,
+            equations: [],
+            commitSha: store.commitSha(),
+          });
+
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                sessionId,
+                existingWithNewArrows: shells.length,
+                newCandidates: newCands.length,
+                totalArrowsProposed: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
+                shells: shells.map(s => ({
+                  id: s.id,
+                  domainName: s.proposedName,
+                  newArrows: s.proposedArrows.map(a => ({ id: a.id, name: a.name, codomain: a.codomainName, confidence: a.confidence })),
+                })),
+                newCandidates: newCands.map(c => ({
+                  id: c.id,
+                  proposedName: c.proposedName,
+                  codeElement: c.codeElementId,
+                  calledBy: c.proposedArrows.map(a => a.codomainName),
+                  questions: c.questions,
+                })),
+              }, null, 2),
+            }],
           };
         }
 

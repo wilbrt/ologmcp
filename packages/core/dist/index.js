@@ -3711,6 +3711,20 @@ function toNounPhrase(pascalName) {
   const article = /^[aeiouAEIOU]/.test(noun) ? "an" : "a";
   return `${article} ${noun}`;
 }
+function toNounPhraseFromName(name) {
+  const local = name.includes("/") ? name.split("/").pop() ?? name : name;
+  if (local.includes("-")) {
+    const words = local.split("-").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+    const noun = words.join(" ");
+    return (/^[aeiouAEIOU]/.test(noun) ? "an " : "a ") + noun;
+  }
+  if (local.includes("_")) {
+    const words = local.split("_").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+    const noun = words.join(" ");
+    return (/^[aeiouAEIOU]/.test(noun) ? "an " : "a ") + noun;
+  }
+  return toNounPhrase(local.charAt(0).toUpperCase() + local.slice(1));
+}
 function isExternalModule(module, excludeModules) {
   if (module === null) return true;
   if (module.startsWith("node:")) return true;
@@ -3856,6 +3870,127 @@ function discoverDomainCandidates(store, options = {}) {
   }
   return candidates;
 }
+var WALKABLE_KINDS = /* @__PURE__ */ new Set(["function", "method", "const"]);
+function extendDomainByKan(store, options = {}) {
+  const maxDepth = options.maxDepth ?? 2;
+  const codeIdToDomain = /* @__PURE__ */ new Map();
+  for (const domElem of store.queryElements({ kind: "domain", limit: 1e4 })) {
+    for (const arr of store.outgoing(domElem.id)) {
+      if (arr.kind === "implementedAs") {
+        codeIdToDomain.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  if (codeIdToDomain.size === 0) return [];
+  const shellsByDomainId = /* @__PURE__ */ new Map();
+  const newCandsByCodeId = /* @__PURE__ */ new Map();
+  const seenArrows = /* @__PURE__ */ new Set();
+  function getShell(domainId, domainName, codeId) {
+    let shell = shellsByDomainId.get(domainId);
+    if (!shell) {
+      const cid = randomUUID5();
+      shell = {
+        id: cid,
+        codeElementId: codeId,
+        proposedName: domainName,
+        proposedArrows: [],
+        bridgeArrow: {
+          id: randomUUID5(),
+          name: "implemented as",
+          domainCandidateId: cid,
+          codomainName: domainName,
+          codomainCandidateId: null,
+          codomainExistingElemId: null,
+          total: true,
+          source: "kan_extension",
+          confidence: "resolved",
+          status: "proposed"
+        },
+        questions: [],
+        status: "accepted"
+        // existing element — auto-accept so its new arrows get written on commit
+      };
+      shellsByDomainId.set(domainId, shell);
+    }
+    return shell;
+  }
+  function getOrCreateNewCand(id, name, kind) {
+    let cand = newCandsByCodeId.get(id);
+    if (!cand) {
+      const cid = randomUUID5();
+      cand = {
+        id: cid,
+        codeElementId: id,
+        proposedName: toNounPhraseFromName(name),
+        proposedArrows: [],
+        bridgeArrow: {
+          id: randomUUID5(),
+          name: "implemented as",
+          domainCandidateId: cid,
+          codomainName: name,
+          codomainCandidateId: null,
+          codomainExistingElemId: null,
+          total: true,
+          source: "kan_extension",
+          confidence: "tentative",
+          status: "proposed"
+        },
+        questions: [`Discovered via Kan extension from call graph. Is "${toNounPhraseFromName(name)}" a meaningful domain concept?`],
+        status: "proposed"
+      };
+      newCandsByCodeId.set(id, cand);
+    }
+    return cand;
+  }
+  function proposeArrow(src, dstCandId, dstExistingId, dstName, confidence) {
+    const key = `${src.id}:${dstCandId ?? dstExistingId}`;
+    if (seenArrows.has(key)) return;
+    seenArrows.add(key);
+    src.proposedArrows.push({
+      id: randomUUID5(),
+      name: "calls",
+      domainCandidateId: src.id,
+      codomainName: dstName,
+      codomainCandidateId: dstCandId,
+      codomainExistingElemId: dstExistingId,
+      total: false,
+      source: "kan_extension",
+      confidence,
+      status: "proposed"
+    });
+  }
+  for (const [startCodeId, startDomain] of codeIdToDomain) {
+    const queue = [
+      { codeId: startCodeId, domCand: getShell(startDomain.id, startDomain.name, startCodeId), depth: 0 }
+    ];
+    const visited = /* @__PURE__ */ new Set([startCodeId]);
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item.depth >= maxDepth) continue;
+      for (const arr of store.outgoing(item.codeId)) {
+        if (arr.kind !== "callerOf") continue;
+        const calleeId = arr.dstId;
+        if (visited.has(calleeId)) continue;
+        visited.add(calleeId);
+        const callee = store.getElem(calleeId);
+        if (!callee) continue;
+        if (!WALKABLE_KINDS.has(callee.kind)) continue;
+        if (isExternalModule(callee.module, options.excludeModules)) continue;
+        const existingDomain = codeIdToDomain.get(calleeId);
+        if (existingDomain) {
+          proposeArrow(item.domCand, null, existingDomain.id, existingDomain.name, "resolved");
+          const calleeShell = getShell(existingDomain.id, existingDomain.name, calleeId);
+          queue.push({ codeId: calleeId, domCand: calleeShell, depth: item.depth + 1 });
+        } else {
+          const newCand = getOrCreateNewCand(calleeId, callee.name, callee.kind);
+          proposeArrow(item.domCand, newCand.id, null, newCand.proposedName, "tentative");
+          queue.push({ codeId: calleeId, domCand: newCand, depth: item.depth + 1 });
+        }
+      }
+    }
+  }
+  return [...shellsByDomainId.values(), ...newCandsByCodeId.values()];
+}
 export {
   AdapterRegistry,
   DomainSessionStore,
@@ -3875,6 +4010,7 @@ export {
   evaluateEquation,
   evaluateEquationCandidate,
   evaluatePathEquations,
+  extendDomainByKan,
   extractEgoGraph,
   generateCandidatePairs,
   getArrowKindsInUse,
@@ -3893,6 +4029,7 @@ export {
   setDefaultRegistry,
   shapeHash,
   toNounPhrase,
+  toNounPhraseFromName,
   traverse,
   validateEquation,
   verifyInternalEquations

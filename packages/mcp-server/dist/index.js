@@ -4044,6 +4044,20 @@ function toNounPhrase(pascalName) {
   const article = /^[aeiouAEIOU]/.test(noun) ? "an" : "a";
   return `${article} ${noun}`;
 }
+function toNounPhraseFromName(name) {
+  const local = name.includes("/") ? name.split("/").pop() ?? name : name;
+  if (local.includes("-")) {
+    const words = local.split("-").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+    const noun = words.join(" ");
+    return (/^[aeiouAEIOU]/.test(noun) ? "an " : "a ") + noun;
+  }
+  if (local.includes("_")) {
+    const words = local.split("_").filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+    const noun = words.join(" ");
+    return (/^[aeiouAEIOU]/.test(noun) ? "an " : "a ") + noun;
+  }
+  return toNounPhrase(local.charAt(0).toUpperCase() + local.slice(1));
+}
 function isExternalModule(module, excludeModules) {
   if (module === null) return true;
   if (module.startsWith("node:")) return true;
@@ -4188,6 +4202,127 @@ function discoverDomainCandidates(store2, options = {}) {
     }
   }
   return candidates;
+}
+var WALKABLE_KINDS = /* @__PURE__ */ new Set(["function", "method", "const"]);
+function extendDomainByKan(store2, options = {}) {
+  const maxDepth = options.maxDepth ?? 2;
+  const codeIdToDomain = /* @__PURE__ */ new Map();
+  for (const domElem of store2.queryElements({ kind: "domain", limit: 1e4 })) {
+    for (const arr of store2.outgoing(domElem.id)) {
+      if (arr.kind === "implementedAs") {
+        codeIdToDomain.set(arr.dstId, { id: domElem.id, name: domElem.name });
+      }
+    }
+  }
+  if (codeIdToDomain.size === 0) return [];
+  const shellsByDomainId = /* @__PURE__ */ new Map();
+  const newCandsByCodeId = /* @__PURE__ */ new Map();
+  const seenArrows = /* @__PURE__ */ new Set();
+  function getShell(domainId, domainName, codeId) {
+    let shell = shellsByDomainId.get(domainId);
+    if (!shell) {
+      const cid = randomUUID5();
+      shell = {
+        id: cid,
+        codeElementId: codeId,
+        proposedName: domainName,
+        proposedArrows: [],
+        bridgeArrow: {
+          id: randomUUID5(),
+          name: "implemented as",
+          domainCandidateId: cid,
+          codomainName: domainName,
+          codomainCandidateId: null,
+          codomainExistingElemId: null,
+          total: true,
+          source: "kan_extension",
+          confidence: "resolved",
+          status: "proposed"
+        },
+        questions: [],
+        status: "accepted"
+        // existing element — auto-accept so its new arrows get written on commit
+      };
+      shellsByDomainId.set(domainId, shell);
+    }
+    return shell;
+  }
+  function getOrCreateNewCand(id, name, kind) {
+    let cand = newCandsByCodeId.get(id);
+    if (!cand) {
+      const cid = randomUUID5();
+      cand = {
+        id: cid,
+        codeElementId: id,
+        proposedName: toNounPhraseFromName(name),
+        proposedArrows: [],
+        bridgeArrow: {
+          id: randomUUID5(),
+          name: "implemented as",
+          domainCandidateId: cid,
+          codomainName: name,
+          codomainCandidateId: null,
+          codomainExistingElemId: null,
+          total: true,
+          source: "kan_extension",
+          confidence: "tentative",
+          status: "proposed"
+        },
+        questions: [`Discovered via Kan extension from call graph. Is "${toNounPhraseFromName(name)}" a meaningful domain concept?`],
+        status: "proposed"
+      };
+      newCandsByCodeId.set(id, cand);
+    }
+    return cand;
+  }
+  function proposeArrow(src, dstCandId, dstExistingId, dstName, confidence) {
+    const key = `${src.id}:${dstCandId ?? dstExistingId}`;
+    if (seenArrows.has(key)) return;
+    seenArrows.add(key);
+    src.proposedArrows.push({
+      id: randomUUID5(),
+      name: "calls",
+      domainCandidateId: src.id,
+      codomainName: dstName,
+      codomainCandidateId: dstCandId,
+      codomainExistingElemId: dstExistingId,
+      total: false,
+      source: "kan_extension",
+      confidence,
+      status: "proposed"
+    });
+  }
+  for (const [startCodeId, startDomain] of codeIdToDomain) {
+    const queue = [
+      { codeId: startCodeId, domCand: getShell(startDomain.id, startDomain.name, startCodeId), depth: 0 }
+    ];
+    const visited = /* @__PURE__ */ new Set([startCodeId]);
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item.depth >= maxDepth) continue;
+      for (const arr of store2.outgoing(item.codeId)) {
+        if (arr.kind !== "callerOf") continue;
+        const calleeId = arr.dstId;
+        if (visited.has(calleeId)) continue;
+        visited.add(calleeId);
+        const callee = store2.getElem(calleeId);
+        if (!callee) continue;
+        if (!WALKABLE_KINDS.has(callee.kind)) continue;
+        if (isExternalModule(callee.module, options.excludeModules)) continue;
+        const existingDomain = codeIdToDomain.get(calleeId);
+        if (existingDomain) {
+          proposeArrow(item.domCand, null, existingDomain.id, existingDomain.name, "resolved");
+          const calleeShell = getShell(existingDomain.id, existingDomain.name, calleeId);
+          queue.push({ codeId: calleeId, domCand: calleeShell, depth: item.depth + 1 });
+        } else {
+          const newCand = getOrCreateNewCand(calleeId, callee.name, callee.kind);
+          proposeArrow(item.domCand, newCand.id, null, newCand.proposedName, "tentative");
+          queue.push({ codeId: calleeId, domCand: newCand, depth: item.depth + 1 });
+        }
+      }
+    }
+  }
+  return [...shellsByDomainId.values(), ...newCandsByCodeId.values()];
 }
 
 // src/index.ts
@@ -5608,12 +5743,13 @@ Actions:
 - action="list": List all domain discovery sessions. Returns array of session summaries.
 - action="get": Get details of a specific session. Required: sessionId. Returns the full session object including candidates and their status.`,
       inputSchema: z12.object({
-        action: z12.enum(["start", "refine", "commit", "list", "get"]).describe(
-          'Action to perform: "start" begins a new session, "refine" accepts/rejects candidates, "commit" writes to the olog, "list" shows all sessions, "get" returns a session by ID.'
+        action: z12.enum(["start", "extend", "refine", "commit", "list", "get"]).describe(
+          'Action to perform: "start" begins a new session from type definitions, "extend" runs the Kan extension pass to propagate domain labels along the call graph, "refine" accepts/rejects candidates, "commit" writes to the olog, "list" shows all sessions, "get" returns a session by ID.'
         ),
         // start
         scopeRegex: z12.string().optional().describe('(start) Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
-        excludeModules: z12.array(z12.string()).optional().describe("(start) Module path patterns to exclude from discovery"),
+        excludeModules: z12.array(z12.string()).optional().describe("(start/extend) Module path patterns to exclude from discovery"),
+        maxDepth: z12.number().int().min(1).max(5).optional().describe("(extend) Maximum call-graph hops to follow from each labeled domain element. Default 2."),
         // refine, commit, get
         sessionId: z12.string().optional().describe("(refine/commit/get) Session ID returned by start"),
         // refine
@@ -5694,6 +5830,49 @@ Actions:
                 )
               }
             ]
+          };
+        }
+        if (params.action === "extend") {
+          const kanOpts = {
+            ...params.maxDepth !== void 0 && { maxDepth: params.maxDepth },
+            ...params.excludeModules !== void 0 && { excludeModules: params.excludeModules }
+          };
+          const candidates = extendDomainByKan(store2, kanOpts);
+          if (candidates.length === 0) {
+            return {
+              content: [{ type: "text", text: JSON.stringify({ ok: false, error: 'No committed domain elements found. Run action="start" and commit a session first.' }, null, 2) }],
+              isError: true
+            };
+          }
+          const shells = candidates.filter((c) => c.status === "accepted");
+          const newCands = candidates.filter((c) => c.status === "proposed");
+          const sessionId = store2.sessions.create({
+            candidates,
+            equations: [],
+            commitSha: store2.commitSha()
+          });
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                sessionId,
+                existingWithNewArrows: shells.length,
+                newCandidates: newCands.length,
+                totalArrowsProposed: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
+                shells: shells.map((s) => ({
+                  id: s.id,
+                  domainName: s.proposedName,
+                  newArrows: s.proposedArrows.map((a) => ({ id: a.id, name: a.name, codomain: a.codomainName, confidence: a.confidence }))
+                })),
+                newCandidates: newCands.map((c) => ({
+                  id: c.id,
+                  proposedName: c.proposedName,
+                  codeElement: c.codeElementId,
+                  calledBy: c.proposedArrows.map((a) => a.codomainName),
+                  questions: c.questions
+                }))
+              }, null, 2)
+            }]
           };
         }
         if (params.action === "refine") {

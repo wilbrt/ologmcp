@@ -218,7 +218,7 @@ interface ArrowProposal {
     /** ID of an already-committed domain element (fallback when codomainCandidateId is null). */
     codomainExistingElemId: string | null;
     total: boolean;
-    source: 'field' | 'method' | 'type_ref' | 'extends' | 'implements';
+    source: 'field' | 'method' | 'type_ref' | 'extends' | 'implements' | 'kan_extension';
     confidence: ConfidenceLevel;
     question?: string;
     status: 'proposed' | 'accepted' | 'rejected' | 'modified';
@@ -1120,6 +1120,11 @@ interface StructuralContext {
  */
 declare function toNounPhrase(pascalName: string): string;
 /**
+ * Convert any function name style (kebab-case, snake_case, camelCase, PascalCase)
+ * to an olog noun phrase. Strips namespace qualifiers before converting.
+ */
+declare function toNounPhraseFromName(name: string): string;
+/**
  * Returns true if the module path represents an external (non-project) module.
  */
 declare function isExternalModule(module: string | null, excludeModules?: string[]): boolean;
@@ -1139,6 +1144,23 @@ declare function getExistingDomainElementsByCodeId(store: OlogStore): Map<string
  * full list of candidates for user review.
  */
 declare function discoverDomainCandidates(store: OlogStore, options?: DiscoveryOptions): DomainCandidate[];
+/**
+ * Left Kan extension of the implementedAs functor along the code call graph.
+ *
+ * Starting from every committed domain element, follows callerOf edges in the
+ * code graph up to maxDepth hops. For each reachable code element:
+ * - If it already has a domain label: propose a "calls" arrow between the two
+ *   domain concepts (stored on a shell candidate for the source domain element).
+ * - If it has no domain label: propose a new domain candidate and a "calls"
+ *   arrow from the source concept to it.
+ *
+ * Returns a mix of shell candidates (status="accepted", existing domain elements
+ * that gain new arrows) and new candidates (status="proposed") for review.
+ */
+declare function extendDomainByKan(store: OlogStore, options?: {
+    maxDepth?: number;
+    excludeModules?: string[];
+}): DomainCandidate[];
 
 /**
  * Candidate pair generation for mining.
@@ -1215,4 +1237,4 @@ declare function verifyInternalEquations(store: OlogStore, group: ShapeGroup, op
     coverage: number;
 }>;
 
-export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extractEgoGraph, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, traverse, validateEquation, verifyInternalEquations };
+export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };

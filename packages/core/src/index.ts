@@ -84,7 +84,7 @@ export {
   type MiningOptions,
   type ArrowPath,
 } from './mining/index.js';
-export { discoverDomainCandidates, toNounPhrase, isExternalModule, getExistingDomainElementsByCodeId } from './domain/discover.js';
+export { discoverDomainCandidates, extendDomainByKan, toNounPhrase, toNounPhraseFromName, isExternalModule, getExistingDomainElementsByCodeId } from './domain/discover.js';
 export type {
   DomainCandidate,
   ArrowProposal,
