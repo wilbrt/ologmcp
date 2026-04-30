@@ -162,6 +162,12 @@ export class OlogStore {
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)');
     }
 
+    // Migrate: remove stored arrows that are now derived on-the-fly
+    const redundantKinds = ['inModule', 'locatedIn', 'contains', 'imports'];
+    for (const kind of redundantKinds) {
+      this.db.prepare('DELETE FROM olog_arr WHERE kind = ?').run(kind);
+    }
+
     // Motif discovery session table
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS olog_motif_session (
@@ -430,6 +436,35 @@ export class OlogStore {
   incoming(dstId: string): OlogArr[] {
     const rows = this.incomingStmt.all(dstId) as ArrRow[];
     return rows.map(r => this.rowToArr(r));
+  }
+
+  /** Derive virtual arrows that are no longer stored: inModule/locatedIn (≡ definedIn),
+   *  contains (≡ inverse definedIn for files), imports (≡ inverse importsFrom for files). */
+  outgoingDerived(elemId: string): OlogArr[] {
+    const derived: OlogArr[] = [];
+    const stored = this.outgoing(elemId);
+    for (const a of stored) {
+      if (a.kind === 'definedIn') {
+        derived.push({ id: `${a.srcId}:inModule:${a.dstId}`, kind: 'inModule' as ArrowKind, srcId: a.srcId, dstId: a.dstId, attrs: a.attrs });
+        derived.push({ id: `${a.srcId}:locatedIn:${a.dstId}`, kind: 'locatedIn' as ArrowKind, srcId: a.srcId, dstId: a.dstId, attrs: a.attrs });
+      }
+    }
+    for (const a of this.incoming(elemId)) {
+      if (a.kind === 'definedIn') {
+        derived.push({ id: `${elemId}:contains:${a.srcId}`, kind: 'contains' as ArrowKind, srcId: elemId, dstId: a.srcId, attrs: a.attrs });
+      }
+      if (a.kind === 'importsFrom') {
+        derived.push({ id: `${elemId}:imports:${a.srcId}`, kind: 'imports' as ArrowKind, srcId: elemId, dstId: a.srcId, attrs: a.attrs });
+      }
+    }
+    return derived;
+  }
+
+  getElemsByModule(module: string): OlogElem[] {
+    const rows = this.db.prepare(
+      'SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE module = ?'
+    ).all(module) as ElemRow[];
+    return rows.map(r => this.rowToElem(r));
   }
 
   queryElements(opts: { kind?: string; nameRegex?: string; moduleRegex?: string; limit: number }): OlogElem[] {

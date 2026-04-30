@@ -105,7 +105,6 @@ function extractFromFile(parser, source, queryPath) {
       }
       if (first("import.source")) {
         const n = first("import.source").node;
-        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: n.text, dstName: "", attrs: {} });
         if (first("import.name")) {
           arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.name").node.text, dstModule: n.text, dstName: "", attrs: { module: n.text } });
         }
@@ -414,12 +413,19 @@ async function init() {
   parserInstance = new Parser2();
   parserInstance.setLanguage(clojureLanguage);
 }
+var CLJ_CONFIG = {
+  languageId: "clojure",
+  extensions: [".clj", ".cljs", ".cljc"],
+  globPattern: "**/*.{clj,cljs,cljc}",
+  nodeTypeToKind: {},
+  kindToNodeTypes: KIND_TO_NODE_TYPES
+};
 var ClojureAdapter = class {
-  languageId = "clojure";
-  extensions = [".clj", ".cljs", ".cljc"];
-  globPattern = "**/*.{clj,cljs,cljc}";
-  nodeTypeToKind = {};
-  kindToNodeTypes = KIND_TO_NODE_TYPES;
+  languageId = CLJ_CONFIG.languageId;
+  extensions = CLJ_CONFIG.extensions;
+  globPattern = CLJ_CONFIG.globPattern;
+  nodeTypeToKind = CLJ_CONFIG.nodeTypeToKind;
+  kindToNodeTypes = CLJ_CONFIG.kindToNodeTypes;
   createParser(_filename) {
     if (!parserInstance) {
       throw new Error("Clojure parser not initialized. Call init() first.");

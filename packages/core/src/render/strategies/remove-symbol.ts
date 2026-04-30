@@ -67,30 +67,7 @@ export function computeRemoveSymbolEdits(
     }
   }
 
-  // 3. Check for dead imports in the element's own module
-  if (elem.module && elem.kind !== 'import') {
-    const source = readFile(elem.module);
-    if (source) {
-      const fileElem = store.getElem(`file:${elem.module}`);
-      if (fileElem) {
-        const contained = store.outgoing(fileElem.id)
-          .filter((a: OlogArr) => a.kind === 'contains')
-          .map((a: OlogArr) => store.getElem(a.dstId))
-          .filter((e: OlogElem | null): e is OlogElem => e !== null && e.kind === 'import');
-
-        for (const imp of contained) {
-          if (imp.name === elem.name || imp.id === elementId) continue;
-
-          // Check if this import is the only one referencing a particular source
-          const incoming = store.incoming(imp.id);
-          const importsFrom = incoming.filter(a => a.kind === 'imports');
-          // This information isn't sufficient yet; need deeper analysis
-        }
-      }
-    }
-  }
-
-  // 4. Report affected call sites
+  // 3. Report affected call sites
   const incoming = store.incoming(elementId);
   const callers = incoming
     .filter((a: OlogArr) => a.kind === 'callerOf' || a.kind === 'calleeOf')

@@ -143,10 +143,6 @@ export function ingestChangedFiles(projectRoot: string, store: OlogStore, regist
       newNameToIds.set(rawElem.name, globalExisting);
 
       elems.push({ id, kind: rawElem.kind, name: rawElem.name, module: rel, span: fullSpan, attrs: JSON.stringify(rawElem.attrs) });
-      if (rawElem.kind !== 'file') {
-        const aid = arrowId(fileId, 'contains', id);
-        if (!seenArrowIds.has(aid)) { seenArrowIds.add(aid); arrs.push({ id: aid, kind: 'contains', src_id: fileId, dst_id: id, attrs: '{}' }); }
-      }
     }
 
     for (const rawArrow of extracted.arrows) {
@@ -399,19 +395,6 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
         attrs: JSON.stringify(rawElem.attrs),
       });
 
-      if (rawElem.kind !== 'file') {
-        const aid = arrowId(fileId, 'contains', id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({
-            id: aid,
-            kind: 'contains',
-            src_id: fileId,
-            dst_id: id,
-            attrs: '{}',
-          });
-        }
-      }
     }
 
     // definedIn arrows — symbol definitions to their module (file)
@@ -423,24 +406,6 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
           seenArrowIds.add(aid);
           arrs.push({ id: aid, kind: 'definedIn', src_id: id, dst_id: fileId, attrs: '{}' });
         }
-      }
-    }
-
-    // inModule arrows — every element belongs to its module (file)
-    for (const { id } of elementIds) {
-      const aid = arrowId(id, 'inModule', fileId);
-      if (!seenArrowIds.has(aid)) {
-        seenArrowIds.add(aid);
-        arrs.push({ id: aid, kind: 'inModule', src_id: id, dst_id: fileId, attrs: '{}' });
-      }
-    }
-
-    // locatedIn arrows — every element is located in its containing file
-    for (const { id } of elementIds) {
-      const aid = arrowId(id, 'locatedIn', fileId);
-      if (!seenArrowIds.has(aid)) {
-        seenArrowIds.add(aid);
-        arrs.push({ id: aid, kind: 'locatedIn', src_id: id, dst_id: fileId, attrs: '{}' });
       }
     }
 
@@ -508,17 +473,6 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
         const line = coords?.startLine ?? 1;
         const col = coords?.startCol ?? 1;
         const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
-        const aid = arrowId(fileId, 'imports', id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({
-            id: aid,
-            kind: 'imports',
-            src_id: fileId,
-            dst_id: id,
-            attrs: '{}',
-          });
-        }
 
         const sourceModule = (rawElem.attrs as Record<string, string>).sourceModule;
         if (sourceModule) {

@@ -653,6 +653,10 @@ declare class OlogStore {
     getArr(id: string): OlogArr | null;
     outgoing(srcId: string): OlogArr[];
     incoming(dstId: string): OlogArr[];
+    /** Derive virtual arrows that are no longer stored: inModule/locatedIn (≡ definedIn),
+     *  contains (≡ inverse definedIn for files), imports (≡ inverse importsFrom for files). */
+    outgoingDerived(elemId: string): OlogArr[];
+    getElemsByModule(module: string): OlogElem[];
     queryElements(opts: {
         kind?: string;
         nameRegex?: string;

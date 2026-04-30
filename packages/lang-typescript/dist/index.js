@@ -139,12 +139,6 @@ function extractFromFile(parser, source, queryPath, resolveImport) {
         elements.push({ kind: "import", name: nsCap.node.text, module: "", span: formatSpan(nsCap.node), attrs: attrs("*") });
         arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: nsCap.node.text, dstModule: sourceModule, dstName: "", attrs: { module: sourceModule } });
       }
-      arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: sourceModule, dstName: "", attrs: {} });
-    }
-    for (const srcCap of ["reexport.source", "require.source"]) {
-      if (_first(srcCap)) {
-        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: _first(srcCap).node.text, dstName: "", attrs: {} });
-      }
     }
     if (_first("call.callee")) {
       const calleeNode = _first("call.callee").node;
@@ -290,12 +284,19 @@ var DECLARATION_NODE_TYPES = {
   const: ["variable_declarator"],
   var: ["variable_declarator"]
 };
+var TS_CONFIG = {
+  languageId: "typescript",
+  extensions: [".ts", ".tsx", ".mts", ".cts"],
+  globPattern: "**/*.{ts,tsx,mts,cts}",
+  nodeTypeToKind: NODE_TYPE_TO_KIND,
+  kindToNodeTypes: DECLARATION_NODE_TYPES
+};
 var TypeScriptAdapter = class {
-  languageId = "typescript";
-  extensions = [".ts", ".tsx", ".mts", ".cts"];
-  globPattern = "**/*.{ts,tsx,mts,cts}";
-  nodeTypeToKind = NODE_TYPE_TO_KIND;
-  kindToNodeTypes = DECLARATION_NODE_TYPES;
+  languageId = TS_CONFIG.languageId;
+  extensions = TS_CONFIG.extensions;
+  globPattern = TS_CONFIG.globPattern;
+  nodeTypeToKind = TS_CONFIG.nodeTypeToKind;
+  kindToNodeTypes = TS_CONFIG.kindToNodeTypes;
   createParser(filename) {
     const parser = new Parser3();
     const ext = filename.substring(filename.lastIndexOf("."));

@@ -183,13 +183,6 @@ export function extractFromFile(
         arrows.push({ kind: asKind('importsFrom'), srcModule: '', srcName: nsCap.node.text, dstModule: sourceModule, dstName: '', attrs: { module: sourceModule } });
       }
 
-      arrows.push({ kind: 'imports', srcModule: '', srcName: '', dstModule: sourceModule, dstName: '', attrs: {} });
-    }
-
-    for (const srcCap of ['reexport.source', 'require.source'] as const) {
-      if (_first(srcCap)) {
-        arrows.push({ kind: 'imports', srcModule: '', srcName: '', dstModule: _first(srcCap)!.node.text, dstName: '', attrs: {} });
-      }
     }
 
     if (_first('call.callee')) {

@@ -376,10 +376,6 @@ export function extendDomainByKan(
       for (const arr of store.incoming(startCodeId)) {
         if (arr.kind === 'memberOf') seedCodeIds.add(arr.srcId);
       }
-      // outgoing contains arrows: class/module --contains--> function
-      for (const arr of store.outgoing(startCodeId)) {
-        if (arr.kind === 'contains') seedCodeIds.add(arr.dstId);
-      }
     }
 
     const queue: Array<{ codeId: string; domCand: DomainCandidate; depth: number }> = [];

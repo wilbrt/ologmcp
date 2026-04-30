@@ -2,9 +2,6 @@ import Parser from 'tree-sitter';
 import { LanguageAdapter, OlogKind, RawElement, RawArrow, PropertyExtract, ArrowKind } from '@olog/core';
 export { PropertyExtract } from '@olog/core';
 
-/**
- * Language adapter for TypeScript and TSX files.
- */
 declare class TypeScriptAdapter implements LanguageAdapter<Parser> {
     languageId: string;
     extensions: string[];

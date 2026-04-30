@@ -30,7 +30,7 @@ export function registerOlogInspect(server: McpServer, store: OlogStore, project
           };
         }
 
-        const outgoing = store.outgoing(id);
+        const outgoing = [...store.outgoing(id), ...store.outgoingDerived(id)];
         const incoming = store.incoming(id);
 
         const prov = store.getProvenance(id);

@@ -108,19 +108,6 @@ function findImportReferences(store: OlogStore, elem: OlogElem): OlogElem[] {
     if (candidate.id === elem.id) continue;
     if (candidate.module === elem.module) continue;
 
-    // Check if this import references the same source module
-    const incoming = store.incoming(candidate.id);
-    for (const arr of incoming) {
-      if (arr.kind === 'contains') {
-        // The import is contained in a file — check if it imports from the same module
-        const outgoing = store.outgoing(candidate.id);
-        for (const oarr of outgoing) {
-          if (oarr.kind === 'importsFrom') {
-            results.push(candidate);
-          }
-        }
-      }
-    }
     results.push(candidate);
   }
 

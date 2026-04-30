@@ -134,7 +134,6 @@ export function extractFromFile(
 
       if (first('import.source')) {
         const n = first('import.source')!.node;
-        arrows.push({ kind: 'imports', srcModule: '', srcName: '', dstModule: n.text, dstName: '', attrs: {} });
         if (first('import.name')) {
           arrows.push({ kind: asKind('importsFrom'), srcModule: '', srcName: first('import.name')!.node.text, dstModule: n.text, dstName: '', attrs: { module: n.text } });
         }

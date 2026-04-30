@@ -258,6 +258,10 @@ var OlogStore = class {
       this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
     }
+    const redundantKinds = ["inModule", "locatedIn", "contains", "imports"];
+    for (const kind of redundantKinds) {
+      this.db.prepare("DELETE FROM olog_arr WHERE kind = ?").run(kind);
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS olog_motif_session (
         id              TEXT PRIMARY KEY,
@@ -490,6 +494,33 @@ var OlogStore = class {
   incoming(dstId) {
     const rows = this.incomingStmt.all(dstId);
     return rows.map((r) => this.rowToArr(r));
+  }
+  /** Derive virtual arrows that are no longer stored: inModule/locatedIn (≡ definedIn),
+   *  contains (≡ inverse definedIn for files), imports (≡ inverse importsFrom for files). */
+  outgoingDerived(elemId2) {
+    const derived = [];
+    const stored = this.outgoing(elemId2);
+    for (const a of stored) {
+      if (a.kind === "definedIn") {
+        derived.push({ id: `${a.srcId}:inModule:${a.dstId}`, kind: "inModule", srcId: a.srcId, dstId: a.dstId, attrs: a.attrs });
+        derived.push({ id: `${a.srcId}:locatedIn:${a.dstId}`, kind: "locatedIn", srcId: a.srcId, dstId: a.dstId, attrs: a.attrs });
+      }
+    }
+    for (const a of this.incoming(elemId2)) {
+      if (a.kind === "definedIn") {
+        derived.push({ id: `${elemId2}:contains:${a.srcId}`, kind: "contains", srcId: elemId2, dstId: a.srcId, attrs: a.attrs });
+      }
+      if (a.kind === "importsFrom") {
+        derived.push({ id: `${elemId2}:imports:${a.srcId}`, kind: "imports", srcId: elemId2, dstId: a.srcId, attrs: a.attrs });
+      }
+    }
+    return derived;
+  }
+  getElemsByModule(module) {
+    const rows = this.db.prepare(
+      "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE module = ?"
+    ).all(module);
+    return rows.map((r) => this.rowToElem(r));
   }
   queryElements(opts) {
     const conditions = [];
@@ -1382,13 +1413,6 @@ function ingestChangedFiles(projectRoot, store, registry) {
       globalExisting.push(id);
       newNameToIds.set(rawElem.name, globalExisting);
       elems.push({ id, kind: rawElem.kind, name: rawElem.name, module: rel, span: fullSpan, attrs: JSON.stringify(rawElem.attrs) });
-      if (rawElem.kind !== "file") {
-        const aid = arrowId(fileId, "contains", id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({ id: aid, kind: "contains", src_id: fileId, dst_id: id, attrs: "{}" });
-        }
-      }
     }
     for (const rawArrow of extracted.arrows) {
       if (rawArrow.kind === "importsFrom") {
@@ -1572,19 +1596,6 @@ function runIngestion(projectRoot, store, head, registry) {
         span: fullSpan,
         attrs: JSON.stringify(rawElem.attrs)
       });
-      if (rawElem.kind !== "file") {
-        const aid = arrowId(fileId, "contains", id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({
-            id: aid,
-            kind: "contains",
-            src_id: fileId,
-            dst_id: id,
-            attrs: "{}"
-          });
-        }
-      }
     }
     const definitionKinds = /* @__PURE__ */ new Set(["function", "class", "interface", "type", "enum", "method"]);
     for (const { id, kind } of elementIds) {
@@ -1594,20 +1605,6 @@ function runIngestion(projectRoot, store, head, registry) {
           seenArrowIds.add(aid);
           arrs.push({ id: aid, kind: "definedIn", src_id: id, dst_id: fileId, attrs: "{}" });
         }
-      }
-    }
-    for (const { id } of elementIds) {
-      const aid = arrowId(id, "inModule", fileId);
-      if (!seenArrowIds.has(aid)) {
-        seenArrowIds.add(aid);
-        arrs.push({ id: aid, kind: "inModule", src_id: id, dst_id: fileId, attrs: "{}" });
-      }
-    }
-    for (const { id } of elementIds) {
-      const aid = arrowId(id, "locatedIn", fileId);
-      if (!seenArrowIds.has(aid)) {
-        seenArrowIds.add(aid);
-        arrs.push({ id: aid, kind: "locatedIn", src_id: id, dst_id: fileId, attrs: "{}" });
       }
     }
     for (const rawArrow of extracted.arrows) {
@@ -1667,17 +1664,6 @@ function runIngestion(projectRoot, store, head, registry) {
         const line = coords?.startLine ?? 1;
         const col = coords?.startCol ?? 1;
         const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
-        const aid = arrowId(fileId, "imports", id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({
-            id: aid,
-            kind: "imports",
-            src_id: fileId,
-            dst_id: id,
-            attrs: "{}"
-          });
-        }
         const sourceModule = rawElem.attrs.sourceModule;
         if (sourceModule) {
           const resolvedSourceModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(sourceModule, relativePath, projectRoot) ?? sourceModule : sourceModule;
@@ -1977,17 +1963,6 @@ function findImportReferences(store, elem) {
   for (const candidate of candidates) {
     if (candidate.id === elem.id) continue;
     if (candidate.module === elem.module) continue;
-    const incoming = store.incoming(candidate.id);
-    for (const arr of incoming) {
-      if (arr.kind === "contains") {
-        const outgoing = store.outgoing(candidate.id);
-        for (const oarr of outgoing) {
-          if (oarr.kind === "importsFrom") {
-            results.push(candidate);
-          }
-        }
-      }
-    }
     results.push(candidate);
   }
   return [...new Map(results.map((e) => [e.id, e])).values()];
@@ -2266,20 +2241,6 @@ function computeRemoveSymbolEdits(store, elementId, readFile) {
             endLine: importRange.endLine,
             endCol: importRange.endCol
           });
-        }
-      }
-    }
-  }
-  if (elem.module && elem.kind !== "import") {
-    const source = readFile(elem.module);
-    if (source) {
-      const fileElem = store.getElem(`file:${elem.module}`);
-      if (fileElem) {
-        const contained = store.outgoing(fileElem.id).filter((a) => a.kind === "contains").map((a) => store.getElem(a.dstId)).filter((e) => e !== null && e.kind === "import");
-        for (const imp of contained) {
-          if (imp.name === elem.name || imp.id === elementId) continue;
-          const incoming2 = store.incoming(imp.id);
-          const importsFrom = incoming2.filter((a) => a.kind === "imports");
         }
       }
     }
@@ -2810,12 +2771,6 @@ function getModuleElement(store, modulePath) {
 function getModuleFilePath(store, modulePath) {
   const modElem = getModuleElement(store, modulePath);
   if (!modElem) return null;
-  const outgoing = store.outgoing(modElem.id);
-  const locatedIn = outgoing.find((a) => a.kind === "locatedIn");
-  if (locatedIn) {
-    const fileElem = store.getElem(locatedIn.dstId);
-    if (fileElem) return fileElem.name;
-  }
   return modulePath;
 }
 function gatherDomainContext(store, targetId) {
@@ -3781,21 +3736,17 @@ var ALL_ARROW_KINDS = [
   "extends",
   "implements",
   "calls",
-  "imports",
   "exports",
   "references",
-  "contains",
   "returns",
   "param",
   "typeof",
   "instanceof",
   "definedIn",
-  "inModule",
   "memberOf",
   "callerOf",
   "calleeOf",
   "importsFrom",
-  "locatedIn",
   "hasProperty",
   "hasType",
   "implementedAs",
@@ -4247,9 +4198,6 @@ function extendDomainByKan(store, options = {}) {
     if (startElem && !WALKABLE_KINDS.has(startElem.kind)) {
       for (const arr of store.incoming(startCodeId)) {
         if (arr.kind === "memberOf") seedCodeIds.add(arr.srcId);
-      }
-      for (const arr of store.outgoing(startCodeId)) {
-        if (arr.kind === "contains") seedCodeIds.add(arr.dstId);
       }
     }
     const queue = [];

@@ -610,28 +610,14 @@ import { join as join3 } from "path";
 import { randomUUID as randomUUID4 } from "crypto";
 import { createHash } from "crypto";
 import { randomUUID as randomUUID5 } from "crypto";
-var DomainSessionStore = class {
-  constructor(db) {
+var SessionStore = class {
+  constructor(db, insertSQL, selectColumns, tableName, updateSQL) {
     this.db = db;
-    this.insertStmt = this.db.prepare(
-      `INSERT INTO olog_domain_session
-         (id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    this.getStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
-       FROM olog_domain_session WHERE id = ?`
-    );
-    this.listStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
-       FROM olog_domain_session ORDER BY created_at DESC`
-    );
-    this.updateStmt = this.db.prepare(
-      `UPDATE olog_domain_session
-       SET status = ?, scope_regex = ?, candidates_json = ?, equations_json = ?, updated_at = ?
-       WHERE id = ?`
-    );
-    this.deleteStmt = this.db.prepare(`DELETE FROM olog_domain_session WHERE id = ?`);
+    this.insertStmt = db.prepare(insertSQL);
+    this.getStmt = db.prepare(`SELECT ${selectColumns} FROM ${tableName} WHERE id = ?`);
+    this.listStmt = db.prepare(`SELECT ${selectColumns} FROM ${tableName} ORDER BY created_at DESC`);
+    this.updateStmt = db.prepare(updateSQL);
+    this.deleteStmt = db.prepare(`DELETE FROM ${tableName} WHERE id = ?`);
   }
   db;
   insertStmt;
@@ -639,21 +625,6 @@ var DomainSessionStore = class {
   listStmt;
   updateStmt;
   deleteStmt;
-  create(data) {
-    const id = randomUUID();
-    const now = Date.now();
-    this.insertStmt.run(
-      id,
-      "active",
-      data.scopeRegex ?? null,
-      JSON.stringify(data.candidates),
-      JSON.stringify(data.equations),
-      data.commitSha,
-      now,
-      now
-    );
-    return id;
-  }
   get(id) {
     const row = this.getStmt.get(id);
     if (!row) return null;
@@ -663,21 +634,20 @@ var DomainSessionStore = class {
     const rows = this.listStmt.all();
     return rows.map((r) => this.rowToSession(r));
   }
-  update(id, data) {
-    const current = this.get(id);
-    if (!current) throw new Error(`Domain session not found: ${id}`);
-    const merged = { ...current, ...data };
-    this.updateStmt.run(
-      merged.status,
-      merged.scopeRegex,
-      JSON.stringify(merged.candidates),
-      JSON.stringify(merged.equations),
-      Date.now(),
-      id
-    );
-  }
   delete(id) {
     this.deleteStmt.run(id);
+  }
+};
+var SELECT_COLUMNS = "id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at";
+var DomainSessionStore = class extends SessionStore {
+  constructor(db) {
+    super(
+      db,
+      `INSERT INTO olog_domain_session (id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      SELECT_COLUMNS,
+      "olog_domain_session",
+      `UPDATE olog_domain_session SET status = ?, scope_regex = ?, candidates_json = ?, equations_json = ?, updated_at = ? WHERE id = ?`
+    );
   }
   rowToSession(row) {
     return {
@@ -691,73 +661,29 @@ var DomainSessionStore = class {
       updatedAt: row.updated_at
     };
   }
-};
-var MotifSessionStore = class {
-  constructor(db) {
-    this.db = db;
-    this.insertStmt = this.db.prepare(
-      `INSERT INTO olog_motif_session
-         (id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-    this.getStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
-       FROM olog_motif_session WHERE id = ?`
-    );
-    this.listStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
-       FROM olog_motif_session ORDER BY created_at DESC`
-    );
-    this.updateStmt = this.db.prepare(
-      `UPDATE olog_motif_session
-       SET status = ?, scope_regex = ?, candidates_json = ?, updated_at = ?
-       WHERE id = ?`
-    );
-    this.deleteStmt = this.db.prepare(`DELETE FROM olog_motif_session WHERE id = ?`);
-  }
-  db;
-  insertStmt;
-  getStmt;
-  listStmt;
-  updateStmt;
-  deleteStmt;
   create(data) {
-    const id = randomUUID2();
+    const id = randomUUID();
     const now = Date.now();
-    this.insertStmt.run(
-      id,
-      "active",
-      data.scopeRegex ?? null,
-      JSON.stringify(data.candidates),
-      data.commitSha,
-      now,
-      now
-    );
+    this.insertStmt.run(id, "active", data.scopeRegex ?? null, JSON.stringify(data.candidates), JSON.stringify(data.equations), data.commitSha, now, now);
     return id;
-  }
-  get(id) {
-    const row = this.getStmt.get(id);
-    if (!row) return null;
-    return this.rowToSession(row);
-  }
-  list() {
-    const rows = this.listStmt.all();
-    return rows.map((r) => this.rowToSession(r));
   }
   update(id, data) {
     const current = this.get(id);
-    if (!current) throw new Error(`Motif session not found: ${id}`);
+    if (!current) throw new Error(`Domain session not found: ${id}`);
     const merged = { ...current, ...data };
-    this.updateStmt.run(
-      merged.status,
-      merged.scopeRegex,
-      JSON.stringify(merged.candidates),
-      Date.now(),
-      id
-    );
+    this.updateStmt.run(merged.status, merged.scopeRegex, JSON.stringify(merged.candidates), JSON.stringify(merged.equations), Date.now(), id);
   }
-  delete(id) {
-    this.deleteStmt.run(id);
+};
+var SELECT_COLUMNS2 = "id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at";
+var MotifSessionStore = class extends SessionStore {
+  constructor(db) {
+    super(
+      db,
+      `INSERT INTO olog_motif_session (id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      SELECT_COLUMNS2,
+      "olog_motif_session",
+      `UPDATE olog_motif_session SET status = ?, scope_regex = ?, candidates_json = ?, updated_at = ? WHERE id = ?`
+    );
   }
   rowToSession(row) {
     return {
@@ -769,6 +695,18 @@ var MotifSessionStore = class {
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
+  }
+  create(data) {
+    const id = randomUUID2();
+    const now = Date.now();
+    this.insertStmt.run(id, "active", data.scopeRegex ?? null, JSON.stringify(data.candidates), data.commitSha, now, now);
+    return id;
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Motif session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(merged.status, merged.scopeRegex, JSON.stringify(merged.candidates), Date.now(), id);
   }
 };
 function rowToElem(row) {
@@ -912,6 +850,10 @@ var OlogStore = class {
       this.db.exec("DROP TABLE olog_prov");
       this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
+    }
+    const redundantKinds = ["inModule", "locatedIn", "contains", "imports"];
+    for (const kind of redundantKinds) {
+      this.db.prepare("DELETE FROM olog_arr WHERE kind = ?").run(kind);
     }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS olog_motif_session (
@@ -1145,6 +1087,33 @@ var OlogStore = class {
   incoming(dstId) {
     const rows = this.incomingStmt.all(dstId);
     return rows.map((r) => this.rowToArr(r));
+  }
+  /** Derive virtual arrows that are no longer stored: inModule/locatedIn (≡ definedIn),
+   *  contains (≡ inverse definedIn for files), imports (≡ inverse importsFrom for files). */
+  outgoingDerived(elemId2) {
+    const derived = [];
+    const stored = this.outgoing(elemId2);
+    for (const a of stored) {
+      if (a.kind === "definedIn") {
+        derived.push({ id: `${a.srcId}:inModule:${a.dstId}`, kind: "inModule", srcId: a.srcId, dstId: a.dstId, attrs: a.attrs });
+        derived.push({ id: `${a.srcId}:locatedIn:${a.dstId}`, kind: "locatedIn", srcId: a.srcId, dstId: a.dstId, attrs: a.attrs });
+      }
+    }
+    for (const a of this.incoming(elemId2)) {
+      if (a.kind === "definedIn") {
+        derived.push({ id: `${elemId2}:contains:${a.srcId}`, kind: "contains", srcId: elemId2, dstId: a.srcId, attrs: a.attrs });
+      }
+      if (a.kind === "importsFrom") {
+        derived.push({ id: `${elemId2}:imports:${a.srcId}`, kind: "imports", srcId: elemId2, dstId: a.srcId, attrs: a.attrs });
+      }
+    }
+    return derived;
+  }
+  getElemsByModule(module) {
+    const rows = this.db.prepare(
+      "SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE module = ?"
+    ).all(module);
+    return rows.map((r) => this.rowToElem(r));
   }
   queryElements(opts) {
     const conditions = [];
@@ -2020,13 +1989,6 @@ function ingestChangedFiles(projectRoot2, store2, registry) {
       globalExisting.push(id);
       newNameToIds.set(rawElem.name, globalExisting);
       elems.push({ id, kind: rawElem.kind, name: rawElem.name, module: rel, span: fullSpan, attrs: JSON.stringify(rawElem.attrs) });
-      if (rawElem.kind !== "file") {
-        const aid = arrowId(fileId, "contains", id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({ id: aid, kind: "contains", src_id: fileId, dst_id: id, attrs: "{}" });
-        }
-      }
     }
     for (const rawArrow of extracted.arrows) {
       if (rawArrow.kind === "importsFrom") {
@@ -2210,19 +2172,6 @@ function runIngestion(projectRoot2, store2, head, registry) {
         span: fullSpan,
         attrs: JSON.stringify(rawElem.attrs)
       });
-      if (rawElem.kind !== "file") {
-        const aid = arrowId(fileId, "contains", id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({
-            id: aid,
-            kind: "contains",
-            src_id: fileId,
-            dst_id: id,
-            attrs: "{}"
-          });
-        }
-      }
     }
     const definitionKinds = /* @__PURE__ */ new Set(["function", "class", "interface", "type", "enum", "method"]);
     for (const { id, kind } of elementIds) {
@@ -2232,20 +2181,6 @@ function runIngestion(projectRoot2, store2, head, registry) {
           seenArrowIds.add(aid);
           arrs.push({ id: aid, kind: "definedIn", src_id: id, dst_id: fileId, attrs: "{}" });
         }
-      }
-    }
-    for (const { id } of elementIds) {
-      const aid = arrowId(id, "inModule", fileId);
-      if (!seenArrowIds.has(aid)) {
-        seenArrowIds.add(aid);
-        arrs.push({ id: aid, kind: "inModule", src_id: id, dst_id: fileId, attrs: "{}" });
-      }
-    }
-    for (const { id } of elementIds) {
-      const aid = arrowId(id, "locatedIn", fileId);
-      if (!seenArrowIds.has(aid)) {
-        seenArrowIds.add(aid);
-        arrs.push({ id: aid, kind: "locatedIn", src_id: id, dst_id: fileId, attrs: "{}" });
       }
     }
     for (const rawArrow of extracted.arrows) {
@@ -2305,17 +2240,6 @@ function runIngestion(projectRoot2, store2, head, registry) {
         const line = coords?.startLine ?? 1;
         const col = coords?.startCol ?? 1;
         const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
-        const aid = arrowId(fileId, "imports", id);
-        if (!seenArrowIds.has(aid)) {
-          seenArrowIds.add(aid);
-          arrs.push({
-            id: aid,
-            kind: "imports",
-            src_id: fileId,
-            dst_id: id,
-            attrs: "{}"
-          });
-        }
         const sourceModule = rawElem.attrs.sourceModule;
         if (sourceModule) {
           const resolvedSourceModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(sourceModule, relativePath, projectRoot2) ?? sourceModule : sourceModule;
@@ -2607,17 +2531,6 @@ function findImportReferences(store2, elem) {
   for (const candidate of candidates) {
     if (candidate.id === elem.id) continue;
     if (candidate.module === elem.module) continue;
-    const incoming = store2.incoming(candidate.id);
-    for (const arr of incoming) {
-      if (arr.kind === "contains") {
-        const outgoing = store2.outgoing(candidate.id);
-        for (const oarr of outgoing) {
-          if (oarr.kind === "importsFrom") {
-            results.push(candidate);
-          }
-        }
-      }
-    }
     results.push(candidate);
   }
   return [...new Map(results.map((e) => [e.id, e])).values()];
@@ -2889,20 +2802,6 @@ function computeRemoveSymbolEdits(store2, elementId, readFile) {
             endLine: importRange.endLine,
             endCol: importRange.endCol
           });
-        }
-      }
-    }
-  }
-  if (elem.module && elem.kind !== "import") {
-    const source = readFile(elem.module);
-    if (source) {
-      const fileElem = store2.getElem(`file:${elem.module}`);
-      if (fileElem) {
-        const contained = store2.outgoing(fileElem.id).filter((a) => a.kind === "contains").map((a) => store2.getElem(a.dstId)).filter((e) => e !== null && e.kind === "import");
-        for (const imp of contained) {
-          if (imp.name === elem.name || imp.id === elementId) continue;
-          const incoming2 = store2.incoming(imp.id);
-          const importsFrom = incoming2.filter((a) => a.kind === "imports");
         }
       }
     }
@@ -3250,76 +3149,65 @@ function renderPlan(store2, operations, projectRoot2) {
     affectedFiles
   };
 }
-function gatherMustCall(store2, targetId) {
-  const outgoing = store2.outgoing(targetId);
-  const callerOfArrows = outgoing.filter((a) => a.kind === "callerOf");
-  const callees = [];
-  for (const arrow of callerOfArrows) {
-    const callee = store2.getElem(arrow.dstId);
-    if (callee) {
-      callees.push({
-        id: callee.id,
-        name: callee.name,
-        kind: callee.kind,
-        module: callee.module,
-        span: callee.span,
-        attrs: callee.attrs
-      });
+function queryRelatedElements(store2, targetId, options) {
+  const { direction, arrowKind, dedup = false } = options;
+  const results = [];
+  const seen = dedup ? /* @__PURE__ */ new Set() : null;
+  const processArrows = (arrows, resolveSide) => {
+    for (const arrow of arrows) {
+      const elemId2 = resolveSide === "srcId" ? arrow.srcId : arrow.dstId;
+      if (dedup && seen.has(elemId2)) continue;
+      if (dedup) seen.add(elemId2);
+      const elem = store2.getElem(elemId2);
+      if (elem) {
+        results.push({
+          id: elem.id,
+          name: elem.name,
+          kind: elem.kind,
+          module: elem.module,
+          span: elem.span,
+          attrs: elem.attrs
+        });
+      }
     }
+  };
+  if (direction === "outgoing" || direction === "both") {
+    const arrows = store2.outgoing(targetId).filter((a) => a.kind === arrowKind);
+    processArrows(arrows, "dstId");
   }
-  return callees;
+  if (direction === "incoming" || direction === "both") {
+    const arrows = store2.incoming(targetId).filter((a) => a.kind === arrowKind);
+    processArrows(arrows, "srcId");
+  }
+  return results;
+}
+function gatherMustCall(store2, targetId) {
+  return queryRelatedElements(store2, targetId, { direction: "outgoing", arrowKind: "callerOf" }).map((elem) => ({
+    id: elem.id,
+    name: elem.name,
+    kind: elem.kind,
+    module: elem.module,
+    span: elem.span,
+    attrs: elem.attrs ?? {}
+  }));
 }
 function gatherMustImplement(store2, targetId) {
-  const outgoing = store2.outgoing(targetId);
-  const implementsArrows = outgoing.filter((a) => a.kind === "implements");
-  const interfaces = [];
-  for (const arrow of implementsArrows) {
-    const iface = store2.getElem(arrow.dstId);
-    if (iface) {
-      interfaces.push({
-        id: iface.id,
-        name: iface.name,
-        kind: iface.kind,
-        module: iface.module,
-        span: iface.span
-      });
-    }
-  }
-  const incoming = store2.incoming(targetId);
-  const implementsIncoming = incoming.filter((a) => a.kind === "implements");
-  for (const arrow of implementsIncoming) {
-    const iface = store2.getElem(arrow.srcId);
-    if (iface) {
-      interfaces.push({
-        id: iface.id,
-        name: iface.name,
-        kind: iface.kind,
-        module: iface.module,
-        span: iface.span
-      });
-    }
-  }
-  return interfaces;
+  return queryRelatedElements(store2, targetId, { direction: "both", arrowKind: "implements" }).map((elem) => ({
+    id: elem.id,
+    name: elem.name,
+    kind: elem.kind,
+    module: elem.module,
+    span: elem.span
+  }));
 }
 function gatherUsedBy(store2, targetId) {
-  const incoming = store2.incoming(targetId);
-  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
-  const callers = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const arrow of callerOfArrows) {
-    const caller = store2.getElem(arrow.srcId);
-    if (caller && !seen.has(caller.id)) {
-      seen.add(caller.id);
-      callers.push({
-        id: caller.id,
-        name: caller.name,
-        kind: caller.kind,
-        module: caller.module,
-        span: caller.span
-      });
-    }
-  }
-  return callers;
+  return queryRelatedElements(store2, targetId, { direction: "incoming", arrowKind: "callerOf", dedup: true }).map((elem) => ({
+    id: elem.id,
+    name: elem.name,
+    kind: elem.kind,
+    module: elem.module,
+    span: elem.span
+  }));
 }
 function gatherImports(store2, targetModule) {
   const imports = [];
@@ -3351,12 +3239,6 @@ function getModuleElement(store2, modulePath) {
 function getModuleFilePath(store2, modulePath) {
   const modElem = getModuleElement(store2, modulePath);
   if (!modElem) return null;
-  const outgoing = store2.outgoing(modElem.id);
-  const locatedIn = outgoing.find((a) => a.kind === "locatedIn");
-  if (locatedIn) {
-    const fileElem = store2.getElem(locatedIn.dstId);
-    if (fileElem) return fileElem.name;
-  }
   return modulePath;
 }
 function gatherDomainContext(store2, targetId) {
@@ -4186,21 +4068,17 @@ var ALL_ARROW_KINDS = [
   "extends",
   "implements",
   "calls",
-  "imports",
   "exports",
   "references",
-  "contains",
   "returns",
   "param",
   "typeof",
   "instanceof",
   "definedIn",
-  "inModule",
   "memberOf",
   "callerOf",
   "calleeOf",
   "importsFrom",
-  "locatedIn",
   "hasProperty",
   "hasType",
   "implementedAs",
@@ -4650,9 +4528,6 @@ function extendDomainByKan(store2, options = {}) {
       for (const arr of store2.incoming(startCodeId)) {
         if (arr.kind === "memberOf") seedCodeIds.add(arr.srcId);
       }
-      for (const arr of store2.outgoing(startCodeId)) {
-        if (arr.kind === "contains") seedCodeIds.add(arr.dstId);
-      }
     }
     const queue = [];
     for (const seedId of seedCodeIds) {
@@ -5009,7 +4884,7 @@ function registerOlogInspect(server2, store2, projectRoot2) {
             isError: true
           };
         }
-        const outgoing = store2.outgoing(id);
+        const outgoing = [...store2.outgoing(id), ...store2.outgoingDerived(id)];
         const incoming = store2.incoming(id);
         const prov = store2.getProvenance(id);
         const provenance = prov ? [prov] : [];

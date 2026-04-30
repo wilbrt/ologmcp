@@ -209,21 +209,11 @@ export function getModuleElement(store: OlogStore, modulePath: string): OlogElem
 }
 
 /**
- * Get the file path for a module by finding its locatedIn file element.
+ * Get the file path for a module.
  */
 export function getModuleFilePath(store: OlogStore, modulePath: string): string | null {
   const modElem = getModuleElement(store, modulePath);
   if (!modElem) return null;
-
-  // Check if module has a locatedIn arrow to a file
-  const outgoing = store.outgoing(modElem.id);
-  const locatedIn = outgoing.find(a => a.kind === 'locatedIn');
-  if (locatedIn) {
-    const fileElem = store.getElem(locatedIn.dstId);
-    if (fileElem) return fileElem.name;
-  }
-
-  // Fallback: use module name as file path
   return modulePath;
 }
 
