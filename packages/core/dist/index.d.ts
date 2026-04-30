@@ -168,6 +168,10 @@ type PlanOperation = {
 } | {
     kind: 'removeArrow';
     arrowId: string;
+} | {
+    kind: 'rewrite_body';
+    target: string;
+    rationale: string;
 };
 interface Plan {
     operations: PlanOperation[];
@@ -612,6 +616,19 @@ declare class OlogStore {
     commitSha(): string;
     isFresh(head: string): boolean;
     ingestFull(elems: ElemRow[], arrs: ArrRow[], sha: string): number;
+    /** Return the set of relative module paths that have at least one tree-sitter element. */
+    getIngestedModules(): Set<string>;
+    /** Delete all tree-sitter elements for a given module (cascade removes arrows). */
+    deleteModuleTreeSitterElements(module: string): void;
+    /** Return a map of element name → [ids] across all elements, for cross-file resolution. */
+    getAllElemNameToIds(): Map<string, string[]>;
+    /** Return a map of element id → module for all elements with a module. */
+    getAllElemIdToModule(): Map<string, string>;
+    /**
+     * Insert elements and arrows for specific files without wiping the whole store.
+     * Used by incremental ingestion. Arrows that reference non-existent elements are silently skipped.
+     */
+    ingestFile(elems: ElemRow[], arrs: ArrRow[], sha: string): void;
     getElem(id: string): OlogElem | null;
     getArr(id: string): OlogArr | null;
     outgoing(srcId: string): OlogArr[];
@@ -926,6 +943,13 @@ declare function setDefaultRegistry(registry: AdapterRegistry): void;
 declare function getDefaultRegistry(): AdapterRegistry | undefined;
 
 declare function ingestProject(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult;
+/**
+ * Incremental ingestion: processes only files that are new or modified since the last index.
+ * New files: present on disk but not yet in the olog.
+ * Modified files: changed according to git since the stored commit SHA, or since uncommitted edits.
+ * Does not touch unchanged files, so it is much faster on large codebases.
+ */
+declare function ingestChangedFiles(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult;
 declare function reindexProject(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult;
 
 /**
@@ -1023,6 +1047,15 @@ interface DelegationBrief {
         callSiteSnippet: string;
     }>;
     importsInTargetFile: string[];
+    /**
+     * mustCall entries whose module is not imported in the target file.
+     * Each entry carries the import statement needed to fix it.
+     */
+    missingImports: Array<{
+        name: string;
+        module: string;
+        suggestedImport: string;
+    }>;
     analogues: Array<{
         name: string;
         similarity: number;
@@ -1031,6 +1064,29 @@ interface DelegationBrief {
         modulePath: string;
     }>;
     targetFileContent: string;
+    /**
+     * Domain model context for this code element.
+     * Null when no domain model has been built yet.
+     */
+    domainContext: {
+        /** Domain concept(s) this element directly implements via implementedAs. */
+        ownConcepts: Array<{
+            id: string;
+            name: string;
+            /** Domain arrows involving this concept (excluding implementedAs). */
+            arrows: Array<{
+                name: string;
+                direction: 'outgoing' | 'incoming';
+                peerName: string;
+            }>;
+        }>;
+        /** Domain concepts reachable via callers/callees (Kan neighborhood). */
+        neighborConcepts: Array<{
+            name: string;
+            via: 'caller' | 'callee';
+            codeElementName: string;
+        }>;
+    } | null;
     acceptanceCriteria: string[];
     provenance: {
         ologCommitSha: string;
@@ -1061,8 +1117,16 @@ declare class SourceResolver {
     readImportBlock(filePath: string): string[];
     computeImportStatement(symbolName: string, symbolModule: string, targetModule: string): string;
     readFileContent(filePath: string, maxLines?: number): string | null;
+    /**
+     * Read a window of source focused on a span: contextBefore lines above the
+     * start of the span and contextAfter lines below the end, with an omission
+     * comment if the file has content before the window.
+     */
+    readFocused(filePath: string, span: string, contextBefore?: number, contextAfter?: number): string | null;
     private readFile;
 }
+/** Extract the relative file path prefix from a full span string. */
+declare function filePathFromSpan(span: string): string | null;
 
 interface AnalogueCandidate {
     id: string;
@@ -1107,12 +1171,30 @@ interface ImportEntry {
     name: string;
     sourceModule: string | null;
     targetModule: string | null;
+    /** Language-specific raw import text (e.g. "[myapp.fee-model :as fee-model]" for Clojure). */
+    rawText?: string;
 }
 interface StructuralContext {
     mustCall: MustCallEntry[];
     mustImplement: MustImplementEntry[];
     usedBy: UsedByEntry[];
     imports: ImportEntry[];
+}
+interface DomainContext {
+    ownConcepts: Array<{
+        id: string;
+        name: string;
+        arrows: Array<{
+            name: string;
+            direction: 'outgoing' | 'incoming';
+            peerName: string;
+        }>;
+    }>;
+    neighborConcepts: Array<{
+        name: string;
+        via: 'caller' | 'callee';
+        codeElementName: string;
+    }>;
 }
 
 /**
@@ -1237,4 +1319,4 @@ declare function verifyInternalEquations(store: OlogStore, group: ShapeGroup, op
     coverage: number;
 }>;
 
-export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };
+export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };

@@ -367,6 +367,14 @@ export class OlogStore {
     return result;
   }
 
+  /** Return a map of element id → module for all elements with a module. */
+  getAllElemIdToModule(): Map<string, string> {
+    const rows = this.db.prepare("SELECT id, module FROM olog_elem WHERE module IS NOT NULL").all() as { id: string; module: string }[];
+    const result = new Map<string, string>();
+    for (const row of rows) result.set(row.id, row.module);
+    return result;
+  }
+
   /**
    * Insert elements and arrows for specific files without wiping the whole store.
    * Used by incremental ingestion. Arrows that reference non-existent elements are silently skipped.

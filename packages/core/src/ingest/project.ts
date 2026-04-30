@@ -188,19 +188,21 @@ export function ingestChangedFiles(projectRoot: string, store: OlogStore, regist
     globalNameToIds.set(name, existing);
   }
 
+  // Build id→module maps once for O(1) lookup during resolution
+  const dbIdToModule = store.getAllElemIdToModule();
+  const newElemIdToModule = new Map<string, string>();
+  for (const e of elems) {
+    if (e.module !== null && e.module !== undefined) newElemIdToModule.set(e.id, e.module);
+  }
+
   const seenCrossIds = new Set<string>();
   for (const pending of pendingCrossFileArrows) {
     const candidates = globalNameToIds.get(pending.dstName) ?? [];
     let dstId: string | undefined;
     if (pending.dstModuleSuffix) {
-      // Use DB to check module for existing elements; for new elements use newNameToIds (already global)
       const matched = candidates.filter(id => {
-        // Check in newly added elems first
-        const newElem = elems.find(e => e.id === id);
-        if (newElem) return newElem.module?.endsWith(pending.dstModuleSuffix) ?? false;
-        // Otherwise query the store
-        const elem = store.getElem(id);
-        return elem?.module?.endsWith(pending.dstModuleSuffix) ?? false;
+        const mod = newElemIdToModule.get(id) ?? dbIdToModule.get(id);
+        return mod?.endsWith(pending.dstModuleSuffix) ?? false;
       });
       if (matched.length === 1) dstId = matched[0];
     } else if (candidates.length === 1) {
@@ -627,10 +629,12 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
   }
 
   // --- Cross-file arrow resolution pass ---
-  // Resolve arrows where the dst element lives in another file.
-  // Matching strategy:
-  //   1. If dstModuleSuffix is provided, find elements with that name whose module ends with the suffix.
-  //   2. Otherwise, use global name lookup — accept only if the name is unambiguous (one match).
+  // Build an O(1) id→module map so the inner filter doesn't scan the entire elems array.
+  const elemIdToModule = new Map<string, string>();
+  for (const e of elems) {
+    if (e.module !== null && e.module !== undefined) elemIdToModule.set(e.id, e.module);
+  }
+
   const seenCrossFileArrowIds = new Set<string>();
   for (const pending of pendingCrossFileArrows) {
     const candidates = globalNameToIds.get(pending.dstName) ?? [];
@@ -638,10 +642,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
 
     if (pending.dstModuleSuffix) {
       const suffix = pending.dstModuleSuffix;
-      const matched = candidates.filter(id => {
-        const elem = elems.find(e => e.id === id);
-        return elem?.module?.endsWith(suffix) ?? false;
-      });
+      const matched = candidates.filter(id => elemIdToModule.get(id)?.endsWith(suffix) ?? false);
       if (matched.length === 1) dstId = matched[0];
     } else if (candidates.length === 1) {
       dstId = candidates[0];

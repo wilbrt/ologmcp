@@ -468,6 +468,69 @@ var OlogStore = class {
     tx();
     return elems.length;
   }
+  /** Return the set of relative module paths that have at least one tree-sitter element. */
+  getIngestedModules() {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT e.module FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'tree-sitter' AND e.module IS NOT NULL"
+    ).all();
+    return new Set(rows.map((r) => r.module));
+  }
+  /** Delete all tree-sitter elements for a given module (cascade removes arrows). */
+  deleteModuleTreeSitterElements(module) {
+    this.db.prepare(
+      "DELETE FROM olog_elem WHERE module = ? AND id IN (SELECT elem_id FROM olog_prov WHERE source = 'tree-sitter')"
+    ).run(module);
+  }
+  /** Return a map of element name → [ids] across all elements, for cross-file resolution. */
+  getAllElemNameToIds() {
+    const rows = this.db.prepare("SELECT id, name FROM olog_elem WHERE module IS NOT NULL").all();
+    const result = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const arr = result.get(row.name) ?? [];
+      arr.push(row.id);
+      result.set(row.name, arr);
+    }
+    return result;
+  }
+  /** Return a map of element id → module for all elements with a module. */
+  getAllElemIdToModule() {
+    const rows = this.db.prepare("SELECT id, module FROM olog_elem WHERE module IS NOT NULL").all();
+    const result = /* @__PURE__ */ new Map();
+    for (const row of rows) result.set(row.id, row.module);
+    return result;
+  }
+  /**
+   * Insert elements and arrows for specific files without wiping the whole store.
+   * Used by incremental ingestion. Arrows that reference non-existent elements are silently skipped.
+   */
+  ingestFile(elems, arrs, sha) {
+    const insertElem = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const insertArr = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+    );
+    const insertProv = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, 'tree-sitter', ?, ?, 'resolved')"
+    );
+    const updateMeta = this.db.prepare(
+      "INSERT INTO olog_meta (key, value) VALUES ('commit_sha', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    );
+    const tx = this.db.transaction(() => {
+      for (const e of elems) {
+        insertElem.run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
+        insertProv.run(e.id, sha, Date.now());
+      }
+      for (const a of arrs) {
+        try {
+          insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        } catch {
+        }
+      }
+      updateMeta.run(sha);
+    });
+    tx();
+  }
   getElem(id) {
     const row = this.getElemStmt.get(id);
     if (!row) return null;
@@ -1294,6 +1357,165 @@ function ingestProject(projectRoot, store, registry) {
   const result = runIngestion(projectRoot, store, head, registry);
   return { ...result, durationMs: Date.now() - start };
 }
+function ingestChangedFiles(projectRoot, store, registry) {
+  const start = Date.now();
+  const effectiveRegistry = registry ?? getDefaultRegistry();
+  if (!effectiveRegistry) throw new Error("No adapter registry available.");
+  setDefaultRegistry(effectiveRegistry);
+  let head;
+  try {
+    head = execSync("git rev-parse HEAD", { cwd: projectRoot, encoding: "utf8" }).trim();
+  } catch {
+    head = "nogit";
+  }
+  const gitChanged = /* @__PURE__ */ new Set();
+  const storedSha = store.commitSha();
+  try {
+    if (storedSha && storedSha !== "nogit" && storedSha !== head) {
+      execSync(`git diff --name-only ${storedSha} ${head}`, { cwd: projectRoot, encoding: "utf8" }).trim().split("\n").filter(Boolean).forEach((f) => gitChanged.add(f));
+    }
+    execSync("git status --porcelain", { cwd: projectRoot, encoding: "utf8" }).trim().split("\n").filter(Boolean).forEach((line) => {
+      const f = line.slice(3).trim();
+      if (f) gitChanged.add(f);
+    });
+  } catch {
+  }
+  const ingestedModules = store.getIngestedModules();
+  const allFiles = discoverFiles(projectRoot, effectiveRegistry);
+  const filesToProcess = allFiles.filter((abs) => {
+    const rel = relative(projectRoot, abs);
+    return !ingestedModules.has(rel) || gitChanged.has(rel);
+  });
+  if (filesToProcess.length === 0) {
+    return { filesProcessed: 0, elementsCreated: 0, arrowsCreated: 0, durationMs: Date.now() - start };
+  }
+  for (const abs of filesToProcess) {
+    const rel = relative(projectRoot, abs);
+    if (ingestedModules.has(rel)) store.deleteModuleTreeSitterElements(rel);
+  }
+  const elems = [];
+  const arrs = [];
+  const pendingCrossFileArrows = [];
+  const newNameToIds = /* @__PURE__ */ new Map();
+  const createdModuleIds = /* @__PURE__ */ new Set();
+  let filesProcessed = 0;
+  for (const absolutePath of filesToProcess) {
+    const rel = relative(projectRoot, absolutePath);
+    let stats;
+    try {
+      stats = statSync(absolutePath);
+    } catch {
+      continue;
+    }
+    if (stats.size > 1024 * 1024) continue;
+    let source;
+    try {
+      source = readFileSync2(absolutePath, "utf8");
+    } catch {
+      continue;
+    }
+    const adapter = effectiveRegistry.getForFile(absolutePath);
+    if (!adapter) continue;
+    let extracted;
+    try {
+      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath));
+    } catch (err) {
+      console.error(`[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const fileId = fileElemId(rel);
+    elems.push({ id: fileId, kind: "file", name: basename(rel), module: rel, span: null, attrs: "{}" });
+    const fileNameToId = /* @__PURE__ */ new Map();
+    const seenArrowIds = /* @__PURE__ */ new Set();
+    for (const rawElem of extracted.elements) {
+      const coords = parseTreeSitterSpan(rawElem.span);
+      const line = coords?.startLine ?? 1;
+      const col = coords?.startCol ?? 1;
+      const fullSpan = coords ? formatSpan(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
+      const id = elemId(rel, line, col, rawElem.kind, rawElem.name);
+      const fileExisting = fileNameToId.get(rawElem.name) ?? [];
+      fileExisting.push(id);
+      fileNameToId.set(rawElem.name, fileExisting);
+      const globalExisting = newNameToIds.get(rawElem.name) ?? [];
+      globalExisting.push(id);
+      newNameToIds.set(rawElem.name, globalExisting);
+      elems.push({ id, kind: rawElem.kind, name: rawElem.name, module: rel, span: fullSpan, attrs: JSON.stringify(rawElem.attrs) });
+      if (rawElem.kind !== "file") {
+        const aid = arrowId(fileId, "contains", id);
+        if (!seenArrowIds.has(aid)) {
+          seenArrowIds.add(aid);
+          arrs.push({ id: aid, kind: "contains", src_id: fileId, dst_id: id, attrs: "{}" });
+        }
+      }
+    }
+    for (const rawArrow of extracted.arrows) {
+      if (rawArrow.kind === "importsFrom") {
+        const srcId = (fileNameToId.get(rawArrow.srcName) ?? [])[0];
+        const rawModule = rawArrow.attrs.module ?? rawArrow.dstModule;
+        const resolvedModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(rawModule, rel, projectRoot) ?? rawModule : rawModule;
+        const moduleId = `module:${resolvedModule}`;
+        if (srcId) {
+          if (!createdModuleIds.has(moduleId)) {
+            createdModuleIds.add(moduleId);
+            elems.push({ id: moduleId, kind: "module", name: resolvedModule, module: resolvedModule, span: null, attrs: "{}" });
+          }
+          const aid = arrowId(srcId, "importsFrom", moduleId);
+          if (!seenArrowIds.has(aid)) {
+            seenArrowIds.add(aid);
+            arrs.push({ id: aid, kind: "importsFrom", src_id: srcId, dst_id: moduleId, attrs: JSON.stringify(rawArrow.attrs) });
+          }
+        }
+      } else {
+        const srcId = (fileNameToId.get(rawArrow.srcName) ?? [])[0];
+        const dstId = (fileNameToId.get(rawArrow.dstName) ?? [])[0];
+        if (srcId && dstId) {
+          const aid = arrowId(srcId, rawArrow.kind, dstId);
+          if (!seenArrowIds.has(aid)) {
+            seenArrowIds.add(aid);
+            arrs.push({ id: aid, kind: rawArrow.kind, src_id: srcId, dst_id: dstId, attrs: JSON.stringify(rawArrow.attrs) });
+          }
+        } else if (srcId && !dstId && rawArrow.dstName) {
+          pendingCrossFileArrows.push({ kind: rawArrow.kind, srcId, dstName: rawArrow.dstName, dstModuleSuffix: rawArrow.dstModule ?? "", attrs: JSON.stringify(rawArrow.attrs) });
+        }
+      }
+    }
+    filesProcessed++;
+  }
+  const globalNameToIds = store.getAllElemNameToIds();
+  for (const [name, ids] of newNameToIds) {
+    const existing = globalNameToIds.get(name) ?? [];
+    for (const id of ids) if (!existing.includes(id)) existing.push(id);
+    globalNameToIds.set(name, existing);
+  }
+  const dbIdToModule = store.getAllElemIdToModule();
+  const newElemIdToModule = /* @__PURE__ */ new Map();
+  for (const e of elems) {
+    if (e.module !== null && e.module !== void 0) newElemIdToModule.set(e.id, e.module);
+  }
+  const seenCrossIds = /* @__PURE__ */ new Set();
+  for (const pending of pendingCrossFileArrows) {
+    const candidates = globalNameToIds.get(pending.dstName) ?? [];
+    let dstId;
+    if (pending.dstModuleSuffix) {
+      const matched = candidates.filter((id) => {
+        const mod = newElemIdToModule.get(id) ?? dbIdToModule.get(id);
+        return mod?.endsWith(pending.dstModuleSuffix) ?? false;
+      });
+      if (matched.length === 1) dstId = matched[0];
+    } else if (candidates.length === 1) {
+      dstId = candidates[0];
+    }
+    if (dstId && dstId !== pending.srcId) {
+      const aid = arrowId(pending.srcId, pending.kind, dstId);
+      if (!seenCrossIds.has(aid)) {
+        seenCrossIds.add(aid);
+        arrs.push({ id: aid, kind: pending.kind, src_id: pending.srcId, dst_id: dstId, attrs: pending.attrs });
+      }
+    }
+  }
+  store.ingestFile(elems, arrs, head);
+  return { filesProcessed, elementsCreated: elems.length, arrowsCreated: arrs.length, durationMs: Date.now() - start };
+}
 function reindexProject(projectRoot, store, registry) {
   const start = Date.now();
   let head;
@@ -1329,6 +1551,9 @@ function runIngestion(projectRoot, store, head, registry) {
   let filesProcessed = 0;
   const createdModuleIds = /* @__PURE__ */ new Set();
   const filesToExtract = [];
+  const pendingCrossFileArrows = [];
+  const globalNameToIds = /* @__PURE__ */ new Map();
+  const moduleToIds = /* @__PURE__ */ new Map();
   for (const absolutePath of files) {
     let stats;
     try {
@@ -1391,6 +1616,12 @@ function runIngestion(projectRoot, store, head, registry) {
       existing.push(id);
       nameToId.set(rawElem.name, existing);
       elementIds.push({ id, kind: rawElem.kind });
+      const globalExisting = globalNameToIds.get(rawElem.name) ?? [];
+      globalExisting.push(id);
+      globalNameToIds.set(rawElem.name, globalExisting);
+      const modExisting = moduleToIds.get(relativePath) ?? [];
+      modExisting.push(id);
+      moduleToIds.set(relativePath, modExisting);
       elems.push({
         id,
         kind: rawElem.kind,
@@ -1477,6 +1708,14 @@ function runIngestion(projectRoot, store, head, registry) {
               attrs: JSON.stringify(rawArrow.attrs)
             });
           }
+        } else if (srcId && !dstId && rawArrow.dstName) {
+          pendingCrossFileArrows.push({
+            kind: rawArrow.kind,
+            srcId,
+            dstName: rawArrow.dstName,
+            dstModuleSuffix: rawArrow.dstModule ?? "",
+            attrs: JSON.stringify(rawArrow.attrs)
+          });
         }
       }
     }
@@ -1578,6 +1817,29 @@ function runIngestion(projectRoot, store, head, registry) {
             arrs.push({ id: htId, kind: "hasType", src_id: propId, dst_id: typeId, attrs: "{}" });
           }
         }
+      }
+    }
+  }
+  const elemIdToModule = /* @__PURE__ */ new Map();
+  for (const e of elems) {
+    if (e.module !== null && e.module !== void 0) elemIdToModule.set(e.id, e.module);
+  }
+  const seenCrossFileArrowIds = /* @__PURE__ */ new Set();
+  for (const pending of pendingCrossFileArrows) {
+    const candidates = globalNameToIds.get(pending.dstName) ?? [];
+    let dstId;
+    if (pending.dstModuleSuffix) {
+      const suffix = pending.dstModuleSuffix;
+      const matched = candidates.filter((id) => elemIdToModule.get(id)?.endsWith(suffix) ?? false);
+      if (matched.length === 1) dstId = matched[0];
+    } else if (candidates.length === 1) {
+      dstId = candidates[0];
+    }
+    if (dstId && dstId !== pending.srcId) {
+      const aid = arrowId(pending.srcId, pending.kind, dstId);
+      if (!seenCrossFileArrowIds.has(aid)) {
+        seenCrossFileArrowIds.add(aid);
+        arrs.push({ id: aid, kind: pending.kind, src_id: pending.srcId, dst_id: dstId, attrs: pending.attrs });
       }
     }
   }
@@ -2600,7 +2862,8 @@ function gatherImports(store, targetModule) {
     imports.push({
       name: imp.name,
       sourceModule: importsFromArrow ? importsFromArrow.attrs?.sourceModule ?? null : null,
-      targetModule: imp.module
+      targetModule: imp.module,
+      ...imp.attrs && imp.attrs.rawRequire ? { rawText: imp.attrs.rawRequire } : {}
     });
   }
   return imports;
@@ -2623,6 +2886,52 @@ function getModuleFilePath(store, modulePath) {
     if (fileElem) return fileElem.name;
   }
   return modulePath;
+}
+function gatherDomainContext(store, targetId) {
+  const ownConcepts = [];
+  for (const arrow of store.incoming(targetId)) {
+    if (arrow.kind !== "implementedAs") continue;
+    const domainElem = store.getElem(arrow.srcId);
+    if (!domainElem || domainElem.kind !== "domain") continue;
+    const domainArrows = [];
+    for (const a of store.outgoing(domainElem.id)) {
+      if (a.kind === "implementedAs") continue;
+      const peer = store.getElem(a.dstId);
+      if (peer) domainArrows.push({ name: a.kind, direction: "outgoing", peerName: peer.name });
+    }
+    for (const a of store.incoming(domainElem.id)) {
+      if (a.kind === "implementedAs") continue;
+      const peer = store.getElem(a.srcId);
+      if (peer && peer.kind === "domain") domainArrows.push({ name: a.kind, direction: "incoming", peerName: peer.name });
+    }
+    ownConcepts.push({ id: domainElem.id, name: domainElem.name, arrows: domainArrows });
+  }
+  const neighborConcepts = [];
+  const seen = /* @__PURE__ */ new Set();
+  const addNeighbor = (codeElemId, codeElemName, via) => {
+    for (const a of store.incoming(codeElemId)) {
+      if (a.kind !== "implementedAs") continue;
+      const domainElem = store.getElem(a.srcId);
+      if (!domainElem || domainElem.kind !== "domain") continue;
+      const key = `${via}:${domainElem.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        neighborConcepts.push({ name: domainElem.name, via, codeElementName: codeElemName });
+      }
+    }
+  };
+  for (const a of store.incoming(targetId)) {
+    if (a.kind !== "callerOf") continue;
+    const caller = store.getElem(a.srcId);
+    if (caller) addNeighbor(caller.id, caller.name, "caller");
+  }
+  for (const a of store.outgoing(targetId)) {
+    if (a.kind !== "callerOf") continue;
+    const callee = store.getElem(a.dstId);
+    if (callee) addNeighbor(callee.id, callee.name, "callee");
+  }
+  if (ownConcepts.length === 0 && neighborConcepts.length === 0) return null;
+  return { ownConcepts, neighborConcepts };
 }
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2723,6 +3032,23 @@ var SourceResolver = class {
     if (lines.length <= maxLines) return content;
     return lines.slice(0, maxLines).join("\n") + "\n// ... (truncated)";
   }
+  /**
+   * Read a window of source focused on a span: contextBefore lines above the
+   * start of the span and contextAfter lines below the end, with an omission
+   * comment if the file has content before the window.
+   */
+  readFocused(filePath, span, contextBefore = 25, contextAfter = 10) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split("\n");
+    const start = Math.max(0, parsed.startLine - 1 - contextBefore);
+    const end = Math.min(lines.length, parsed.endLine + contextAfter);
+    const prefix = start > 0 ? `; ... (lines 1\u2013${start} omitted)
+` : "";
+    return prefix + lines.slice(start, end).join("\n");
+  }
   readFile(filePath) {
     const cached = this.fileCache.get(filePath);
     if (cached !== void 0) return cached;
@@ -2737,7 +3063,7 @@ var SourceResolver = class {
   }
 };
 function parseSpan2(span) {
-  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+  const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
   if (!m) return null;
   return {
     startLine: parseInt(m[1], 10),
@@ -2745,6 +3071,10 @@ function parseSpan2(span) {
     endLine: parseInt(m[3], 10),
     endCol: parseInt(m[4], 10)
   };
+}
+function filePathFromSpan(span) {
+  const m = span.match(/^(.+):\d+:\d+-\d+:\d+$/);
+  return m ? m[1] : null;
 }
 
 // src/delegate/analogues.ts
@@ -2761,7 +3091,9 @@ function findAnalogues(store, target, limit = 3) {
     const candidateCallees = getCalleeSet(store, candidate);
     const intersectionSize = countIntersection(targetCallees, candidateCallees);
     const unionSize = targetCallees.size + candidateCallees.size - intersectionSize;
-    const similarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    const calleeSimilarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    const nameSimilarity = candidate.name === target.name ? 0.5 : 0;
+    const similarity = Math.max(calleeSimilarity, nameSimilarity);
     if (similarity > 0) {
       scored.push({
         id: candidate.id,
@@ -2881,10 +3213,25 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
     return { name: entry.name, callSiteSnippet };
   });
   const resolvedImports = importEntries.map((imp) => {
-    if (imp.sourceModule) {
-      return `import { ${imp.name} } from '${imp.sourceModule}'`;
-    }
+    if (imp.rawText) return imp.rawText;
+    if (imp.sourceModule) return `import { ${imp.name} } from '${imp.sourceModule}'`;
     return `import { ${imp.name} } from '...'`;
+  });
+  const importedModuleSuffixes = new Set(
+    importEntries.map((imp) => imp.sourceModule).filter((m) => !!m)
+  );
+  const missingImports = mustCallEntries.filter((entry) => {
+    if (!entry.module || entry.module === targetModule) return false;
+    return ![...importedModuleSuffixes].some(
+      (im) => im === entry.module || entry.module.endsWith(im) || im.endsWith(entry.module.split("/").pop() ?? "")
+    );
+  }).map((entry) => {
+    const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    return {
+      name: entry.name,
+      module: entry.module ?? "",
+      suggestedImport: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule)
+    };
   });
   const resolvedAnalogues = analogueCandidates.map((candidate) => {
     const candidateFilePath = getModuleFilePath(store, candidate.module ?? "") ?? localModuleToFilePath(candidate.module ?? "");
@@ -2897,7 +3244,8 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
       modulePath: candidate.module ?? ""
     };
   });
-  const targetFileContent = resolver.readFileContent(filePath, 500) ?? "";
+  const targetFileContent = target.span ? resolver.readFocused(filePath, target.span, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? "" : resolver.readFileContent(filePath, 500) ?? "";
+  const domainContext = gatherDomainContext(store, targetId);
   const defaultCriteria = TASK_CRITERIA[task] ?? [];
   const acceptanceCriteria = [...defaultCriteria, ...extraCriteria ?? []];
   const commitSha = store.commitSha();
@@ -2917,9 +3265,11 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
     mustCall: resolvedMustCall,
     mustImplement: resolvedMustImplement,
     usedBy: resolvedUsedBy,
-    importsInTargetFile: resolver.readImportBlock(filePath),
+    importsInTargetFile: resolvedImports.length > 0 ? resolvedImports : resolver.readImportBlock(filePath),
     analogues: resolvedAnalogues,
     targetFileContent,
+    domainContext,
+    missingImports,
     acceptanceCriteria,
     provenance: {
       ologCommitSha: commitSha,
@@ -3009,7 +3359,7 @@ function localModuleToFilePath(modulePath) {
   return modulePath + ".ts";
 }
 function parseSpanSimple(span) {
-  const m = span.match(/^(\d+):\d+-(\d+):\d+$/);
+  const m = span.match(/(\d+):\d+-(\d+):\d+$/);
   if (!m) return null;
   return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
 }
@@ -4012,11 +4362,13 @@ export {
   evaluatePathEquations,
   extendDomainByKan,
   extractEgoGraph,
+  filePathFromSpan,
   generateCandidatePairs,
   getArrowKindsInUse,
   getDefaultRegistry,
   getExistingDomainElementsByCodeId,
   groupEgoGraphs,
+  ingestChangedFiles,
   ingestProject,
   isExternalModule,
   isNounPhrase,

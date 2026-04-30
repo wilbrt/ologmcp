@@ -25,3 +25,21 @@
   (sym_lit) @_defmacro
   (sym_lit) @function.name
   (#eq? @_defmacro "defmacro"))
+
+; schema.core: (s/defn name ...) and (s/defn- name ...)
+(list_lit
+  (sym_lit) @_s_defn
+  (sym_lit) @function.name
+  (#match? @_s_defn "^s/defn-?$"))
+
+; schema.core: (s/defschema Name ...)
+(list_lit
+  (sym_lit) @_s_defschema
+  (sym_lit) @variable.name
+  (#eq? @_s_defschema "s/defschema"))
+
+; schema.core: (s/def name ...)
+(list_lit
+  (sym_lit) @_s_def
+  (sym_lit) @variable.name
+  (#eq? @_s_def "s/def"))

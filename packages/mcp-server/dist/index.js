@@ -1065,6 +1065,69 @@ var OlogStore = class {
     tx();
     return elems.length;
   }
+  /** Return the set of relative module paths that have at least one tree-sitter element. */
+  getIngestedModules() {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT e.module FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'tree-sitter' AND e.module IS NOT NULL"
+    ).all();
+    return new Set(rows.map((r) => r.module));
+  }
+  /** Delete all tree-sitter elements for a given module (cascade removes arrows). */
+  deleteModuleTreeSitterElements(module) {
+    this.db.prepare(
+      "DELETE FROM olog_elem WHERE module = ? AND id IN (SELECT elem_id FROM olog_prov WHERE source = 'tree-sitter')"
+    ).run(module);
+  }
+  /** Return a map of element name → [ids] across all elements, for cross-file resolution. */
+  getAllElemNameToIds() {
+    const rows = this.db.prepare("SELECT id, name FROM olog_elem WHERE module IS NOT NULL").all();
+    const result = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const arr = result.get(row.name) ?? [];
+      arr.push(row.id);
+      result.set(row.name, arr);
+    }
+    return result;
+  }
+  /** Return a map of element id → module for all elements with a module. */
+  getAllElemIdToModule() {
+    const rows = this.db.prepare("SELECT id, module FROM olog_elem WHERE module IS NOT NULL").all();
+    const result = /* @__PURE__ */ new Map();
+    for (const row of rows) result.set(row.id, row.module);
+    return result;
+  }
+  /**
+   * Insert elements and arrows for specific files without wiping the whole store.
+   * Used by incremental ingestion. Arrows that reference non-existent elements are silently skipped.
+   */
+  ingestFile(elems, arrs, sha) {
+    const insertElem = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const insertArr = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+    );
+    const insertProv = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, 'tree-sitter', ?, ?, 'resolved')"
+    );
+    const updateMeta = this.db.prepare(
+      "INSERT INTO olog_meta (key, value) VALUES ('commit_sha', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    );
+    const tx = this.db.transaction(() => {
+      for (const e of elems) {
+        insertElem.run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
+        insertProv.run(e.id, sha, Date.now());
+      }
+      for (const a of arrs) {
+        try {
+          insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        } catch {
+        }
+      }
+      updateMeta.run(sha);
+    });
+    tx();
+  }
   getElem(id) {
     const row = this.getElemStmt.get(id);
     if (!row) return null;
@@ -1874,6 +1937,165 @@ function ingestProject(projectRoot2, store2, registry) {
   const result = runIngestion(projectRoot2, store2, head, registry);
   return { ...result, durationMs: Date.now() - start2 };
 }
+function ingestChangedFiles(projectRoot2, store2, registry) {
+  const start2 = Date.now();
+  const effectiveRegistry = registry ?? getDefaultRegistry();
+  if (!effectiveRegistry) throw new Error("No adapter registry available.");
+  setDefaultRegistry(effectiveRegistry);
+  let head;
+  try {
+    head = execSync("git rev-parse HEAD", { cwd: projectRoot2, encoding: "utf8" }).trim();
+  } catch {
+    head = "nogit";
+  }
+  const gitChanged = /* @__PURE__ */ new Set();
+  const storedSha = store2.commitSha();
+  try {
+    if (storedSha && storedSha !== "nogit" && storedSha !== head) {
+      execSync(`git diff --name-only ${storedSha} ${head}`, { cwd: projectRoot2, encoding: "utf8" }).trim().split("\n").filter(Boolean).forEach((f) => gitChanged.add(f));
+    }
+    execSync("git status --porcelain", { cwd: projectRoot2, encoding: "utf8" }).trim().split("\n").filter(Boolean).forEach((line) => {
+      const f = line.slice(3).trim();
+      if (f) gitChanged.add(f);
+    });
+  } catch {
+  }
+  const ingestedModules = store2.getIngestedModules();
+  const allFiles = discoverFiles(projectRoot2, effectiveRegistry);
+  const filesToProcess = allFiles.filter((abs) => {
+    const rel = relative(projectRoot2, abs);
+    return !ingestedModules.has(rel) || gitChanged.has(rel);
+  });
+  if (filesToProcess.length === 0) {
+    return { filesProcessed: 0, elementsCreated: 0, arrowsCreated: 0, durationMs: Date.now() - start2 };
+  }
+  for (const abs of filesToProcess) {
+    const rel = relative(projectRoot2, abs);
+    if (ingestedModules.has(rel)) store2.deleteModuleTreeSitterElements(rel);
+  }
+  const elems = [];
+  const arrs = [];
+  const pendingCrossFileArrows = [];
+  const newNameToIds = /* @__PURE__ */ new Map();
+  const createdModuleIds = /* @__PURE__ */ new Set();
+  let filesProcessed = 0;
+  for (const absolutePath of filesToProcess) {
+    const rel = relative(projectRoot2, absolutePath);
+    let stats;
+    try {
+      stats = statSync(absolutePath);
+    } catch {
+      continue;
+    }
+    if (stats.size > 1024 * 1024) continue;
+    let source;
+    try {
+      source = readFileSync2(absolutePath, "utf8");
+    } catch {
+      continue;
+    }
+    const adapter = effectiveRegistry.getForFile(absolutePath);
+    if (!adapter) continue;
+    let extracted;
+    try {
+      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath));
+    } catch (err) {
+      console.error(`[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const fileId = fileElemId(rel);
+    elems.push({ id: fileId, kind: "file", name: basename(rel), module: rel, span: null, attrs: "{}" });
+    const fileNameToId = /* @__PURE__ */ new Map();
+    const seenArrowIds = /* @__PURE__ */ new Set();
+    for (const rawElem of extracted.elements) {
+      const coords = parseTreeSitterSpan(rawElem.span);
+      const line = coords?.startLine ?? 1;
+      const col = coords?.startCol ?? 1;
+      const fullSpan = coords ? formatSpan(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
+      const id = elemId(rel, line, col, rawElem.kind, rawElem.name);
+      const fileExisting = fileNameToId.get(rawElem.name) ?? [];
+      fileExisting.push(id);
+      fileNameToId.set(rawElem.name, fileExisting);
+      const globalExisting = newNameToIds.get(rawElem.name) ?? [];
+      globalExisting.push(id);
+      newNameToIds.set(rawElem.name, globalExisting);
+      elems.push({ id, kind: rawElem.kind, name: rawElem.name, module: rel, span: fullSpan, attrs: JSON.stringify(rawElem.attrs) });
+      if (rawElem.kind !== "file") {
+        const aid = arrowId(fileId, "contains", id);
+        if (!seenArrowIds.has(aid)) {
+          seenArrowIds.add(aid);
+          arrs.push({ id: aid, kind: "contains", src_id: fileId, dst_id: id, attrs: "{}" });
+        }
+      }
+    }
+    for (const rawArrow of extracted.arrows) {
+      if (rawArrow.kind === "importsFrom") {
+        const srcId = (fileNameToId.get(rawArrow.srcName) ?? [])[0];
+        const rawModule = rawArrow.attrs.module ?? rawArrow.dstModule;
+        const resolvedModule = adapter.resolveImportSpecifier ? adapter.resolveImportSpecifier(rawModule, rel, projectRoot2) ?? rawModule : rawModule;
+        const moduleId = `module:${resolvedModule}`;
+        if (srcId) {
+          if (!createdModuleIds.has(moduleId)) {
+            createdModuleIds.add(moduleId);
+            elems.push({ id: moduleId, kind: "module", name: resolvedModule, module: resolvedModule, span: null, attrs: "{}" });
+          }
+          const aid = arrowId(srcId, "importsFrom", moduleId);
+          if (!seenArrowIds.has(aid)) {
+            seenArrowIds.add(aid);
+            arrs.push({ id: aid, kind: "importsFrom", src_id: srcId, dst_id: moduleId, attrs: JSON.stringify(rawArrow.attrs) });
+          }
+        }
+      } else {
+        const srcId = (fileNameToId.get(rawArrow.srcName) ?? [])[0];
+        const dstId = (fileNameToId.get(rawArrow.dstName) ?? [])[0];
+        if (srcId && dstId) {
+          const aid = arrowId(srcId, rawArrow.kind, dstId);
+          if (!seenArrowIds.has(aid)) {
+            seenArrowIds.add(aid);
+            arrs.push({ id: aid, kind: rawArrow.kind, src_id: srcId, dst_id: dstId, attrs: JSON.stringify(rawArrow.attrs) });
+          }
+        } else if (srcId && !dstId && rawArrow.dstName) {
+          pendingCrossFileArrows.push({ kind: rawArrow.kind, srcId, dstName: rawArrow.dstName, dstModuleSuffix: rawArrow.dstModule ?? "", attrs: JSON.stringify(rawArrow.attrs) });
+        }
+      }
+    }
+    filesProcessed++;
+  }
+  const globalNameToIds = store2.getAllElemNameToIds();
+  for (const [name, ids] of newNameToIds) {
+    const existing = globalNameToIds.get(name) ?? [];
+    for (const id of ids) if (!existing.includes(id)) existing.push(id);
+    globalNameToIds.set(name, existing);
+  }
+  const dbIdToModule = store2.getAllElemIdToModule();
+  const newElemIdToModule = /* @__PURE__ */ new Map();
+  for (const e of elems) {
+    if (e.module !== null && e.module !== void 0) newElemIdToModule.set(e.id, e.module);
+  }
+  const seenCrossIds = /* @__PURE__ */ new Set();
+  for (const pending of pendingCrossFileArrows) {
+    const candidates = globalNameToIds.get(pending.dstName) ?? [];
+    let dstId;
+    if (pending.dstModuleSuffix) {
+      const matched = candidates.filter((id) => {
+        const mod = newElemIdToModule.get(id) ?? dbIdToModule.get(id);
+        return mod?.endsWith(pending.dstModuleSuffix) ?? false;
+      });
+      if (matched.length === 1) dstId = matched[0];
+    } else if (candidates.length === 1) {
+      dstId = candidates[0];
+    }
+    if (dstId && dstId !== pending.srcId) {
+      const aid = arrowId(pending.srcId, pending.kind, dstId);
+      if (!seenCrossIds.has(aid)) {
+        seenCrossIds.add(aid);
+        arrs.push({ id: aid, kind: pending.kind, src_id: pending.srcId, dst_id: dstId, attrs: pending.attrs });
+      }
+    }
+  }
+  store2.ingestFile(elems, arrs, head);
+  return { filesProcessed, elementsCreated: elems.length, arrowsCreated: arrs.length, durationMs: Date.now() - start2 };
+}
 function reindexProject(projectRoot2, store2, registry) {
   const start2 = Date.now();
   let head;
@@ -1909,6 +2131,9 @@ function runIngestion(projectRoot2, store2, head, registry) {
   let filesProcessed = 0;
   const createdModuleIds = /* @__PURE__ */ new Set();
   const filesToExtract = [];
+  const pendingCrossFileArrows = [];
+  const globalNameToIds = /* @__PURE__ */ new Map();
+  const moduleToIds = /* @__PURE__ */ new Map();
   for (const absolutePath of files) {
     let stats;
     try {
@@ -1971,6 +2196,12 @@ function runIngestion(projectRoot2, store2, head, registry) {
       existing.push(id);
       nameToId.set(rawElem.name, existing);
       elementIds.push({ id, kind: rawElem.kind });
+      const globalExisting = globalNameToIds.get(rawElem.name) ?? [];
+      globalExisting.push(id);
+      globalNameToIds.set(rawElem.name, globalExisting);
+      const modExisting = moduleToIds.get(relativePath) ?? [];
+      modExisting.push(id);
+      moduleToIds.set(relativePath, modExisting);
       elems.push({
         id,
         kind: rawElem.kind,
@@ -2057,6 +2288,14 @@ function runIngestion(projectRoot2, store2, head, registry) {
               attrs: JSON.stringify(rawArrow.attrs)
             });
           }
+        } else if (srcId && !dstId && rawArrow.dstName) {
+          pendingCrossFileArrows.push({
+            kind: rawArrow.kind,
+            srcId,
+            dstName: rawArrow.dstName,
+            dstModuleSuffix: rawArrow.dstModule ?? "",
+            attrs: JSON.stringify(rawArrow.attrs)
+          });
         }
       }
     }
@@ -2158,6 +2397,29 @@ function runIngestion(projectRoot2, store2, head, registry) {
             arrs.push({ id: htId, kind: "hasType", src_id: propId, dst_id: typeId, attrs: "{}" });
           }
         }
+      }
+    }
+  }
+  const elemIdToModule = /* @__PURE__ */ new Map();
+  for (const e of elems) {
+    if (e.module !== null && e.module !== void 0) elemIdToModule.set(e.id, e.module);
+  }
+  const seenCrossFileArrowIds = /* @__PURE__ */ new Set();
+  for (const pending of pendingCrossFileArrows) {
+    const candidates = globalNameToIds.get(pending.dstName) ?? [];
+    let dstId;
+    if (pending.dstModuleSuffix) {
+      const suffix = pending.dstModuleSuffix;
+      const matched = candidates.filter((id) => elemIdToModule.get(id)?.endsWith(suffix) ?? false);
+      if (matched.length === 1) dstId = matched[0];
+    } else if (candidates.length === 1) {
+      dstId = candidates[0];
+    }
+    if (dstId && dstId !== pending.srcId) {
+      const aid = arrowId(pending.srcId, pending.kind, dstId);
+      if (!seenCrossFileArrowIds.has(aid)) {
+        seenCrossFileArrowIds.add(aid);
+        arrs.push({ id: aid, kind: pending.kind, src_id: pending.srcId, dst_id: dstId, attrs: pending.attrs });
       }
     }
   }
@@ -3072,7 +3334,8 @@ function gatherImports(store2, targetModule) {
     imports.push({
       name: imp.name,
       sourceModule: importsFromArrow ? importsFromArrow.attrs?.sourceModule ?? null : null,
-      targetModule: imp.module
+      targetModule: imp.module,
+      ...imp.attrs && imp.attrs.rawRequire ? { rawText: imp.attrs.rawRequire } : {}
     });
   }
   return imports;
@@ -3095,6 +3358,52 @@ function getModuleFilePath(store2, modulePath) {
     if (fileElem) return fileElem.name;
   }
   return modulePath;
+}
+function gatherDomainContext(store2, targetId) {
+  const ownConcepts = [];
+  for (const arrow of store2.incoming(targetId)) {
+    if (arrow.kind !== "implementedAs") continue;
+    const domainElem = store2.getElem(arrow.srcId);
+    if (!domainElem || domainElem.kind !== "domain") continue;
+    const domainArrows = [];
+    for (const a of store2.outgoing(domainElem.id)) {
+      if (a.kind === "implementedAs") continue;
+      const peer = store2.getElem(a.dstId);
+      if (peer) domainArrows.push({ name: a.kind, direction: "outgoing", peerName: peer.name });
+    }
+    for (const a of store2.incoming(domainElem.id)) {
+      if (a.kind === "implementedAs") continue;
+      const peer = store2.getElem(a.srcId);
+      if (peer && peer.kind === "domain") domainArrows.push({ name: a.kind, direction: "incoming", peerName: peer.name });
+    }
+    ownConcepts.push({ id: domainElem.id, name: domainElem.name, arrows: domainArrows });
+  }
+  const neighborConcepts = [];
+  const seen = /* @__PURE__ */ new Set();
+  const addNeighbor = (codeElemId, codeElemName, via) => {
+    for (const a of store2.incoming(codeElemId)) {
+      if (a.kind !== "implementedAs") continue;
+      const domainElem = store2.getElem(a.srcId);
+      if (!domainElem || domainElem.kind !== "domain") continue;
+      const key = `${via}:${domainElem.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        neighborConcepts.push({ name: domainElem.name, via, codeElementName: codeElemName });
+      }
+    }
+  };
+  for (const a of store2.incoming(targetId)) {
+    if (a.kind !== "callerOf") continue;
+    const caller = store2.getElem(a.srcId);
+    if (caller) addNeighbor(caller.id, caller.name, "caller");
+  }
+  for (const a of store2.outgoing(targetId)) {
+    if (a.kind !== "callerOf") continue;
+    const callee = store2.getElem(a.dstId);
+    if (callee) addNeighbor(callee.id, callee.name, "callee");
+  }
+  if (ownConcepts.length === 0 && neighborConcepts.length === 0) return null;
+  return { ownConcepts, neighborConcepts };
 }
 function escapeRegex2(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -3191,6 +3500,23 @@ var SourceResolver = class {
     if (lines.length <= maxLines) return content;
     return lines.slice(0, maxLines).join("\n") + "\n// ... (truncated)";
   }
+  /**
+   * Read a window of source focused on a span: contextBefore lines above the
+   * start of the span and contextAfter lines below the end, with an omission
+   * comment if the file has content before the window.
+   */
+  readFocused(filePath, span, contextBefore = 25, contextAfter = 10) {
+    const parsed = parseSpan2(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split("\n");
+    const start2 = Math.max(0, parsed.startLine - 1 - contextBefore);
+    const end = Math.min(lines.length, parsed.endLine + contextAfter);
+    const prefix = start2 > 0 ? `; ... (lines 1\u2013${start2} omitted)
+` : "";
+    return prefix + lines.slice(start2, end).join("\n");
+  }
   readFile(filePath) {
     const cached = this.fileCache.get(filePath);
     if (cached !== void 0) return cached;
@@ -3205,7 +3531,7 @@ var SourceResolver = class {
   }
 };
 function parseSpan2(span) {
-  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+  const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
   if (!m) return null;
   return {
     startLine: parseInt(m[1], 10),
@@ -3213,6 +3539,10 @@ function parseSpan2(span) {
     endLine: parseInt(m[3], 10),
     endCol: parseInt(m[4], 10)
   };
+}
+function filePathFromSpan(span) {
+  const m = span.match(/^(.+):\d+:\d+-\d+:\d+$/);
+  return m ? m[1] : null;
 }
 function findAnalogues(store2, target, limit = 3) {
   const targetCallees = getCalleeSet(store2, target);
@@ -3227,7 +3557,9 @@ function findAnalogues(store2, target, limit = 3) {
     const candidateCallees = getCalleeSet(store2, candidate);
     const intersectionSize = countIntersection(targetCallees, candidateCallees);
     const unionSize = targetCallees.size + candidateCallees.size - intersectionSize;
-    const similarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    const calleeSimilarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    const nameSimilarity = candidate.name === target.name ? 0.5 : 0;
+    const similarity = Math.max(calleeSimilarity, nameSimilarity);
     if (similarity > 0) {
       scored.push({
         id: candidate.id,
@@ -3345,10 +3677,25 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
     return { name: entry.name, callSiteSnippet };
   });
   const resolvedImports = importEntries.map((imp) => {
-    if (imp.sourceModule) {
-      return `import { ${imp.name} } from '${imp.sourceModule}'`;
-    }
+    if (imp.rawText) return imp.rawText;
+    if (imp.sourceModule) return `import { ${imp.name} } from '${imp.sourceModule}'`;
     return `import { ${imp.name} } from '...'`;
+  });
+  const importedModuleSuffixes = new Set(
+    importEntries.map((imp) => imp.sourceModule).filter((m) => !!m)
+  );
+  const missingImports = mustCallEntries.filter((entry) => {
+    if (!entry.module || entry.module === targetModule) return false;
+    return ![...importedModuleSuffixes].some(
+      (im) => im === entry.module || entry.module.endsWith(im) || im.endsWith(entry.module.split("/").pop() ?? "")
+    );
+  }).map((entry) => {
+    const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    return {
+      name: entry.name,
+      module: entry.module ?? "",
+      suggestedImport: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule)
+    };
   });
   const resolvedAnalogues = analogueCandidates.map((candidate) => {
     const candidateFilePath = getModuleFilePath(store2, candidate.module ?? "") ?? localModuleToFilePath(candidate.module ?? "");
@@ -3361,7 +3708,8 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
       modulePath: candidate.module ?? ""
     };
   });
-  const targetFileContent = resolver.readFileContent(filePath, 500) ?? "";
+  const targetFileContent = target.span ? resolver.readFocused(filePath, target.span, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? "" : resolver.readFileContent(filePath, 500) ?? "";
+  const domainContext = gatherDomainContext(store2, targetId);
   const defaultCriteria = TASK_CRITERIA[task] ?? [];
   const acceptanceCriteria = [...defaultCriteria, ...extraCriteria ?? []];
   const commitSha = store2.commitSha();
@@ -3381,9 +3729,11 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
     mustCall: resolvedMustCall,
     mustImplement: resolvedMustImplement,
     usedBy: resolvedUsedBy,
-    importsInTargetFile: resolver.readImportBlock(filePath),
+    importsInTargetFile: resolvedImports.length > 0 ? resolvedImports : resolver.readImportBlock(filePath),
     analogues: resolvedAnalogues,
     targetFileContent,
+    domainContext,
+    missingImports,
     acceptanceCriteria,
     provenance: {
       ologCommitSha: commitSha,
@@ -3473,7 +3823,7 @@ function localModuleToFilePath(modulePath) {
   return modulePath + ".ts";
 }
 function parseSpanSimple(span) {
-  const m = span.match(/^(\d+):\d+-(\d+):\d+$/);
+  const m = span.match(/(\d+):\d+-(\d+):\d+$/);
   if (!m) return null;
   return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
 }
@@ -4331,7 +4681,9 @@ init_detect();
 // src/tools/olog-query.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-function registerOlogQuery(server2, store2) {
+import { spawnSync } from "child_process";
+import { relative as relative3 } from "path";
+function registerOlogQuery(server2, store2, projectRoot2) {
   const elemKindEnum = [
     "file",
     "module",
@@ -4390,7 +4742,7 @@ function registerOlogQuery(server2, store2) {
   server2.registerTool(
     "olog_query",
     {
-      description: "Query the ontology log for structural elements matching filters, or traverse the graph via multi-hop arrow following. Returns elements with their kind, name, module (file path), and span (location). Traversal returns both reached elements and the arrows traversed.",
+      description: 'Query the ontology log for structural elements matching filters, or traverse the graph via multi-hop arrow following. Returns elements with their kind, name, module (file path), and span (location). Traversal returns both reached elements and the arrows traversed. Use the literal parameter to find all functions/definitions whose source contains a specific keyword, string, or symbol (e.g. ":task.type/bond-verification") \u2014 this performs a grep-backed search and returns the enclosing elements.',
       inputSchema: z.object({
         start: z.union([startByIdSchema, startByFilterSchema]).optional().describe(
           "Start element specification: either an exact element ID, or a filter (kind/name/module) to find starting element(s). When omitted, falls back to the top-level kind/name/module parameters."
@@ -4429,12 +4781,58 @@ function registerOlogQuery(server2, store2) {
         minConfidence: z.enum(["resolved", "unresolved", "tentative"]).optional().describe(
           "Minimum provenance confidence level. For filter queries, requires an exact match. For traversals, filters arrows by exact confidence match."
         ),
+        literal: z.string().optional().describe(
+          'Fixed string to search for in source files (grep-backed). Returns elements whose source span contains the literal. Use for keyword/data literals not captured as structural arrows, e.g. ":task.type/bond-verification".'
+        ),
         limit: z.number().int().min(1).max(500).default(50).describe("Maximum number of results to return")
       }),
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
     async (args) => {
       try {
+        if (args.literal) {
+          const grep = spawnSync("grep", ["-rnF", "--", args.literal, "."], {
+            cwd: projectRoot2,
+            encoding: "utf8",
+            maxBuffer: 10 * 1024 * 1024
+          });
+          if (grep.error) {
+            return { content: [{ type: "text", text: `grep error: ${grep.error.message}` }], isError: true };
+          }
+          const grepLines = (grep.stdout ?? "").split("\n").filter(Boolean);
+          const fileLineHits = /* @__PURE__ */ new Map();
+          for (const line of grepLines) {
+            const m = line.match(/^(.+?):(\d+):/);
+            if (!m) continue;
+            const rel = relative3(projectRoot2, m[1].startsWith("/") ? m[1] : `${projectRoot2}/${m[1]}`);
+            const lineNum = parseInt(m[2], 10);
+            const set = fileLineHits.get(rel) ?? /* @__PURE__ */ new Set();
+            set.add(lineNum);
+            fileLineHits.set(rel, set);
+          }
+          const matched = [];
+          const seen = /* @__PURE__ */ new Set();
+          for (const [relPath, hitLines] of fileLineHits) {
+            const elemsInFile = store2.queryElements({ moduleRegex: relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), limit: 2e3 });
+            for (const elem of elemsInFile) {
+              if (!elem.span || seen.has(elem.id)) continue;
+              const sm = elem.span.match(/(\d+):\d+-(\d+):\d+$/);
+              if (!sm) continue;
+              const startLine = parseInt(sm[1], 10);
+              const endLine = parseInt(sm[2], 10);
+              for (const hit of hitLines) {
+                if (hit >= startLine && hit <= endLine) {
+                  seen.add(elem.id);
+                  matched.push(elem);
+                  break;
+                }
+              }
+            }
+          }
+          return {
+            content: [{ type: "text", text: JSON.stringify(matched.slice(0, args.limit), null, 2) }]
+          };
+        }
         if (args.arrows && args.arrows.length > 0) {
           let startIds;
           if (args.start && "id" in args.start) {
@@ -4575,11 +4973,11 @@ function registerOlogQuery(server2, store2) {
 // src/tools/olog-inspect.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z2 } from "zod";
-function registerOlogInspect(server2, store2) {
+function registerOlogInspect(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_inspect",
     {
-      description: "Get detailed information about a specific element by ID, including all its outgoing and incoming arrows (connections to other elements).",
+      description: "Get detailed information about a specific element by ID, including all its outgoing and incoming arrows (connections to other elements) and the source snippet of its body read directly from the file at its stored span. Use this instead of reading raw source files to understand what a function does.",
       inputSchema: z2.object({
         id: z2.string().describe("Element ID to inspect. Get IDs from olog_query results.")
       }),
@@ -4612,11 +5010,23 @@ function registerOlogInspect(server2, store2) {
           const configStr = JSON.stringify(c.config);
           return configStr.includes(elemKind) || configStr.includes(elemModule);
         });
+        let sourceSnippet = null;
+        if (element.span) {
+          const filePath = filePathFromSpan(element.span) ?? element.module ?? "";
+          if (filePath) {
+            const resolver = new SourceResolver(projectRoot2);
+            sourceSnippet = resolver.readFocused(filePath, element.span, 0, 0) ?? resolver.readSpan(filePath, element.span);
+          }
+        }
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ element, outgoing, incoming, provenance, equations, constraints }, null, 2)
+              text: JSON.stringify(
+                { element, sourceSnippet, outgoing, incoming, provenance, equations, constraints },
+                null,
+                2
+              )
             }
           ]
         };
@@ -4672,22 +5082,27 @@ function registerOlogReindex(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_reindex",
     {
-      description: "Force a full re-ingestion of the codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.",
-      inputSchema: z4.object({}),
+      description: 'Refresh the structural model after code changes. mode="incremental" (default) processes only new and git-changed files \u2014 fast for routine use after editing. mode="full" drops and rebuilds everything from scratch \u2014 use when the olog seems stale or after large refactors.',
+      inputSchema: z4.object({
+        mode: z4.enum(["incremental", "full"]).default("incremental").describe(
+          '"incremental" processes only new/changed files (fast). "full" wipes and rebuilds the entire index (slow but guaranteed fresh).'
+        )
+      }),
       annotations: {
         readOnlyHint: false,
         idempotentHint: false,
         destructiveHint: false
       }
     },
-    async () => {
+    async ({ mode }) => {
       try {
-        const result = reindexProject(projectRoot2, store2, getDefaultRegistry());
+        const registry = getDefaultRegistry();
+        const result = mode === "full" ? reindexProject(projectRoot2, store2, registry) : ingestChangedFiles(projectRoot2, store2, registry);
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(result, null, 2)
+              text: JSON.stringify({ mode, ...result }, null, 2)
             }
           ]
         };
@@ -4744,6 +5159,11 @@ var operationSchema = z5.union([
   z5.object({
     kind: z5.literal("removeArrow"),
     arrowId: z5.string()
+  }),
+  z5.object({
+    kind: z5.literal("rewrite_body"),
+    target: z5.string().describe("Element ID of the function/method whose body will be rewritten"),
+    rationale: z5.string().describe("Why the body needs rewriting and what the intended change is")
   })
 ]);
 var planStore = /* @__PURE__ */ new Map();
@@ -4780,6 +5200,9 @@ function registerOlogPlan(server2, store2) {
               targetElementIds.add(op.dst);
               break;
             case "removeArrow":
+              break;
+            case "rewrite_body":
+              targetElementIds.add(op.target);
               break;
           }
         }
@@ -5070,6 +5493,7 @@ var ProjectedState = class {
         this.addedArrIds.add(`${op.src}:${op.arrowKind}:${op.dst}`);
       } else if (op.kind === "removeArrow") {
         this.removedArrIds.add(op.arrowId);
+      } else if (op.kind === "rewrite_body") {
       }
     }
   }
@@ -5223,6 +5647,35 @@ function registerOlogValidate(server2, store2) {
                 kind: "notFound",
                 humanMessage: `removeArrow: arrow not found: "${op.arrowId}"`,
                 involved: [op.arrowId]
+              });
+            }
+          }
+          if (op.kind === "rewrite_body") {
+            const elem = store2.getElem(op.target);
+            if (!elem) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `rewrite_body: element not found: "${op.target}"`,
+                involved: [op.target]
+              });
+            } else if (!elem.span) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "constraint",
+                humanMessage: `rewrite_body: element "${elem.name}" has no span \u2014 cannot locate its source`,
+                involved: [op.target]
+              });
+            }
+            const conflicts = ops.filter(
+              (o) => o !== op && (o.kind === "removeSymbol" || o.kind === "rename") && "target" in o && o.target === op.target
+            );
+            for (const conflict of conflicts) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "constraint",
+                humanMessage: `rewrite_body: conflicts with "${conflict.kind}" on the same element "${op.target}"`,
+                involved: [op.target]
               });
             }
           }
@@ -5527,7 +5980,7 @@ function registerOlogDelegate(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_delegate",
     {
-      description: "Assemble a fully-resolved structural brief for a text-generation subagent. Traverses the olog to collect signatures, call graphs, interface contracts, import paths, and analogue source code. Returns a self-contained brief that requires NO further olog queries \u2014 designed for consumption by a smaller/cheaper model that will write the actual code.",
+      description: "Assemble a fully-resolved structural brief for a text-generation subagent. Traverses the olog to collect signatures, call graphs, interface contracts, import paths, analogue source code, and domain model context. The brief includes a domainContext field: ownConcepts lists the domain concept(s) this code element implements (via implementedAs) along with their domain arrows, and neighborConcepts lists domain concepts reachable via callers and callees (Kan extension neighborhood). Both are null when no domain model exists yet \u2014 call olog_domain_discover first to populate it. Returns a self-contained brief that requires NO further olog queries \u2014 designed for consumption by a smaller/cheaper model that will write the actual code.",
       inputSchema: z10.object({
         task: z10.enum(TASK_TYPES).describe(
           "The type of text-generation task."
@@ -5850,7 +6303,7 @@ function registerOlogDomainDiscover(server2, store2) {
               text: JSON.stringify({
                 sessionId,
                 existingWithNewArrows: shells.length,
-                newCandidates: newCands.length,
+                newCandidatesCount: newCands.length,
                 totalArrowsProposed: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
                 shells: shells.map((s) => ({
                   id: s.id,
@@ -6421,8 +6874,8 @@ function registerOlogDot(server2, store2) {
         const allElems = kinds.flatMap(
           (kind) => store2.queryElements({
             kind,
-            nameRegex,
-            moduleRegex,
+            ...nameRegex !== void 0 ? { nameRegex } : {},
+            ...moduleRegex !== void 0 ? { moduleRegex } : {},
             limit: 1e4
           })
         );
@@ -6522,8 +6975,8 @@ var server = new McpServer15(
     capabilities: { logging: {} }
   }
 );
-registerOlogQuery(server, store);
-registerOlogInspect(server, store);
+registerOlogQuery(server, store, projectRoot);
+registerOlogInspect(server, store, projectRoot);
 registerOlogDump(server, store);
 registerOlogReindex(server, store, projectRoot);
 registerOlogProposeSchema(server, store);
