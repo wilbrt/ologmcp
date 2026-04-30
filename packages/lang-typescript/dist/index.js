@@ -47,7 +47,7 @@ function findContainingFunctionName(node) {
   }
   return null;
 }
-function extractFromFile(parser, source, queryPath) {
+function extractFromFile(parser, source, queryPath, resolveImport) {
   const scmContent = fs.readFileSync(queryPath, "utf-8");
   const language = parser.getLanguage();
   const query = new Parser.Query(language, scmContent);
@@ -57,115 +57,132 @@ function extractFromFile(parser, source, queryPath) {
   }
   const elements = [];
   const arrows = [];
-  for (const match of query.matches(tree.rootNode)) {
+  function buildByName(match) {
     const byName = /* @__PURE__ */ new Map();
     for (const cap of match.captures) {
       const arr = byName.get(cap.name);
-      if (arr) {
-        arr.push(cap);
-      } else {
-        byName.set(cap.name, [cap]);
-      }
+      if (arr) arr.push(cap);
+      else byName.set(cap.name, [cap]);
     }
-    const first = (name) => {
-      const arr = byName.get(name);
-      return arr ? arr[0] : void 0;
-    };
+    return byName;
+  }
+  function first(byName, name) {
+    return byName.get(name)?.[0];
+  }
+  const allMatches = query.matches(tree.rootNode);
+  const importedNames = /* @__PURE__ */ new Map();
+  if (resolveImport) {
+    for (const match of allMatches) {
+      const byName = buildByName(match);
+      const sourceCap = first(byName, "import.source");
+      if (!sourceCap) continue;
+      const resolved = resolveImport(sourceCap.node.text);
+      if (!resolved) continue;
+      const names = byName.get("import.name") ?? [];
+      const aliases = byName.get("import.alias") ?? [];
+      for (let i = 0; i < names.length; i++) {
+        const localName = aliases[i]?.node.text ?? names[i].node.text;
+        importedNames.set(localName, resolved);
+      }
+      const defCap = first(byName, "import.default");
+      if (defCap) importedNames.set(defCap.node.text, resolved);
+      const nsCap = first(byName, "import.namespace");
+      if (nsCap) importedNames.set(nsCap.node.text, resolved);
+    }
+  }
+  for (const match of allMatches) {
+    const byName = buildByName(match);
+    const _first = (name) => first(byName, name);
     for (const cap of byName.get("function.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "function", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+      elements.push({ kind: "function", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
     for (const cap of byName.get("class.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "class", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+      elements.push({ kind: "class", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
     for (const cap of byName.get("interface.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "interface", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+      elements.push({ kind: "interface", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
     for (const cap of byName.get("typealias.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "type", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+      elements.push({ kind: "type", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
     for (const cap of byName.get("enum.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "enum", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+      elements.push({ kind: "enum", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
     for (const cap of byName.get("method.name") ?? []) {
-      const n = cap.node;
-      elements.push({ kind: "method", name: n.text, module: "", span: formatSpan(n), attrs: {} });
+      elements.push({ kind: "method", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
-    for (const cap of byName.get("import.name") ?? []) {
-      const n = cap.node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan(n), attrs: sourceModule ? { sourceModule } : {} });
+    const importStmtNode = _first("import")?.node;
+    const rawImport = importStmtNode?.text;
+    if (_first("import.source")) {
+      const sourceCap = _first("import.source");
+      const sourceModule = sourceCap.node.text;
+      const attrs = (key) => ({
+        sourceModule,
+        ...rawImport ? { rawImport } : {},
+        ...key ? { importedName: key } : {}
+      });
+      const names = byName.get("import.name") ?? [];
+      const aliases = byName.get("import.alias") ?? [];
+      for (let i = 0; i < names.length; i++) {
+        const originalName = names[i].node.text;
+        const localName = aliases[i]?.node.text ?? originalName;
+        elements.push({ kind: "import", name: localName, module: "", span: formatSpan(names[i].node), attrs: attrs(originalName) });
+        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: localName, dstModule: sourceModule, dstName: "", attrs: { module: sourceModule } });
+      }
+      const defCap = _first("import.default");
+      if (defCap) {
+        elements.push({ kind: "import", name: defCap.node.text, module: "", span: formatSpan(defCap.node), attrs: attrs("default") });
+        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: defCap.node.text, dstModule: sourceModule, dstName: "", attrs: { module: sourceModule } });
+      }
+      const nsCap = _first("import.namespace");
+      if (nsCap) {
+        elements.push({ kind: "import", name: nsCap.node.text, module: "", span: formatSpan(nsCap.node), attrs: attrs("*") });
+        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: nsCap.node.text, dstModule: sourceModule, dstName: "", attrs: { module: sourceModule } });
+      }
+      arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: sourceModule, dstName: "", attrs: {} });
     }
-    if (first("import.default")) {
-      const n = first("import.default").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    if (first("import.namespace")) {
-      const n = first("import.namespace").node;
-      const sourceCap = first("import.source");
-      const sourceModule = sourceCap ? sourceCap.node.text : "";
-      elements.push({ kind: "import", name: n.text, module: "", span: formatSpan(n), attrs: sourceModule ? { sourceModule } : {} });
-    }
-    for (const srcCap of ["import.source", "reexport.source", "require.source"]) {
-      if (first(srcCap)) {
-        const n = first(srcCap).node;
-        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: n.text, dstName: "", attrs: {} });
+    for (const srcCap of ["reexport.source", "require.source"]) {
+      if (_first(srcCap)) {
+        arrows.push({ kind: "imports", srcModule: "", srcName: "", dstModule: _first(srcCap).node.text, dstName: "", attrs: {} });
       }
     }
-    if (first("import.source")) {
-      const moduleNode = first("import.source").node;
-      const moduleStr = moduleNode.text;
-      for (const impCap of byName.get("import.name") ?? []) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: impCap.node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.default")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.default").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-      if (first("import.namespace")) {
-        arrows.push({ kind: asKind("importsFrom"), srcModule: "", srcName: first("import.namespace").node.text, dstModule: moduleStr, dstName: "", attrs: { module: moduleStr } });
-      }
-    }
-    if (first("call.callee")) {
-      const calleeNode = first("call.callee").node;
-      const callNode = first("call")?.node ?? first("call.member")?.node;
+    if (_first("call.callee")) {
+      const calleeNode = _first("call.callee").node;
+      const calleeName = calleeNode.text;
+      const callNode = _first("call")?.node ?? _first("call.member")?.node;
       const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: calleeNode.text, attrs: {} });
+      const dstModule = importedNames.get(calleeName) ?? "";
+      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule, dstName: calleeName, attrs: {} });
       if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: calleeNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: calleeNode.text, dstModule: "", dstName: fnName, attrs: {} });
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule, dstName: calleeName, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: dstModule, srcName: calleeName, dstModule: "", dstName: fnName, attrs: {} });
       }
     }
-    if (first("call.method")) {
-      const methodNode = first("call.method").node;
-      const callNode = first("call.member")?.node ?? first("call")?.node;
+    if (_first("call.method")) {
+      const methodNode = _first("call.method").node;
+      const methodName = methodNode.text;
+      const callNode = _first("call.member")?.node ?? _first("call")?.node;
       const fnName = callNode ? findContainingFunctionName(callNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: methodNode.text, attrs: {} });
+      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: methodName, attrs: {} });
       if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: methodNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: fnName, attrs: {} });
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: methodName, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: methodName, dstModule: "", dstName: fnName, attrs: {} });
       }
     }
-    if (first("new.ctor")) {
-      const ctorNode = first("new.ctor").node;
-      const newNode = first("new")?.node;
+    if (_first("new.ctor")) {
+      const ctorNode = _first("new.ctor").node;
+      const ctorName = ctorNode.text;
+      const newNode = _first("new")?.node;
       const fnName = newNode ? findContainingFunctionName(newNode) : null;
-      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule: "", dstName: ctorNode.text, attrs: {} });
+      const dstModule = importedNames.get(ctorName) ?? "";
+      arrows.push({ kind: "calls", srcModule: "", srcName: fnName ?? "", dstModule, dstName: ctorName, attrs: {} });
       if (fnName) {
-        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule: "", dstName: ctorNode.text, attrs: {} });
-        arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: ctorNode.text, dstModule: "", dstName: fnName, attrs: {} });
+        arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: fnName, dstModule, dstName: ctorName, attrs: {} });
+        arrows.push({ kind: asKind("calleeOf"), srcModule: dstModule, srcName: ctorName, dstModule: "", dstName: fnName, attrs: {} });
       }
     }
-    if (first("memberof.method") && first("memberof.class")) {
-      const methodNode = first("memberof.method").node;
-      const classNode = first("memberof.class").node;
-      arrows.push({ kind: asKind("memberOf"), srcModule: "", srcName: methodNode.text, dstModule: "", dstName: classNode.text, attrs: {} });
+    if (_first("memberof.method") && _first("memberof.class")) {
+      arrows.push({ kind: asKind("memberOf"), srcModule: "", srcName: _first("memberof.method").node.text, dstModule: "", dstName: _first("memberof.class").node.text, attrs: {} });
     }
   }
   if ("delete" in tree && typeof tree.delete === "function") {
@@ -300,8 +317,9 @@ var TypeScriptAdapter = class {
     const ext = filename.substring(filename.lastIndexOf("."));
     return ext === ".tsx" ? TSX_QUERY_PATH : TS_QUERY_PATH;
   }
-  extractElements(parser, source, queryPath) {
-    return extractFromFile(parser, source, queryPath);
+  extractElements(parser, source, queryPath, fromFile, projectRoot) {
+    const resolveImport = fromFile && projectRoot ? (specifier) => this.resolveImportSpecifier(specifier, fromFile, projectRoot) : void 0;
+    return extractFromFile(parser, source, queryPath, resolveImport);
   }
   extractProperties(parser, source, moduleName) {
     return extractPropertiesFromFile(parser, source, moduleName);

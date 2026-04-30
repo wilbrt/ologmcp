@@ -1998,7 +1998,7 @@ function ingestChangedFiles(projectRoot2, store2, registry) {
     if (!adapter) continue;
     let extracted;
     try {
-      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath));
+      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath), rel, projectRoot2);
     } catch (err) {
       console.error(`[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
@@ -2167,7 +2167,7 @@ function runIngestion(projectRoot2, store2, head, registry) {
     const queryPath = adapter.queryPath(absolutePath);
     let extracted;
     try {
-      extracted = adapter.extractElements(parser, source, queryPath);
+      extracted = adapter.extractElements(parser, source, queryPath, relativePath, projectRoot2);
     } catch (err) {
       console.error(
         `[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`

@@ -116,7 +116,7 @@ export function ingestChangedFiles(projectRoot: string, store: OlogStore, regist
 
     let extracted: { elements: RawElement[]; arrows: RawArrow[] };
     try {
-      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath));
+      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath), rel, projectRoot);
     } catch (err) {
       console.error(`[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
@@ -346,7 +346,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
 
     let extracted: { elements: RawElement[]; arrows: RawArrow[] };
     try {
-      extracted = adapter.extractElements(parser, source, queryPath);
+      extracted = adapter.extractElements(parser, source, queryPath, relativePath, projectRoot);
     } catch (err) {
       console.error(
         `[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`

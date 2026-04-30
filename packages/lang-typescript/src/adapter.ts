@@ -67,11 +67,14 @@ export class TypeScriptAdapter implements LanguageAdapter<Parser> {
     return ext === '.tsx' ? TSX_QUERY_PATH : TS_QUERY_PATH;
   }
 
-  extractElements(parser: Parser, source: string, queryPath: string): {
+  extractElements(parser: Parser, source: string, queryPath: string, fromFile?: string, projectRoot?: string): {
     elements: RawElement[];
     arrows: RawArrow[];
   } {
-    return extractFromFile(parser, source, queryPath);
+    const resolveImport = (fromFile && projectRoot)
+      ? (specifier: string) => this.resolveImportSpecifier(specifier, fromFile, projectRoot)
+      : undefined;
+    return extractFromFile(parser, source, queryPath, resolveImport);
   }
 
   extractProperties(parser: Parser, source: string, moduleName: string): PropertyExtract[] {

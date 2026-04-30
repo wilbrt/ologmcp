@@ -13,7 +13,7 @@ declare class TypeScriptAdapter implements LanguageAdapter<Parser> {
     kindToNodeTypes: Record<string, string[]>;
     createParser(filename: string): Parser;
     queryPath(filename: string): string;
-    extractElements(parser: Parser, source: string, queryPath: string): {
+    extractElements(parser: Parser, source: string, queryPath: string, fromFile?: string, projectRoot?: string): {
         elements: RawElement[];
         arrows: RawArrow[];
     };
@@ -27,8 +27,11 @@ declare function formatSpan(node: Parser.SyntaxNode): string;
 declare function asKind(kind: string): ArrowKind;
 /**
  * Extract semantic elements and arrows from source code using a tree-sitter query.
+ *
+ * When resolveImport is provided, cross-module callerOf/calleeOf arrows are enriched
+ * with dstModule by resolving the callee against the file's import statements.
  */
-declare function extractFromFile(parser: Parser, source: string, queryPath: string): {
+declare function extractFromFile(parser: Parser, source: string, queryPath: string, resolveImport?: (specifier: string) => string | null): {
     elements: RawElement[];
     arrows: RawArrow[];
 };

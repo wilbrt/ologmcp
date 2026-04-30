@@ -904,7 +904,7 @@ interface LanguageAdapter<ParserT = TreeSitterParser> {
     /** Get the .scm query file path for a given source file */
     queryPath(filename: string): string;
     /** Extract raw elements and arrows from source via tree-sitter queries */
-    extractElements(parser: ParserT, source: string, queryPath: string): {
+    extractElements(parser: ParserT, source: string, queryPath: string, fromFile?: string, projectRoot?: string): {
         elements: RawElement[];
         arrows: RawArrow[];
     };
