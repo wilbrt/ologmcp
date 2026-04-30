@@ -39,6 +39,7 @@ export { arrowId } from './ingest/ids.js';
 export {
   ingestProject,
   reindexProject,
+  ingestChangedFiles,
 } from './ingest/project.js';
 export {
   type LanguageAdapter,

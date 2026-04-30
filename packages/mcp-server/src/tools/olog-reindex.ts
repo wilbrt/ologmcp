@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, reindexProject, getDefaultRegistry } from '@olog/core';
+import { OlogStore, reindexProject, ingestChangedFiles, getDefaultRegistry } from '@olog/core';
 
 export function registerOlogReindex(
   server: McpServer,
@@ -11,22 +11,35 @@ export function registerOlogReindex(
     'olog_reindex',
     {
       description:
-        'Force a full re-ingestion of the codebase. Use this after code changes to refresh the structural model. This drops all existing elements and rebuilds from scratch.',
-      inputSchema: z.object({}),
+        'Refresh the structural model after code changes. ' +
+        'mode="incremental" (default) processes only new and git-changed files — fast for routine use after editing. ' +
+        'mode="full" drops and rebuilds everything from scratch — use when the olog seems stale or after large refactors.',
+      inputSchema: z.object({
+        mode: z
+          .enum(['incremental', 'full'])
+          .default('incremental')
+          .describe(
+            '"incremental" processes only new/changed files (fast). ' +
+            '"full" wipes and rebuilds the entire index (slow but guaranteed fresh).'
+          ),
+      }),
       annotations: {
         readOnlyHint: false,
         idempotentHint: false,
         destructiveHint: false,
       },
     },
-    async () => {
+    async ({ mode }) => {
       try {
-        const result = reindexProject(projectRoot, store, getDefaultRegistry());
+        const registry = getDefaultRegistry();
+        const result = mode === 'full'
+          ? reindexProject(projectRoot, store, registry)
+          : ingestChangedFiles(projectRoot, store, registry);
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify({ mode, ...result }, null, 2),
             },
           ],
         };

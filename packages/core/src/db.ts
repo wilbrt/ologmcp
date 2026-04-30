@@ -340,6 +340,68 @@ export class OlogStore {
     return elems.length;
   }
 
+  /** Return the set of relative module paths that have at least one tree-sitter element. */
+  getIngestedModules(): Set<string> {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT e.module FROM olog_elem e INNER JOIN olog_prov p ON e.id = p.elem_id WHERE p.source = 'tree-sitter' AND e.module IS NOT NULL"
+    ).all() as { module: string }[];
+    return new Set(rows.map(r => r.module));
+  }
+
+  /** Delete all tree-sitter elements for a given module (cascade removes arrows). */
+  deleteModuleTreeSitterElements(module: string): void {
+    this.db.prepare(
+      "DELETE FROM olog_elem WHERE module = ? AND id IN (SELECT elem_id FROM olog_prov WHERE source = 'tree-sitter')"
+    ).run(module);
+  }
+
+  /** Return a map of element name → [ids] across all elements, for cross-file resolution. */
+  getAllElemNameToIds(): Map<string, string[]> {
+    const rows = this.db.prepare("SELECT id, name FROM olog_elem WHERE module IS NOT NULL").all() as { id: string; name: string }[];
+    const result = new Map<string, string[]>();
+    for (const row of rows) {
+      const arr = result.get(row.name) ?? [];
+      arr.push(row.id);
+      result.set(row.name, arr);
+    }
+    return result;
+  }
+
+  /**
+   * Insert elements and arrows for specific files without wiping the whole store.
+   * Used by incremental ingestion. Arrows that reference non-existent elements are silently skipped.
+   */
+  ingestFile(elems: ElemRow[], arrs: ArrRow[], sha: string): void {
+    const insertElem = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_elem (id, kind, name, module, span, attrs) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const insertArr = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_arr (id, kind, src_id, dst_id, attrs) VALUES (?, ?, ?, ?, ?)"
+    );
+    const insertProv = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_prov (elem_id, source, commit_sha, ingested_at, confidence) VALUES (?, 'tree-sitter', ?, ?, 'resolved')"
+    );
+    const updateMeta = this.db.prepare(
+      "INSERT INTO olog_meta (key, value) VALUES ('commit_sha', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    );
+
+    const tx = this.db.transaction(() => {
+      for (const e of elems) {
+        insertElem.run(e.id, e.kind, e.name, e.module, e.span, e.attrs);
+        insertProv.run(e.id, sha, Date.now());
+      }
+      for (const a of arrs) {
+        try {
+          insertArr.run(a.id, a.kind, a.src_id, a.dst_id, a.attrs);
+        } catch {
+          // FK violation: one endpoint not yet present — skipped, cross-file pass handles it
+        }
+      }
+      updateMeta.run(sha);
+    });
+    tx();
+  }
+
   getElem(id: string): OlogElem | null {
     const row = this.getElemStmt.get(id) as ElemRow | undefined;
     if (!row) return null;

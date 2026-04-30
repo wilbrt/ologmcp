@@ -41,6 +41,185 @@ export function ingestProject(projectRoot: string, store: OlogStore, registry?: 
   return { ...result, durationMs: Date.now() - start };
 }
 
+/**
+ * Incremental ingestion: processes only files that are new or modified since the last index.
+ * New files: present on disk but not yet in the olog.
+ * Modified files: changed according to git since the stored commit SHA, or since uncommitted edits.
+ * Does not touch unchanged files, so it is much faster on large codebases.
+ */
+export function ingestChangedFiles(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult {
+  const start = Date.now();
+
+  const effectiveRegistry = registry ?? getDefaultRegistry();
+  if (!effectiveRegistry) throw new Error('No adapter registry available.');
+  setDefaultRegistry(effectiveRegistry);
+
+  let head: string;
+  try {
+    head = execSync('git rev-parse HEAD', { cwd: projectRoot, encoding: 'utf8' }).trim();
+  } catch {
+    head = 'nogit';
+  }
+
+  // Collect relative paths of changed files from git
+  const gitChanged = new Set<string>();
+  const storedSha = store.commitSha();
+  try {
+    if (storedSha && storedSha !== 'nogit' && storedSha !== head) {
+      execSync(`git diff --name-only ${storedSha} ${head}`, { cwd: projectRoot, encoding: 'utf8' })
+        .trim().split('\n').filter(Boolean).forEach(f => gitChanged.add(f));
+    }
+    // Uncommitted modifications
+    execSync('git status --porcelain', { cwd: projectRoot, encoding: 'utf8' })
+      .trim().split('\n').filter(Boolean)
+      .forEach(line => { const f = line.slice(3).trim(); if (f) gitChanged.add(f); });
+  } catch { /* not a git repo — fall through, only new files will be found */ }
+
+  const ingestedModules = store.getIngestedModules();
+  const allFiles = discoverFiles(projectRoot, effectiveRegistry);
+
+  // Files to process: new (not yet indexed) or git-changed
+  const filesToProcess = allFiles.filter(abs => {
+    const rel = relative(projectRoot, abs);
+    return !ingestedModules.has(rel) || gitChanged.has(rel);
+  });
+
+  if (filesToProcess.length === 0) {
+    return { filesProcessed: 0, elementsCreated: 0, arrowsCreated: 0, durationMs: Date.now() - start };
+  }
+
+  // Delete existing tree-sitter elements for modified files (new ones have nothing to delete)
+  for (const abs of filesToProcess) {
+    const rel = relative(projectRoot, abs);
+    if (ingestedModules.has(rel)) store.deleteModuleTreeSitterElements(rel);
+  }
+
+  // --- Per-file extraction (mirrors runIngestion for the subset of files) ---
+  type ElemRow = { id: string; kind: string; name: string; module: string | null; span: string | null; attrs: string };
+  type ArrRow = { id: string; kind: string; src_id: string; dst_id: string; attrs: string };
+
+  const elems: ElemRow[] = [];
+  const arrs: ArrRow[] = [];
+  const pendingCrossFileArrows: Array<{ kind: string; srcId: string; dstName: string; dstModuleSuffix: string; attrs: string }> = [];
+  const newNameToIds = new Map<string, string[]>();
+  const createdModuleIds = new Set<string>();
+  let filesProcessed = 0;
+
+  for (const absolutePath of filesToProcess) {
+    const rel = relative(projectRoot, absolutePath);
+    let stats; try { stats = statSync(absolutePath); } catch { continue; }
+    if (stats.size > 1024 * 1024) continue;
+    let source: string; try { source = readFileSync(absolutePath, 'utf8'); } catch { continue; }
+
+    const adapter = effectiveRegistry.getForFile(absolutePath);
+    if (!adapter) continue;
+
+    let extracted: { elements: RawElement[]; arrows: RawArrow[] };
+    try {
+      extracted = adapter.extractElements(adapter.createParser(absolutePath), source, adapter.queryPath(absolutePath));
+    } catch (err) {
+      console.error(`[olog] Failed to extract from ${absolutePath}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    const fileId = fileElemId(rel);
+    elems.push({ id: fileId, kind: 'file', name: basename(rel), module: rel, span: null, attrs: '{}' });
+
+    const fileNameToId = new Map<string, string[]>();
+    const seenArrowIds = new Set<string>();
+
+    for (const rawElem of extracted.elements) {
+      const coords = parseTreeSitterSpan(rawElem.span);
+      const line = coords?.startLine ?? 1;
+      const col = coords?.startCol ?? 1;
+      const fullSpan = coords ? formatSpan(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
+      const id = elemId(rel, line, col, rawElem.kind, rawElem.name);
+
+      const fileExisting = fileNameToId.get(rawElem.name) ?? [];
+      fileExisting.push(id);
+      fileNameToId.set(rawElem.name, fileExisting);
+      const globalExisting = newNameToIds.get(rawElem.name) ?? [];
+      globalExisting.push(id);
+      newNameToIds.set(rawElem.name, globalExisting);
+
+      elems.push({ id, kind: rawElem.kind, name: rawElem.name, module: rel, span: fullSpan, attrs: JSON.stringify(rawElem.attrs) });
+      if (rawElem.kind !== 'file') {
+        const aid = arrowId(fileId, 'contains', id);
+        if (!seenArrowIds.has(aid)) { seenArrowIds.add(aid); arrs.push({ id: aid, kind: 'contains', src_id: fileId, dst_id: id, attrs: '{}' }); }
+      }
+    }
+
+    for (const rawArrow of extracted.arrows) {
+      if ((rawArrow.kind as string) === 'importsFrom') {
+        const srcId = (fileNameToId.get(rawArrow.srcName) ?? [])[0];
+        const rawModule = (rawArrow.attrs as Record<string, string>).module ?? rawArrow.dstModule;
+        const resolvedModule = adapter.resolveImportSpecifier
+          ? adapter.resolveImportSpecifier(rawModule, rel, projectRoot) ?? rawModule
+          : rawModule;
+        const moduleId = `module:${resolvedModule}`;
+        if (srcId) {
+          if (!createdModuleIds.has(moduleId)) {
+            createdModuleIds.add(moduleId);
+            elems.push({ id: moduleId, kind: 'module', name: resolvedModule, module: resolvedModule, span: null, attrs: '{}' });
+          }
+          const aid = arrowId(srcId, 'importsFrom', moduleId);
+          if (!seenArrowIds.has(aid)) { seenArrowIds.add(aid); arrs.push({ id: aid, kind: 'importsFrom', src_id: srcId, dst_id: moduleId, attrs: JSON.stringify(rawArrow.attrs) }); }
+        }
+      } else {
+        const srcId = (fileNameToId.get(rawArrow.srcName) ?? [])[0];
+        const dstId = (fileNameToId.get(rawArrow.dstName) ?? [])[0];
+        if (srcId && dstId) {
+          const aid = arrowId(srcId, rawArrow.kind, dstId);
+          if (!seenArrowIds.has(aid)) { seenArrowIds.add(aid); arrs.push({ id: aid, kind: rawArrow.kind, src_id: srcId, dst_id: dstId, attrs: JSON.stringify(rawArrow.attrs) }); }
+        } else if (srcId && !dstId && rawArrow.dstName) {
+          pendingCrossFileArrows.push({ kind: rawArrow.kind, srcId, dstName: rawArrow.dstName, dstModuleSuffix: rawArrow.dstModule ?? '', attrs: JSON.stringify(rawArrow.attrs) });
+        }
+      }
+    }
+
+    filesProcessed++;
+  }
+
+  // Cross-file resolution: combine existing DB elements with newly extracted ones
+  const globalNameToIds = store.getAllElemNameToIds();
+  for (const [name, ids] of newNameToIds) {
+    const existing = globalNameToIds.get(name) ?? [];
+    for (const id of ids) if (!existing.includes(id)) existing.push(id);
+    globalNameToIds.set(name, existing);
+  }
+
+  const seenCrossIds = new Set<string>();
+  for (const pending of pendingCrossFileArrows) {
+    const candidates = globalNameToIds.get(pending.dstName) ?? [];
+    let dstId: string | undefined;
+    if (pending.dstModuleSuffix) {
+      // Use DB to check module for existing elements; for new elements use newNameToIds (already global)
+      const matched = candidates.filter(id => {
+        // Check in newly added elems first
+        const newElem = elems.find(e => e.id === id);
+        if (newElem) return newElem.module?.endsWith(pending.dstModuleSuffix) ?? false;
+        // Otherwise query the store
+        const elem = store.getElem(id);
+        return elem?.module?.endsWith(pending.dstModuleSuffix) ?? false;
+      });
+      if (matched.length === 1) dstId = matched[0];
+    } else if (candidates.length === 1) {
+      dstId = candidates[0];
+    }
+    if (dstId && dstId !== pending.srcId) {
+      const aid = arrowId(pending.srcId, pending.kind, dstId);
+      if (!seenCrossIds.has(aid)) {
+        seenCrossIds.add(aid);
+        arrs.push({ id: aid, kind: pending.kind, src_id: pending.srcId, dst_id: dstId, attrs: pending.attrs });
+      }
+    }
+  }
+
+  store.ingestFile(elems, arrs, head);
+
+  return { filesProcessed, elementsCreated: elems.length, arrowsCreated: arrs.length, durationMs: Date.now() - start };
+}
+
 export function reindexProject(projectRoot: string, store: OlogStore, registry?: AdapterRegistry): IngestResult {
   const start = Date.now();
   let head: string;
