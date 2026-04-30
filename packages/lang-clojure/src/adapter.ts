@@ -76,6 +76,7 @@ export class ClojureAdapter implements LanguageAdapter<Parser> {
 
   resolveImportSpecifier(specifier: string, _fromFile: string, _projectRoot: string): string | null {
     if (!specifier || specifier.startsWith('/')) return null;
-    return specifier.replace(/\./g, '/') + '.clj';
+    // Clojure convention: dots → slashes, hyphens → underscores
+    return specifier.replace(/\./g, '/').replace(/-/g, '_') + '.clj';
   }
 }

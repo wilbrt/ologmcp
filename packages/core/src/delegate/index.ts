@@ -233,7 +233,9 @@ export function assembleBrief(
     };
   });
 
-  const targetFileContent = resolver.readFileContent(filePath, 500) ?? '';
+  const targetFileContent = target.span
+    ? resolver.readFocused(filePath, target.span, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? ''
+    : resolver.readFileContent(filePath, 500) ?? '';
 
   const domainContext = gatherDomainContext(store, targetId);
 

@@ -32,7 +32,12 @@ export function findAnalogues(
 
     const intersectionSize = countIntersection(targetCallees, candidateCallees);
     const unionSize = targetCallees.size + candidateCallees.size - intersectionSize;
-    const similarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+    const calleeSimilarity = unionSize === 0 ? 0 : intersectionSize / unionSize;
+
+    // Same-name function in another module is always a useful analogue (predecessor or variant)
+    const nameSimilarity = candidate.name === target.name ? 0.5 : 0;
+
+    const similarity = Math.max(calleeSimilarity, nameSimilarity);
 
     if (similarity > 0) {
       scored.push({

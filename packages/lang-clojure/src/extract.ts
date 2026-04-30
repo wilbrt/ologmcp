@@ -13,6 +13,68 @@ function formatSpan(node: Node): string {
   return `${s.row + 1}:${s.column + 1}-${e.row + 1}:${e.column + 1}`;
 }
 
+interface NsAliases {
+  /** namespace alias → full Clojure namespace path (e.g. "fee-model" → "myapp.fee-model") */
+  aliases: Map<string, string>;
+  /** referred function name → full Clojure namespace path */
+  refers: Map<string, string>;
+}
+
+/**
+ * Walk the root node's top-level `(ns ...)` form and collect `:require` aliases
+ * and `:refer` mappings so cross-module call arrows can be keyed correctly.
+ */
+function collectNsAliases(root: Node): NsAliases {
+  const aliases = new Map<string, string>();
+  const refers = new Map<string, string>();
+
+  for (const top of root.namedChildren) {
+    if (top.type !== 'list_lit') continue;
+    const topVals = listValues(top);
+    if (topVals[0]?.type !== 'sym_lit' || topVals[0].text !== 'ns') continue;
+
+    for (let i = 2; i < topVals.length; i++) {
+      const clause = topVals[i]!;
+      if (clause.type !== 'list_lit') continue;
+      const clauseVals = listValues(clause);
+      if (clauseVals[0]?.type !== 'kwd_lit' || clauseVals[0].text !== ':require') continue;
+
+      for (let j = 1; j < clauseVals.length; j++) {
+        const dep = clauseVals[j]!;
+        if (dep.type !== 'vec_lit') continue;
+        const depVals = dep.childrenForFieldName('value');
+        const nsPath = depVals[0];
+        if (!nsPath || nsPath.type !== 'sym_lit') continue;
+        const fullNs = nsPath.text;
+
+        for (let k = 1; k < depVals.length - 1; k++) {
+          const kw = depVals[k];
+          if (!kw || kw.type !== 'kwd_lit') continue;
+          if (kw.text === ':as') {
+            const aliasNode = depVals[k + 1];
+            if (aliasNode?.type === 'sym_lit') aliases.set(aliasNode.text, fullNs);
+          } else if (kw.text === ':refer') {
+            const referVec = depVals[k + 1];
+            if (referVec?.type === 'vec_lit') {
+              for (const fn of referVec.childrenForFieldName('value')) {
+                if (fn.type === 'sym_lit') refers.set(fn.text, fullNs);
+              }
+            }
+          }
+        }
+      }
+    }
+    break; // only one ns form per file
+  }
+
+  return { aliases, refers };
+}
+
+/** Convert a Clojure namespace path to the conventional file path suffix. */
+function nsToFileSuffix(ns: string): string {
+  return ns.replace(/\./g, '/').replace(/-/g, '_') + '.clj';
+}
+
 export function extractFromFile(
   parser: Parser,
   source: string,
@@ -85,8 +147,9 @@ export function extractFromFile(
     }
   }
 
+  const nsAliases = collectNsAliases(tree.rootNode);
   walkForDefinitions(tree.rootNode, elements);
-  walkForCalls(tree.rootNode, elements, arrows, null);
+  walkForCalls(tree.rootNode, elements, arrows, null, nsAliases);
 
   tree.delete();
 
@@ -197,6 +260,7 @@ function walkForCalls(
   elements: RawElement[],
   arrows: RawArrow[],
   enclosingFn: string | null,
+  nsAliases: NsAliases = { aliases: new Map(), refers: new Map() },
 ): void {
   if (!node) return;
   if (node.type === 'list_lit') {
@@ -210,7 +274,7 @@ function walkForCalls(
         if ((sym === 'defn' || sym === 'defn-' || sym === 'defmacro' || sym === 's/defn' || sym === 's/defn-') && vals[1]?.type === 'sym_lit') {
           const newFnName = vals[1]!.text;
           for (const child of node.namedChildren) {
-            walkForCalls(child, elements, arrows, newFnName);
+            walkForCalls(child, elements, arrows, newFnName, nsAliases);
           }
           return;
         }
@@ -220,7 +284,7 @@ function walkForCalls(
         if ((sym === 'def' || sym === 'defonce' || sym === 's/def' || sym === 's/defonce' || sym === 's/defschema') && vals[1]?.type === 'sym_lit') {
           const defName = vals[1]!.text;
           for (const child of node.namedChildren) {
-            walkForCalls(child, elements, arrows, defName);
+            walkForCalls(child, elements, arrows, defName, nsAliases);
           }
           for (let i = 2; i < vals.length; i++) {
             walkForRefs(vals[i]!, arrows, defName);
@@ -232,7 +296,7 @@ function walkForCalls(
         if (sym === 'defmethod' && vals[1]?.type === 'sym_lit') {
           const methodName = vals[1]!.text;
           for (const child of node.namedChildren) {
-            walkForCalls(child, elements, arrows, methodName);
+            walkForCalls(child, elements, arrows, methodName, nsAliases);
           }
           return;
         }
@@ -241,7 +305,7 @@ function walkForCalls(
         if ((sym === 's/defrecord' || sym === 's/defprotocol') && vals[1]?.type === 'sym_lit') {
           const typeName = vals[1]!.text;
           for (const child of node.namedChildren) {
-            walkForCalls(child, elements, arrows, typeName);
+            walkForCalls(child, elements, arrows, typeName, nsAliases);
           }
           return;
         }
@@ -253,16 +317,31 @@ function walkForCalls(
         }
 
         if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
-          arrows.push({ kind: 'calls', srcModule: '', srcName: enclosingFn, dstModule: '', dstName: sym, attrs: {} });
-          arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: enclosingFn, dstModule: '', dstName: sym, attrs: {} });
-          arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: sym, dstModule: '', dstName: enclosingFn, attrs: {} });
+          // Resolve cross-module calls: ns-alias/fn-name or :referred fn-name
+          let dstName = sym;
+          let dstModule = '';
+          if (sym.includes('/')) {
+            const slash = sym.indexOf('/');
+            const alias = sym.slice(0, slash);
+            const fn = sym.slice(slash + 1);
+            const resolvedNs = nsAliases.aliases.get(alias);
+            if (resolvedNs) {
+              dstName = fn;
+              dstModule = nsToFileSuffix(resolvedNs);
+            }
+          } else if (nsAliases.refers.has(sym)) {
+            dstModule = nsToFileSuffix(nsAliases.refers.get(sym)!);
+          }
+          arrows.push({ kind: 'calls', srcModule: '', srcName: enclosingFn, dstModule, dstName, attrs: {} });
+          arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: enclosingFn, dstModule, dstName, attrs: {} });
+          arrows.push({ kind: asKind('calleeOf'), srcModule: dstModule, srcName: dstName, dstModule: '', dstName: enclosingFn, attrs: {} });
         }
       }
     }
   }
 
   for (const child of node.namedChildren) {
-    walkForCalls(child, elements, arrows, enclosingFn);
+    walkForCalls(child, elements, arrows, enclosingFn, nsAliases);
   }
 }
 

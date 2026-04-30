@@ -109,6 +109,23 @@ export class SourceResolver {
     return lines.slice(0, maxLines).join('\n') + '\n// ... (truncated)';
   }
 
+  /**
+   * Read a window of source focused on a span: contextBefore lines above the
+   * start of the span and contextAfter lines below the end, with an omission
+   * comment if the file has content before the window.
+   */
+  readFocused(filePath: string, span: string, contextBefore: number = 25, contextAfter: number = 10): string | null {
+    const parsed = parseSpan(span);
+    if (!parsed) return null;
+    const source = this.readFile(filePath);
+    if (source === null) return null;
+    const lines = source.split('\n');
+    const start = Math.max(0, parsed.startLine - 1 - contextBefore);
+    const end = Math.min(lines.length, parsed.endLine + contextAfter);
+    const prefix = start > 0 ? `; ... (lines 1–${start} omitted)\n` : '';
+    return prefix + lines.slice(start, end).join('\n');
+  }
+
   private readFile(filePath: string): string | null {
     const cached = this.fileCache.get(filePath);
     if (cached !== undefined) return cached;

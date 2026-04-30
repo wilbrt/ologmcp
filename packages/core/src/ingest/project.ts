@@ -112,6 +112,20 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
   const createdModuleIds = new Set<string>();
   const filesToExtract: FileForPropertyExtraction[] = [];
 
+  // Pending cross-file arrows: emitted by adapters with dstModule hint but not resolvable within file scope.
+  const pendingCrossFileArrows: Array<{
+    kind: string;
+    srcId: string;
+    dstName: string;
+    dstModuleSuffix: string; // file path suffix to match against element modules (may be '')
+    attrs: string;
+  }> = [];
+
+  // Global name → element ID map, built after all files are processed.
+  const globalNameToIds = new Map<string, string[]>();
+  // Module (relativePath) → element IDs map for cross-module resolution.
+  const moduleToIds = new Map<string, string[]>();
+
   for (const absolutePath of files) {
     let stats;
     try {
@@ -186,6 +200,14 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
       existing.push(id);
       nameToId.set(rawElem.name, existing);
       elementIds.push({ id, kind: rawElem.kind });
+
+      // Populate global maps for cross-file resolution
+      const globalExisting = globalNameToIds.get(rawElem.name) ?? [];
+      globalExisting.push(id);
+      globalNameToIds.set(rawElem.name, globalExisting);
+      const modExisting = moduleToIds.get(relativePath) ?? [];
+      modExisting.push(id);
+      moduleToIds.set(relativePath, modExisting);
 
       elems.push({
         id,
@@ -286,6 +308,15 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
               attrs: JSON.stringify(rawArrow.attrs),
             });
           }
+        } else if (srcId && !dstId && rawArrow.dstName) {
+          // Dst not found in this file — queue for cross-file resolution
+          pendingCrossFileArrows.push({
+            kind: rawArrow.kind,
+            srcId,
+            dstName: rawArrow.dstName,
+            dstModuleSuffix: rawArrow.dstModule ?? '',
+            attrs: JSON.stringify(rawArrow.attrs),
+          });
         }
       }
     }
@@ -412,6 +443,36 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
             arrs.push({ id: htId, kind: 'hasType', src_id: propId, dst_id: typeId, attrs: '{}' });
           }
         }
+      }
+    }
+  }
+
+  // --- Cross-file arrow resolution pass ---
+  // Resolve arrows where the dst element lives in another file.
+  // Matching strategy:
+  //   1. If dstModuleSuffix is provided, find elements with that name whose module ends with the suffix.
+  //   2. Otherwise, use global name lookup — accept only if the name is unambiguous (one match).
+  const seenCrossFileArrowIds = new Set<string>();
+  for (const pending of pendingCrossFileArrows) {
+    const candidates = globalNameToIds.get(pending.dstName) ?? [];
+    let dstId: string | undefined;
+
+    if (pending.dstModuleSuffix) {
+      const suffix = pending.dstModuleSuffix;
+      const matched = candidates.filter(id => {
+        const elem = elems.find(e => e.id === id);
+        return elem?.module?.endsWith(suffix) ?? false;
+      });
+      if (matched.length === 1) dstId = matched[0];
+    } else if (candidates.length === 1) {
+      dstId = candidates[0];
+    }
+
+    if (dstId && dstId !== pending.srcId) {
+      const aid = arrowId(pending.srcId, pending.kind, dstId);
+      if (!seenCrossFileArrowIds.has(aid)) {
+        seenCrossFileArrowIds.add(aid);
+        arrs.push({ id: aid, kind: pending.kind, src_id: pending.srcId, dst_id: dstId, attrs: pending.attrs });
       }
     }
   }
