@@ -101,6 +101,9 @@ function listValues(node: Node): Node[] {
 const DEFINITION_FORMS = new Set([
   'defn', 'defn-', 'defmacro', 'defmethod', 'defmulti', 'defprotocol',
   'defrecord', 'deftype', 'def', 'defonce', 'ns', 'declare',
+  // schema.core (alias s/) equivalents
+  's/defn', 's/defn-', 's/defschema', 's/defrecord', 's/defprotocol',
+  's/def', 's/defonce',
 ]);
 
 function walkForDefinitions(node: Node | null | undefined, elements: RawElement[]): void {
@@ -148,6 +151,32 @@ function walkForDefinitions(node: Node | null | undefined, elements: RawElement[
             if (!elements.find(e => e.name === name && e.kind === 'class'))
               elements.push({ kind: 'class', name, module: '', span: formatSpan(node), attrs: {} });
             break;
+          // schema.core (alias s/) forms
+          case 's/defn':
+          case 's/defn-':
+            if (!elements.find(e => e.name === name && e.kind === 'function'))
+              elements.push({ kind: 'function', name, module: '', span: formatSpan(node), attrs: { schema: true } });
+            break;
+          case 's/defschema':
+            if (!elements.find(e => e.name === name && e.kind === 'type'))
+              elements.push({ kind: 'type', name, module: '', span: formatSpan(node), attrs: { schema: true } });
+            break;
+          case 's/defrecord':
+            if (!elements.find(e => e.name === name && e.kind === 'class'))
+              elements.push({ kind: 'class', name, module: '', span: formatSpan(node), attrs: { schema: true } });
+            break;
+          case 's/defprotocol':
+            if (!elements.find(e => e.name === name && e.kind === 'interface'))
+              elements.push({ kind: 'interface', name, module: '', span: formatSpan(node), attrs: { schema: true } });
+            break;
+          case 's/def':
+            if (!elements.find(e => e.name === name && e.kind === 'const'))
+              elements.push({ kind: 'const', name, module: '', span: formatSpan(node), attrs: { schema: true } });
+            break;
+          case 's/defonce':
+            if (!elements.find(e => e.name === name && e.kind === 'const'))
+              elements.push({ kind: 'const', name, module: '', span: formatSpan(node), attrs: { schema: true, once: true } });
+            break;
         }
       }
     }
@@ -177,8 +206,8 @@ function walkForCalls(
       if (head?.type === 'sym_lit') {
         const sym = head.text;
 
-        // defn / defmacro: enter body with function name as context
-        if ((sym === 'defn' || sym === 'defn-' || sym === 'defmacro') && vals[1]?.type === 'sym_lit') {
+        // defn / defmacro / s/defn: enter body with function name as context
+        if ((sym === 'defn' || sym === 'defn-' || sym === 'defmacro' || sym === 's/defn' || sym === 's/defn-') && vals[1]?.type === 'sym_lit') {
           const newFnName = vals[1]!.text;
           for (const child of node.namedChildren) {
             walkForCalls(child, elements, arrows, newFnName);
@@ -186,9 +215,9 @@ function walkForCalls(
           return;
         }
 
-        // def / defonce: enter value expression with def name as context;
+        // def / defonce / s/def / s/defonce / s/defschema: enter value expression with def name as context;
         // also emit references for symbols in data (non-call-head) positions.
-        if ((sym === 'def' || sym === 'defonce') && vals[1]?.type === 'sym_lit') {
+        if ((sym === 'def' || sym === 'defonce' || sym === 's/def' || sym === 's/defonce' || sym === 's/defschema') && vals[1]?.type === 'sym_lit') {
           const defName = vals[1]!.text;
           for (const child of node.namedChildren) {
             walkForCalls(child, elements, arrows, defName);
@@ -204,6 +233,15 @@ function walkForCalls(
           const methodName = vals[1]!.text;
           for (const child of node.namedChildren) {
             walkForCalls(child, elements, arrows, methodName);
+          }
+          return;
+        }
+
+        // s/defrecord / s/defprotocol: enter body with type name as context
+        if ((sym === 's/defrecord' || sym === 's/defprotocol') && vals[1]?.type === 'sym_lit') {
+          const typeName = vals[1]!.text;
+          for (const child of node.namedChildren) {
+            walkForCalls(child, elements, arrows, typeName);
           }
           return;
         }
