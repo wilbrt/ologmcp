@@ -365,10 +365,28 @@ export function extendDomainByKan(
   }
 
   for (const [startCodeId, startDomain] of codeIdToDomain) {
-    const queue: Array<{ codeId: string; domCand: DomainCandidate; depth: number }> = [
-      { codeId: startCodeId, domCand: getShell(startDomain.id, startDomain.name, startCodeId), depth: 0 },
-    ];
-    const visited = new Set<string>([startCodeId]);
+    const shell = getShell(startDomain.id, startDomain.name, startCodeId);
+
+    // Expand type/class/interface elements to their member functions, because
+    // callerOf arrows live on function/method nodes, not on type declarations.
+    const seedCodeIds = new Set<string>([startCodeId]);
+    const startElem = store.getElem(startCodeId);
+    if (startElem && !WALKABLE_KINDS.has(startElem.kind)) {
+      // incoming memberOf arrows: method --memberOf--> class
+      for (const arr of store.incoming(startCodeId)) {
+        if (arr.kind === 'memberOf') seedCodeIds.add(arr.srcId);
+      }
+      // outgoing contains arrows: class/module --contains--> function
+      for (const arr of store.outgoing(startCodeId)) {
+        if (arr.kind === 'contains') seedCodeIds.add(arr.dstId);
+      }
+    }
+
+    const queue: Array<{ codeId: string; domCand: DomainCandidate; depth: number }> = [];
+    for (const seedId of seedCodeIds) {
+      queue.push({ codeId: seedId, domCand: shell, depth: 0 });
+    }
+    const visited = new Set<string>(seedCodeIds);
 
     while (queue.length > 0) {
       const item = queue.shift()!;

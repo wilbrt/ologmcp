@@ -4643,10 +4643,22 @@ function extendDomainByKan(store2, options = {}) {
     });
   }
   for (const [startCodeId, startDomain] of codeIdToDomain) {
-    const queue = [
-      { codeId: startCodeId, domCand: getShell(startDomain.id, startDomain.name, startCodeId), depth: 0 }
-    ];
-    const visited = /* @__PURE__ */ new Set([startCodeId]);
+    const shell = getShell(startDomain.id, startDomain.name, startCodeId);
+    const seedCodeIds = /* @__PURE__ */ new Set([startCodeId]);
+    const startElem = store2.getElem(startCodeId);
+    if (startElem && !WALKABLE_KINDS.has(startElem.kind)) {
+      for (const arr of store2.incoming(startCodeId)) {
+        if (arr.kind === "memberOf") seedCodeIds.add(arr.srcId);
+      }
+      for (const arr of store2.outgoing(startCodeId)) {
+        if (arr.kind === "contains") seedCodeIds.add(arr.dstId);
+      }
+    }
+    const queue = [];
+    for (const seedId of seedCodeIds) {
+      queue.push({ codeId: seedId, domCand: shell, depth: 0 });
+    }
+    const visited = new Set(seedCodeIds);
     while (queue.length > 0) {
       const item = queue.shift();
       if (item.depth >= maxDepth) continue;
