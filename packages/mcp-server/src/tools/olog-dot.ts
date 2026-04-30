@@ -34,8 +34,8 @@ export function registerOlogDot(server: McpServer, store: OlogStore): void {
         const allElems = kinds.flatMap((kind) =>
           store.queryElements({
             kind,
-            nameRegex,
-            moduleRegex,
+            ...(nameRegex !== undefined ? { nameRegex } : {}),
+            ...(moduleRegex !== undefined ? { moduleRegex } : {}),
             limit: 10000,
           })
         );

@@ -210,6 +210,77 @@ export function getModuleFilePath(store: OlogStore, modulePath: string): string 
   return modulePath;
 }
 
+/**
+ * Gather domain context for a code element: the domain concept(s) it implements
+ * and the domain concepts reachable via its call neighborhood (Kan context).
+ */
+export function gatherDomainContext(store: OlogStore, targetId: string): DomainContext | null {
+  // own concepts: domain elements with implementedAs → targetId
+  const ownConcepts: DomainContext['ownConcepts'] = [];
+  for (const arrow of store.incoming(targetId)) {
+    if (arrow.kind !== 'implementedAs') continue;
+    const domainElem = store.getElem(arrow.srcId);
+    if (!domainElem || domainElem.kind !== 'domain') continue;
+
+    const domainArrows: DomainContext['ownConcepts'][number]['arrows'] = [];
+    for (const a of store.outgoing(domainElem.id)) {
+      if (a.kind === 'implementedAs') continue;
+      const peer = store.getElem(a.dstId);
+      if (peer) domainArrows.push({ name: a.kind, direction: 'outgoing', peerName: peer.name });
+    }
+    for (const a of store.incoming(domainElem.id)) {
+      if (a.kind === 'implementedAs') continue;
+      const peer = store.getElem(a.srcId);
+      if (peer && peer.kind === 'domain') domainArrows.push({ name: a.kind, direction: 'incoming', peerName: peer.name });
+    }
+    ownConcepts.push({ id: domainElem.id, name: domainElem.name, arrows: domainArrows });
+  }
+
+  // neighbor concepts from callers and callees
+  const neighborConcepts: DomainContext['neighborConcepts'] = [];
+  const seen = new Set<string>();
+
+  const addNeighbor = (codeElemId: string, codeElemName: string, via: 'caller' | 'callee') => {
+    for (const a of store.incoming(codeElemId)) {
+      if (a.kind !== 'implementedAs') continue;
+      const domainElem = store.getElem(a.srcId);
+      if (!domainElem || domainElem.kind !== 'domain') continue;
+      const key = `${via}:${domainElem.id}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        neighborConcepts.push({ name: domainElem.name, via, codeElementName: codeElemName });
+      }
+    }
+  };
+
+  for (const a of store.incoming(targetId)) {
+    if (a.kind !== 'callerOf') continue;
+    const caller = store.getElem(a.srcId);
+    if (caller) addNeighbor(caller.id, caller.name, 'caller');
+  }
+  for (const a of store.outgoing(targetId)) {
+    if (a.kind !== 'callerOf') continue;
+    const callee = store.getElem(a.dstId);
+    if (callee) addNeighbor(callee.id, callee.name, 'callee');
+  }
+
+  if (ownConcepts.length === 0 && neighborConcepts.length === 0) return null;
+  return { ownConcepts, neighborConcepts };
+}
+
+export interface DomainContext {
+  ownConcepts: Array<{
+    id: string;
+    name: string;
+    arrows: Array<{ name: string; direction: 'outgoing' | 'incoming'; peerName: string }>;
+  }>;
+  neighborConcepts: Array<{
+    name: string;
+    via: 'caller' | 'callee';
+    codeElementName: string;
+  }>;
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

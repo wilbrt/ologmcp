@@ -50,6 +50,26 @@ export interface DelegationBrief {
 
   targetFileContent: string;
 
+  /**
+   * Domain model context for this code element.
+   * Null when no domain model has been built yet.
+   */
+  domainContext: {
+    /** Domain concept(s) this element directly implements via implementedAs. */
+    ownConcepts: Array<{
+      id: string;
+      name: string;
+      /** Domain arrows involving this concept (excluding implementedAs). */
+      arrows: Array<{ name: string; direction: 'outgoing' | 'incoming'; peerName: string }>;
+    }>;
+    /** Domain concepts reachable via callers/callees (Kan neighborhood). */
+    neighborConcepts: Array<{
+      name: string;
+      via: 'caller' | 'callee';
+      codeElementName: string;
+    }>;
+  } | null;
+
   acceptanceCriteria: string[];
 
   provenance: {
@@ -72,6 +92,7 @@ import {
   gatherMustImplement,
   gatherUsedBy,
   gatherImports,
+  gatherDomainContext,
   getModuleFilePath,
   type MustCallEntry,
   type MustImplementEntry,
@@ -214,6 +235,8 @@ export function assembleBrief(
 
   const targetFileContent = resolver.readFileContent(filePath, 500) ?? '';
 
+  const domainContext = gatherDomainContext(store, targetId);
+
   const defaultCriteria = TASK_CRITERIA[task] ?? [];
   const acceptanceCriteria = [...defaultCriteria, ...(extraCriteria ?? [])];
 
@@ -238,6 +261,7 @@ export function assembleBrief(
     importsInTargetFile: resolver.readImportBlock(filePath),
     analogues: resolvedAnalogues,
     targetFileContent,
+    domainContext,
     acceptanceCriteria,
     provenance: {
       ologCommitSha: commitSha,

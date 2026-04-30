@@ -195,7 +195,7 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
               text: JSON.stringify({
                 sessionId,
                 existingWithNewArrows: shells.length,
-                newCandidates: newCands.length,
+                newCandidatesCount: newCands.length,
                 totalArrowsProposed: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
                 shells: shells.map(s => ({
                   id: s.id,

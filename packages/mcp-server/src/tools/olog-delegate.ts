@@ -22,9 +22,14 @@ export function registerOlogDelegate(
       description:
         'Assemble a fully-resolved structural brief for a text-generation subagent. ' +
         'Traverses the olog to collect signatures, call graphs, interface contracts, ' +
-        'import paths, and analogue source code. Returns a self-contained brief ' +
-        'that requires NO further olog queries — designed for consumption by a ' +
-        'smaller/cheaper model that will write the actual code.',
+        'import paths, analogue source code, and domain model context. ' +
+        'The brief includes a domainContext field: ownConcepts lists the domain ' +
+        'concept(s) this code element implements (via implementedAs) along with their ' +
+        'domain arrows, and neighborConcepts lists domain concepts reachable via callers ' +
+        'and callees (Kan extension neighborhood). Both are null when no domain model ' +
+        'exists yet — call olog_domain_discover first to populate it. ' +
+        'Returns a self-contained brief that requires NO further olog queries — ' +
+        'designed for consumption by a smaller/cheaper model that will write the actual code.',
       inputSchema: z.object({
         task: z.enum(TASK_TYPES).describe(
           'The type of text-generation task.',

@@ -78,6 +78,7 @@ export type {
   UsedByEntry,
   ImportEntry,
   StructuralContext,
+  DomainContext,
 } from './delegate/context.js';
 export {
   mineEquations,
