@@ -78,6 +78,24 @@ export interface TreeSitterQueryCapture {
 }
 
 /**
+ * Configuration object for a language adapter.
+ * Contains the static data properties shared across all adapter implementations.
+ * Adapter classes can define a config constant and spread it into their properties.
+ */
+export interface LanguageAdapterConfig {
+  /** Unique language identifier (e.g. 'typescript', 'clojure') */
+  languageId: string;
+  /** File extensions this adapter handles, with leading dot */
+  extensions: string[];
+  /** Glob pattern for file discovery */
+  globPattern: string;
+  /** Map from tree-sitter node type to olog element kind */
+  nodeTypeToKind: Record<string, OlogKind>;
+  /** Map from olog element kind to tree-sitter node types */
+  kindToNodeTypes: Record<string, string[]>;
+}
+
+/**
  * Language adapter interface — each supported language provides an
  * implementation that knows how to parse source files, extract elements
  * and arrows, and resolve imports for that language.

@@ -6,28 +6,16 @@ import { dirname, resolve } from "path";
 
 // src/domain/session.ts
 import { randomUUID } from "crypto";
-var DomainSessionStore = class {
-  constructor(db) {
+
+// src/session-store.ts
+var SessionStore = class {
+  constructor(db, insertSQL, selectColumns, tableName, updateSQL) {
     this.db = db;
-    this.insertStmt = this.db.prepare(
-      `INSERT INTO olog_domain_session
-         (id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    this.getStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
-       FROM olog_domain_session WHERE id = ?`
-    );
-    this.listStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at
-       FROM olog_domain_session ORDER BY created_at DESC`
-    );
-    this.updateStmt = this.db.prepare(
-      `UPDATE olog_domain_session
-       SET status = ?, scope_regex = ?, candidates_json = ?, equations_json = ?, updated_at = ?
-       WHERE id = ?`
-    );
-    this.deleteStmt = this.db.prepare(`DELETE FROM olog_domain_session WHERE id = ?`);
+    this.insertStmt = db.prepare(insertSQL);
+    this.getStmt = db.prepare(`SELECT ${selectColumns} FROM ${tableName} WHERE id = ?`);
+    this.listStmt = db.prepare(`SELECT ${selectColumns} FROM ${tableName} ORDER BY created_at DESC`);
+    this.updateStmt = db.prepare(updateSQL);
+    this.deleteStmt = db.prepare(`DELETE FROM ${tableName} WHERE id = ?`);
   }
   db;
   insertStmt;
@@ -35,21 +23,6 @@ var DomainSessionStore = class {
   listStmt;
   updateStmt;
   deleteStmt;
-  create(data) {
-    const id = randomUUID();
-    const now = Date.now();
-    this.insertStmt.run(
-      id,
-      "active",
-      data.scopeRegex ?? null,
-      JSON.stringify(data.candidates),
-      JSON.stringify(data.equations),
-      data.commitSha,
-      now,
-      now
-    );
-    return id;
-  }
   get(id) {
     const row = this.getStmt.get(id);
     if (!row) return null;
@@ -59,21 +32,22 @@ var DomainSessionStore = class {
     const rows = this.listStmt.all();
     return rows.map((r) => this.rowToSession(r));
   }
-  update(id, data) {
-    const current = this.get(id);
-    if (!current) throw new Error(`Domain session not found: ${id}`);
-    const merged = { ...current, ...data };
-    this.updateStmt.run(
-      merged.status,
-      merged.scopeRegex,
-      JSON.stringify(merged.candidates),
-      JSON.stringify(merged.equations),
-      Date.now(),
-      id
-    );
-  }
   delete(id) {
     this.deleteStmt.run(id);
+  }
+};
+
+// src/domain/session.ts
+var SELECT_COLUMNS = "id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at";
+var DomainSessionStore = class extends SessionStore {
+  constructor(db) {
+    super(
+      db,
+      `INSERT INTO olog_domain_session (id, status, scope_regex, candidates_json, equations_json, commit_sha, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      SELECT_COLUMNS,
+      "olog_domain_session",
+      `UPDATE olog_domain_session SET status = ?, scope_regex = ?, candidates_json = ?, equations_json = ?, updated_at = ? WHERE id = ?`
+    );
   }
   rowToSession(row) {
     return {
@@ -87,76 +61,32 @@ var DomainSessionStore = class {
       updatedAt: row.updated_at
     };
   }
+  create(data) {
+    const id = randomUUID();
+    const now = Date.now();
+    this.insertStmt.run(id, "active", data.scopeRegex ?? null, JSON.stringify(data.candidates), JSON.stringify(data.equations), data.commitSha, now, now);
+    return id;
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Domain session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(merged.status, merged.scopeRegex, JSON.stringify(merged.candidates), JSON.stringify(merged.equations), Date.now(), id);
+  }
 };
 
 // src/mining/session.ts
 import { randomUUID as randomUUID2 } from "crypto";
-var MotifSessionStore = class {
+var SELECT_COLUMNS2 = "id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at";
+var MotifSessionStore = class extends SessionStore {
   constructor(db) {
-    this.db = db;
-    this.insertStmt = this.db.prepare(
-      `INSERT INTO olog_motif_session
-         (id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    super(
+      db,
+      `INSERT INTO olog_motif_session (id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      SELECT_COLUMNS2,
+      "olog_motif_session",
+      `UPDATE olog_motif_session SET status = ?, scope_regex = ?, candidates_json = ?, updated_at = ? WHERE id = ?`
     );
-    this.getStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
-       FROM olog_motif_session WHERE id = ?`
-    );
-    this.listStmt = this.db.prepare(
-      `SELECT id, status, scope_regex, candidates_json, commit_sha, created_at, updated_at
-       FROM olog_motif_session ORDER BY created_at DESC`
-    );
-    this.updateStmt = this.db.prepare(
-      `UPDATE olog_motif_session
-       SET status = ?, scope_regex = ?, candidates_json = ?, updated_at = ?
-       WHERE id = ?`
-    );
-    this.deleteStmt = this.db.prepare(`DELETE FROM olog_motif_session WHERE id = ?`);
-  }
-  db;
-  insertStmt;
-  getStmt;
-  listStmt;
-  updateStmt;
-  deleteStmt;
-  create(data) {
-    const id = randomUUID2();
-    const now = Date.now();
-    this.insertStmt.run(
-      id,
-      "active",
-      data.scopeRegex ?? null,
-      JSON.stringify(data.candidates),
-      data.commitSha,
-      now,
-      now
-    );
-    return id;
-  }
-  get(id) {
-    const row = this.getStmt.get(id);
-    if (!row) return null;
-    return this.rowToSession(row);
-  }
-  list() {
-    const rows = this.listStmt.all();
-    return rows.map((r) => this.rowToSession(r));
-  }
-  update(id, data) {
-    const current = this.get(id);
-    if (!current) throw new Error(`Motif session not found: ${id}`);
-    const merged = { ...current, ...data };
-    this.updateStmt.run(
-      merged.status,
-      merged.scopeRegex,
-      JSON.stringify(merged.candidates),
-      Date.now(),
-      id
-    );
-  }
-  delete(id) {
-    this.deleteStmt.run(id);
   }
   rowToSession(row) {
     return {
@@ -168,6 +98,18 @@ var MotifSessionStore = class {
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
+  }
+  create(data) {
+    const id = randomUUID2();
+    const now = Date.now();
+    this.insertStmt.run(id, "active", data.scopeRegex ?? null, JSON.stringify(data.candidates), data.commitSha, now, now);
+    return id;
+  }
+  update(id, data) {
+    const current = this.get(id);
+    if (!current) throw new Error(`Motif session not found: ${id}`);
+    const merged = { ...current, ...data };
+    this.updateStmt.run(merged.status, merged.scopeRegex, JSON.stringify(merged.candidates), Date.now(), id);
   }
 };
 
@@ -2778,76 +2720,65 @@ function verifyOperation(store, op) {
 }
 
 // src/delegate/context.ts
-function gatherMustCall(store, targetId) {
-  const outgoing = store.outgoing(targetId);
-  const callerOfArrows = outgoing.filter((a) => a.kind === "callerOf");
-  const callees = [];
-  for (const arrow of callerOfArrows) {
-    const callee = store.getElem(arrow.dstId);
-    if (callee) {
-      callees.push({
-        id: callee.id,
-        name: callee.name,
-        kind: callee.kind,
-        module: callee.module,
-        span: callee.span,
-        attrs: callee.attrs
-      });
+function queryRelatedElements(store, targetId, options) {
+  const { direction, arrowKind, dedup = false } = options;
+  const results = [];
+  const seen = dedup ? /* @__PURE__ */ new Set() : null;
+  const processArrows = (arrows, resolveSide) => {
+    for (const arrow of arrows) {
+      const elemId2 = resolveSide === "srcId" ? arrow.srcId : arrow.dstId;
+      if (dedup && seen.has(elemId2)) continue;
+      if (dedup) seen.add(elemId2);
+      const elem = store.getElem(elemId2);
+      if (elem) {
+        results.push({
+          id: elem.id,
+          name: elem.name,
+          kind: elem.kind,
+          module: elem.module,
+          span: elem.span,
+          attrs: elem.attrs
+        });
+      }
     }
+  };
+  if (direction === "outgoing" || direction === "both") {
+    const arrows = store.outgoing(targetId).filter((a) => a.kind === arrowKind);
+    processArrows(arrows, "dstId");
   }
-  return callees;
+  if (direction === "incoming" || direction === "both") {
+    const arrows = store.incoming(targetId).filter((a) => a.kind === arrowKind);
+    processArrows(arrows, "srcId");
+  }
+  return results;
+}
+function gatherMustCall(store, targetId) {
+  return queryRelatedElements(store, targetId, { direction: "outgoing", arrowKind: "callerOf" }).map((elem) => ({
+    id: elem.id,
+    name: elem.name,
+    kind: elem.kind,
+    module: elem.module,
+    span: elem.span,
+    attrs: elem.attrs ?? {}
+  }));
 }
 function gatherMustImplement(store, targetId) {
-  const outgoing = store.outgoing(targetId);
-  const implementsArrows = outgoing.filter((a) => a.kind === "implements");
-  const interfaces = [];
-  for (const arrow of implementsArrows) {
-    const iface = store.getElem(arrow.dstId);
-    if (iface) {
-      interfaces.push({
-        id: iface.id,
-        name: iface.name,
-        kind: iface.kind,
-        module: iface.module,
-        span: iface.span
-      });
-    }
-  }
-  const incoming = store.incoming(targetId);
-  const implementsIncoming = incoming.filter((a) => a.kind === "implements");
-  for (const arrow of implementsIncoming) {
-    const iface = store.getElem(arrow.srcId);
-    if (iface) {
-      interfaces.push({
-        id: iface.id,
-        name: iface.name,
-        kind: iface.kind,
-        module: iface.module,
-        span: iface.span
-      });
-    }
-  }
-  return interfaces;
+  return queryRelatedElements(store, targetId, { direction: "both", arrowKind: "implements" }).map((elem) => ({
+    id: elem.id,
+    name: elem.name,
+    kind: elem.kind,
+    module: elem.module,
+    span: elem.span
+  }));
 }
 function gatherUsedBy(store, targetId) {
-  const incoming = store.incoming(targetId);
-  const callerOfArrows = incoming.filter((a) => a.kind === "callerOf");
-  const callers = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const arrow of callerOfArrows) {
-    const caller = store.getElem(arrow.srcId);
-    if (caller && !seen.has(caller.id)) {
-      seen.add(caller.id);
-      callers.push({
-        id: caller.id,
-        name: caller.name,
-        kind: caller.kind,
-        module: caller.module,
-        span: caller.span
-      });
-    }
-  }
-  return callers;
+  return queryRelatedElements(store, targetId, { direction: "incoming", arrowKind: "callerOf", dedup: true }).map((elem) => ({
+    id: elem.id,
+    name: elem.name,
+    kind: elem.kind,
+    module: elem.module,
+    span: elem.span
+  }));
 }
 function gatherImports(store, targetModule) {
   const imports = [];
@@ -4358,6 +4289,7 @@ export {
   DomainSessionStore,
   MotifSessionStore,
   OlogStore,
+  SessionStore,
   SourceResolver,
   abstractToShape,
   annotatePathKinds,

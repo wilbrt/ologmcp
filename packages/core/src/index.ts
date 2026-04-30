@@ -43,6 +43,7 @@ export {
 } from './ingest/project.js';
 export {
   type LanguageAdapter,
+  type LanguageAdapterConfig,
   type PropertyExtract,
   type TreeSitterParser,
   type TreeSitterNode,
@@ -95,6 +96,7 @@ export type {
   DiscoveryOptions,
 } from './domain/types.js';
 export { DomainSessionStore } from './domain/session.js';
+export { SessionStore } from './session-store.js';
 
 export { enumeratePaths, getArrowKindsInUse } from './mining/paths.js';
 export {

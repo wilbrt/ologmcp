@@ -3,7 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
-import type { LanguageAdapter, PropertyExtract } from '@olog/core';
+import type { LanguageAdapter, LanguageAdapterConfig, PropertyExtract } from '@olog/core';
 import type { RawElement, RawArrow, OlogKind } from '@olog/core';
 import { extractFromFile } from './extract.js';
 
@@ -43,14 +43,20 @@ export async function init(): Promise<void> {
   parserInstance.setLanguage(clojureLanguage);
 }
 
+const CLJ_CONFIG: LanguageAdapterConfig = {
+  languageId: 'clojure',
+  extensions: ['.clj', '.cljs', '.cljc'],
+  globPattern: '**/*.{clj,cljs,cljc}',
+  nodeTypeToKind: {},
+  kindToNodeTypes: KIND_TO_NODE_TYPES,
+};
+
 export class ClojureAdapter implements LanguageAdapter<Parser> {
-  languageId = 'clojure';
-  extensions = ['.clj', '.cljs', '.cljc'];
-  globPattern = '**/*.{clj,cljs,cljc}';
-
-  nodeTypeToKind: Record<string, OlogKind> = {};
-
-  kindToNodeTypes = KIND_TO_NODE_TYPES;
+  languageId = CLJ_CONFIG.languageId;
+  extensions = CLJ_CONFIG.extensions;
+  globPattern = CLJ_CONFIG.globPattern;
+  nodeTypeToKind = CLJ_CONFIG.nodeTypeToKind;
+  kindToNodeTypes = CLJ_CONFIG.kindToNodeTypes;
 
   createParser(_filename: string): Parser {
     if (!parserInstance) {

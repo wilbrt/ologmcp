@@ -2,7 +2,7 @@ import Parser from 'tree-sitter';
 import TS from 'tree-sitter-typescript';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { LanguageAdapter, PropertyExtract } from '@olog/core';
+import type { LanguageAdapter, LanguageAdapterConfig, PropertyExtract } from '@olog/core';
 import type { RawElement, RawArrow, OlogKind } from '@olog/core';
 import { extractFromFile } from './extract.js';
 import { extractPropertiesFromFile } from './properties.js';
@@ -31,16 +31,20 @@ const DECLARATION_NODE_TYPES: Record<string, string[]> = {
   var: ['variable_declarator'],
 };
 
-/**
- * Language adapter for TypeScript and TSX files.
- */
-export class TypeScriptAdapter implements LanguageAdapter<Parser> {
-  languageId = 'typescript';
-  extensions = ['.ts', '.tsx', '.mts', '.cts'];
-  globPattern = '**/*.{ts,tsx,mts,cts}';
+const TS_CONFIG: LanguageAdapterConfig = {
+  languageId: 'typescript',
+  extensions: ['.ts', '.tsx', '.mts', '.cts'],
+  globPattern: '**/*.{ts,tsx,mts,cts}',
+  nodeTypeToKind: NODE_TYPE_TO_KIND,
+  kindToNodeTypes: DECLARATION_NODE_TYPES,
+};
 
-  nodeTypeToKind = NODE_TYPE_TO_KIND;
-  kindToNodeTypes = DECLARATION_NODE_TYPES;
+export class TypeScriptAdapter implements LanguageAdapter<Parser> {
+  languageId = TS_CONFIG.languageId;
+  extensions = TS_CONFIG.extensions;
+  globPattern = TS_CONFIG.globPattern;
+  nodeTypeToKind = TS_CONFIG.nodeTypeToKind;
+  kindToNodeTypes = TS_CONFIG.kindToNodeTypes;
 
   createParser(filename: string): Parser {
     const parser = new Parser();

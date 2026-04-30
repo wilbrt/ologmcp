@@ -33,13 +33,13 @@
         "webfetch": "deny",
         "task": {
           "*": "deny",
-          "explore": "allow",
-          "edit": "allow"
+          "olog-explore": "allow",
+          "olog-edit": "allow"
         },
         "question": "allow"
       }
     },
-    "explore": {
+    "olog-explore": {
       "mode": "subagent",
       "model": "opencode-go/minimax-m2.7",
       "prompt": "{file:./prompts/explore-agent.txt}",
@@ -52,7 +52,7 @@
         "mcp": { "olog": "allow" }
       }
     },
-    "edit": {
+    "olog-edit": {
       "mode": "subagent",
       "model": "opencode-go/minimax-m2.7",
       "prompt": "{file:./prompts/edit-agent.txt}",

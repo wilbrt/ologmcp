@@ -257,25 +257,45 @@ interface DiscoveryOptions {
     excludeModules?: string[];
 }
 
-declare class DomainSessionStore {
-    private db;
-    private readonly insertStmt;
-    private readonly getStmt;
-    private readonly listStmt;
-    private readonly updateStmt;
-    private readonly deleteStmt;
+/**
+ * Abstract base class for session CRUD stores.
+ * Handles the common get/list/delete pattern and statement preparation,
+ * while subclasses define their own create/update/rowToSession logic.
+ */
+declare abstract class SessionStore<RowType, SessionData> {
+    protected readonly db: Database.Database;
+    protected readonly insertStmt: Database.Statement;
+    protected readonly getStmt: Database.Statement;
+    protected readonly listStmt: Database.Statement;
+    protected readonly updateStmt: Database.Statement;
+    protected readonly deleteStmt: Database.Statement;
+    constructor(db: Database.Database, insertSQL: string, selectColumns: string, tableName: string, updateSQL: string);
+    protected abstract rowToSession(row: RowType): SessionData;
+    get(id: string): SessionData | null;
+    list(): SessionData[];
+    delete(id: string): void;
+}
+
+interface SessionRow$1 {
+    id: string;
+    status: string;
+    scope_regex: string | null;
+    candidates_json: string;
+    equations_json: string | null;
+    commit_sha: string;
+    created_at: number;
+    updated_at: number;
+}
+declare class DomainSessionStore extends SessionStore<SessionRow$1, DomainSessionData> {
     constructor(db: Database.Database);
+    protected rowToSession(row: SessionRow$1): DomainSessionData;
     create(data: {
         scopeRegex?: string;
         candidates: DomainCandidate[];
         equations: ProposedEquation[];
         commitSha: string;
     }): string;
-    get(id: string): DomainSessionData | null;
-    list(): DomainSessionData[];
     update(id: string, data: Partial<DomainSessionData>): void;
-    delete(id: string): void;
-    private rowToSession;
 }
 
 /**
@@ -536,24 +556,24 @@ interface MotifSessionData {
     updatedAt: number;
 }
 
-declare class MotifSessionStore {
-    private db;
-    private readonly insertStmt;
-    private readonly getStmt;
-    private readonly listStmt;
-    private readonly updateStmt;
-    private readonly deleteStmt;
+interface SessionRow {
+    id: string;
+    status: string;
+    scope_regex: string | null;
+    candidates_json: string;
+    commit_sha: string;
+    created_at: number;
+    updated_at: number;
+}
+declare class MotifSessionStore extends SessionStore<SessionRow, MotifSessionData> {
     constructor(db: Database.Database);
+    protected rowToSession(row: SessionRow): MotifSessionData;
     create(data: {
         scopeRegex?: string;
         candidates: MotifCandidate[];
         commitSha: string;
     }): string;
-    get(id: string): MotifSessionData | null;
-    list(): MotifSessionData[];
     update(id: string, data: Partial<MotifSessionData>): void;
-    delete(id: string): void;
-    private rowToSession;
 }
 
 interface TraverseStep {
@@ -886,6 +906,23 @@ interface TreeSitterQueryCapture {
     name: string;
     node: TreeSitterNode;
     text?: string;
+}
+/**
+ * Configuration object for a language adapter.
+ * Contains the static data properties shared across all adapter implementations.
+ * Adapter classes can define a config constant and spread it into their properties.
+ */
+interface LanguageAdapterConfig {
+    /** Unique language identifier (e.g. 'typescript', 'clojure') */
+    languageId: string;
+    /** File extensions this adapter handles, with leading dot */
+    extensions: string[];
+    /** Glob pattern for file discovery */
+    globPattern: string;
+    /** Map from tree-sitter node type to olog element kind */
+    nodeTypeToKind: Record<string, OlogKind>;
+    /** Map from olog element kind to tree-sitter node types */
+    kindToNodeTypes: Record<string, string[]>;
 }
 /**
  * Language adapter interface — each supported language provides an
@@ -1319,4 +1356,4 @@ declare function verifyInternalEquations(store: OlogStore, group: ShapeGroup, op
     coverage: number;
 }>;
 
-export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };
+export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type LanguageAdapterConfig, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, SessionStore, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };

@@ -48,6 +48,66 @@ export interface StructuralContext {
   imports: ImportEntry[];
 }
 
+export interface QueryOptions {
+  /** Which direction to follow arrows. 'both' combines incoming and outgoing. */
+  direction: 'incoming' | 'outgoing' | 'both';
+  /** Which arrow kind to filter by (e.g. 'callerOf', 'implements'). */
+  arrowKind: string;
+  /** Whether to deduplicate results by element id. Default false. */
+  dedup?: boolean;
+}
+
+/**
+ * Generic helper to query related elements by following arrows in a direction
+ * filtered by kind, then resolving the element at the other end.
+ *
+ * - For 'outgoing' direction: resolves arrow.dstId
+ * - For 'incoming' direction: resolves arrow.srcId
+ * - For 'both': combines results from both directions
+ *
+ * Returns the resolved elements with id, name, kind, module, span, and attrs (if available).
+ */
+export function queryRelatedElements(
+  store: OlogStore,
+  targetId: string,
+  options: QueryOptions,
+): Array<{ id: string; name: string; kind: string; module: string | null; span: string | null; attrs?: Record<string, unknown> }> {
+  const { direction, arrowKind, dedup = false } = options;
+  const results: Array<{ id: string; name: string; kind: string; module: string | null; span: string | null; attrs?: Record<string, unknown> }> = [];
+  const seen = dedup ? new Set<string>() : null;
+
+  const processArrows = (arrows: Array<{ srcId: string; dstId: string; kind: string }>, resolveSide: 'srcId' | 'dstId') => {
+    for (const arrow of arrows) {
+      const elemId = resolveSide === 'srcId' ? arrow.srcId : arrow.dstId;
+      if (dedup && seen!.has(elemId)) continue;
+      if (dedup) seen!.add(elemId);
+      const elem = store.getElem(elemId);
+      if (elem) {
+        results.push({
+          id: elem.id,
+          name: elem.name,
+          kind: elem.kind,
+          module: elem.module,
+          span: elem.span,
+          attrs: elem.attrs,
+        });
+      }
+    }
+  };
+
+  if (direction === 'outgoing' || direction === 'both') {
+    const arrows = store.outgoing(targetId).filter(a => a.kind === arrowKind);
+    processArrows(arrows, 'dstId');
+  }
+
+  if (direction === 'incoming' || direction === 'both') {
+    const arrows = store.incoming(targetId).filter(a => a.kind === arrowKind);
+    processArrows(arrows, 'srcId');
+  }
+
+  return results;
+}
+
 /**
  * Gather mustCall: the functions/methods that `target` calls.
  *
@@ -55,25 +115,15 @@ export interface StructuralContext {
  * Outgoing callerOf from target gives all functions it calls.
  */
 export function gatherMustCall(store: OlogStore, targetId: string): MustCallEntry[] {
-  const outgoing = store.outgoing(targetId);
-  const callerOfArrows = outgoing.filter(a => a.kind === 'callerOf');
-  const callees: MustCallEntry[] = [];
-
-  for (const arrow of callerOfArrows) {
-    const callee = store.getElem(arrow.dstId);
-    if (callee) {
-      callees.push({
-        id: callee.id,
-        name: callee.name,
-        kind: callee.kind,
-        module: callee.module,
-        span: callee.span,
-        attrs: callee.attrs,
-      });
-    }
-  }
-
-  return callees;
+  return queryRelatedElements(store, targetId, { direction: 'outgoing', arrowKind: 'callerOf' })
+    .map(elem => ({
+      id: elem.id,
+      name: elem.name,
+      kind: elem.kind,
+      module: elem.module,
+      span: elem.span,
+      attrs: elem.attrs ?? {},
+    }));
 }
 
 /**
@@ -83,40 +133,14 @@ export function gatherMustCall(store: OlogStore, targetId: string): MustCallEntr
  * (checking incoming implements arrows where target is the srcId)
  */
 export function gatherMustImplement(store: OlogStore, targetId: string): MustImplementEntry[] {
-  const outgoing = store.outgoing(targetId);
-  const implementsArrows = outgoing.filter(a => a.kind === 'implements');
-
-  const interfaces: MustImplementEntry[] = [];
-  for (const arrow of implementsArrows) {
-    const iface = store.getElem(arrow.dstId);
-    if (iface) {
-      interfaces.push({
-        id: iface.id,
-        name: iface.name,
-        kind: iface.kind,
-        module: iface.module,
-        span: iface.span,
-      });
-    }
-  }
-
-  // Also check incoming implements arrows (if the arrow direction is reversed)
-  const incoming = store.incoming(targetId);
-  const implementsIncoming = incoming.filter(a => a.kind === 'implements');
-  for (const arrow of implementsIncoming) {
-    const iface = store.getElem(arrow.srcId);
-    if (iface) {
-      interfaces.push({
-        id: iface.id,
-        name: iface.name,
-        kind: iface.kind,
-        module: iface.module,
-        span: iface.span,
-      });
-    }
-  }
-
-  return interfaces;
+  return queryRelatedElements(store, targetId, { direction: 'both', arrowKind: 'implements' })
+    .map(elem => ({
+      id: elem.id,
+      name: elem.name,
+      kind: elem.kind,
+      module: elem.module,
+      span: elem.span,
+    }));
 }
 
 /**
@@ -126,26 +150,14 @@ export function gatherMustImplement(store: OlogStore, targetId: string): MustImp
  * Incoming callerOf to target means srcId is a function that calls target.
  */
 export function gatherUsedBy(store: OlogStore, targetId: string): UsedByEntry[] {
-  const incoming = store.incoming(targetId);
-  const callerOfArrows = incoming.filter(a => a.kind === 'callerOf');
-  const callers: UsedByEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const arrow of callerOfArrows) {
-    const caller = store.getElem(arrow.srcId);
-    if (caller && !seen.has(caller.id)) {
-      seen.add(caller.id);
-      callers.push({
-        id: caller.id,
-        name: caller.name,
-        kind: caller.kind,
-        module: caller.module,
-        span: caller.span,
-      });
-    }
-  }
-
-  return callers;
+  return queryRelatedElements(store, targetId, { direction: 'incoming', arrowKind: 'callerOf', dedup: true })
+    .map(elem => ({
+      id: elem.id,
+      name: elem.name,
+      kind: elem.kind,
+      module: elem.module,
+      span: elem.span,
+    }));
 }
 
 /**
