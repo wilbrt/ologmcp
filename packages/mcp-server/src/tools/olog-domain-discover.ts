@@ -7,40 +7,51 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
     'olog_domain_discover',
     {
       description:
-        'Domain modeling session tool. Discovers domain concepts from the olog\'s interface/type/class ' +
-        'elements and proposes domain objects with arrows between them. ' +
-        'Arrow proposals include: (1) field-level "has X" arrows via hasProperty→hasType chains, ' +
-        '(2) structural "extends"/"implements" arrows when the supertype is also a domain concept. ' +
-        'Both current-session candidates and already-committed domain elements are resolved as arrow ' +
-        'codomains, enabling incremental multi-session domain modeling. ' +
-        'After committing, a new session on a broader scope will automatically link to the ' +
-        'committed elements from previous sessions.\n\n' +
+        'Domain modeling session tool. Two-phase workflow:\n\n' +
+        'PHASE 1 — type-driven discovery (action="start")\n' +
+        'Reads interface/type/class elements and proposes domain concepts with arrows derived from ' +
+        'field types (hasProperty→hasType chains) and structural relationships (extends/implements). ' +
+        'Scope with scopeRegex to focus on one layer at a time. Review with action="refine", then ' +
+        'action="commit" to persist.\n\n' +
+        'PHASE 2 — call-graph propagation (action="extend")\n' +
+        'After at least one session has been committed, run action="extend" to execute a left Kan ' +
+        'extension of the implementedAs functor along the call graph. Starting from every committed ' +
+        'domain element, follows callerOf edges (up to maxDepth hops, default 2) and proposes:\n' +
+        '  • "calls" arrows between two already-labeled domain concepts (confidence=resolved)\n' +
+        '  • New domain candidates for unlabeled callees, each with a "calls" arrow from the ' +
+        'nearest upstream domain concept (confidence=tentative)\n' +
+        'Returns a session with shells (existing concepts gaining new arrows) and newCandidates ' +
+        '(unlabeled functions proposed for labeling). Review with action="refine", commit with ' +
+        'action="commit". Repeat extend→refine→commit to grow coverage iteratively.\n\n' +
+        'Recommended workflow:\n' +
+        '  1. start (scopeRegex on core types) → refine → commit\n' +
+        '  2. extend → refine → commit   (repeat until call graph is covered)\n' +
+        '  3. start on a broader scope to pick up remaining types\n\n' +
         'Actions:\n' +
-        '- action="start": Begin a new discovery session. Optional: scopeRegex (regex to restrict ' +
-        'discovery to matching module paths, e.g. "packages/core/src/ontology"), excludeModules (array ' +
-        'of module path patterns to exclude). Returns sessionId, candidateCount, arrowCount, and the ' +
-        'full list of candidates with proposedNames, codeElements, proposedArrows, bridgeArrows, and ' +
-        'clarifyingQuestions.\n' +
-        '- action="refine": Accept/reject/rename candidates. Required: sessionId (string, from start), ' +
-        'responses (array of objects with candidateId, status ("accepted"|"rejected"|"deferred"), ' +
-        'optional nameOverride string, optional arrowOverrides array). Each arrowOverride has arrowId, ' +
-        'status ("accepted"|"rejected"|"modified"), optional newName, optional totalOverride boolean. ' +
-        'Returns summary with accepted/rejected/pending counts and remaining pendingCandidates.\n' +
-        '- action="commit": Write accepted domain objects and resolved arrows to the olog. Required: ' +
-        'sessionId, provenance (object with source: "manual"|"llm", ' +
-        'commitSha: string, confidence: "resolved"|"unresolved"|"tentative"). Returns sessionId, status "committed", ' +
-        'addedObjects, addedArrows, addedBridges counts. At least one candidate must be accepted before committing.\n' +
-        '- action="list": List all domain discovery sessions. Returns array of session summaries.\n' +
-        '- action="get": Get details of a specific session. Required: sessionId. Returns the full ' +
-        'session object including candidates and their status.',
+        '- action="start": Begin a type-driven discovery session. Optional: scopeRegex, excludeModules. ' +
+        'Returns sessionId, candidateCount, arrowCount, candidates with proposedNames, proposedArrows, ' +
+        'bridgeArrows, and clarifyingQuestions.\n' +
+        '- action="extend": Run Kan extension from committed domain elements along the call graph. ' +
+        'Optional: maxDepth (1–5, default 2), excludeModules. Returns sessionId, existingWithNewArrows, ' +
+        'newCandidates count, shells list (existing domains + new arrows), newCandidates list.\n' +
+        '- action="refine": Accept/reject/rename candidates in a session. Required: sessionId, responses ' +
+        '(array of {candidateId, status: "accepted"|"rejected"|"deferred", optional nameOverride, ' +
+        'optional arrowOverrides: [{arrowId, status, optional newName, optional totalOverride}]}). ' +
+        'Returns accepted/rejected/pending counts and remaining pendingCandidates.\n' +
+        '- action="commit": Write accepted candidates and arrows to the olog. Required: sessionId, ' +
+        'provenance ({source: "manual"|"llm", commitSha, confidence: "resolved"|"unresolved"|"tentative"}). ' +
+        'Returns addedObjects, reusedObjects, addedArrows, addedBridges.\n' +
+        '- action="list": List all sessions with status, candidateCount, commitSha, createdAt.\n' +
+        '- action="get": Get full session details. Required: sessionId.',
       inputSchema: z.object({
         action: z
           .enum(['start', 'extend', 'refine', 'commit', 'list', 'get'])
           .describe(
-            'Action to perform: "start" begins a new session from type definitions, ' +
-            '"extend" runs the Kan extension pass to propagate domain labels along the call graph, ' +
-            '"refine" accepts/rejects candidates, ' +
-            '"commit" writes to the olog, "list" shows all sessions, "get" returns a session by ID.',
+            '"start" — type-driven discovery from interfaces/classes. ' +
+            '"extend" — Kan extension: propagate committed labels along the call graph. ' +
+            '"refine" — accept/reject/rename candidates in a session. ' +
+            '"commit" — write accepted candidates to the olog. ' +
+            '"list" — list all sessions. "get" — fetch a session by ID.',
           ),
         // start
         scopeRegex: z
