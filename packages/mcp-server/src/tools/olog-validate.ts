@@ -47,6 +47,8 @@ class ProjectedState {
         this.addedArrIds.add(`${op.src}:${op.arrowKind}:${op.dst}`);
       } else if (op.kind === 'removeArrow') {
         this.removedArrIds.add(op.arrowId);
+      } else if (op.kind === 'rewrite_body') {
+        // no projected state change — body rewrites don't alter the graph structure
       }
     }
   }
@@ -212,6 +214,37 @@ export function registerOlogValidate(server: McpServer, store: OlogStore): void 
                 kind: 'notFound',
                 humanMessage: `removeArrow: arrow not found: "${op.arrowId}"`,
                 involved: [op.arrowId],
+              });
+            }
+          }
+
+          if (op.kind === 'rewrite_body') {
+            const elem = store.getElem(op.target);
+            if (!elem) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: 'notFound',
+                humanMessage: `rewrite_body: element not found: "${op.target}"`,
+                involved: [op.target],
+              });
+            } else if (!elem.span) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: 'constraint',
+                humanMessage: `rewrite_body: element "${elem.name}" has no span — cannot locate its source`,
+                involved: [op.target],
+              });
+            }
+            // Warn if a conflicting removeSymbol or rename targets the same element
+            const conflicts = ops.filter(
+              o => o !== op && (o.kind === 'removeSymbol' || o.kind === 'rename') && 'target' in o && o.target === op.target
+            );
+            for (const conflict of conflicts) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: 'constraint',
+                humanMessage: `rewrite_body: conflicts with "${conflict.kind}" on the same element "${op.target}"`,
+                involved: [op.target],
               });
             }
           }

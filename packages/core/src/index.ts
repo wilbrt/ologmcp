@@ -70,7 +70,7 @@ export {
   type DelegationTask,
   type ContextOverrides,
 } from './delegate/index.js';
-export { SourceResolver } from './delegate/resolve.js';
+export { SourceResolver, filePathFromSpan } from './delegate/resolve.js';
 export type { AnalogueCandidate } from './delegate/analogues.js';
 export type {
   MustCallEntry,

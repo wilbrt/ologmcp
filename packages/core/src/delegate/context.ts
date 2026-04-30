@@ -37,6 +37,8 @@ export interface ImportEntry {
   name: string;
   sourceModule: string | null;
   targetModule: string | null;
+  /** Language-specific raw import text (e.g. "[myapp.fee-model :as fee-model]" for Clojure). */
+  rawText?: string;
 }
 
 export interface StructuralContext {
@@ -173,6 +175,9 @@ export function gatherImports(store: OlogStore, targetModule: string): ImportEnt
         ? (importsFromArrow.attrs?.sourceModule as string | null) ?? null
         : null,
       targetModule: imp.module,
+      ...(imp.attrs && (imp.attrs as Record<string, string>).rawRequire
+        ? { rawText: (imp.attrs as Record<string, string>).rawRequire }
+        : {}),
     });
   }
 

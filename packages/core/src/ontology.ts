@@ -207,7 +207,8 @@ export type PlanOperation =
   | { kind: 'addSymbol'; module: string; name: string; symbolKind: string }
   | { kind: 'removeSymbol'; target: string }
   | { kind: 'addArrow'; arrowKind: string; src: string; dst: string }
-  | { kind: 'removeArrow'; arrowId: string };
+  | { kind: 'removeArrow'; arrowId: string }
+  | { kind: 'rewrite_body'; target: string; rationale: string };
 
 export interface Plan {
   operations: PlanOperation[];

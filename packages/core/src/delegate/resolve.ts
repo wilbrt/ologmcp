@@ -142,7 +142,8 @@ export class SourceResolver {
 }
 
 function parseSpan(span: string): { startLine: number; startCol: number; endLine: number; endCol: number } | null {
-  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+  // Span format: "optional/file/path.ext:startLine:startCol-endLine:endCol"
+  const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
   if (!m) return null;
   return {
     startLine: parseInt(m[1]!, 10),
@@ -150,4 +151,10 @@ function parseSpan(span: string): { startLine: number; startCol: number; endLine
     endLine: parseInt(m[3]!, 10),
     endCol: parseInt(m[4]!, 10),
   };
+}
+
+/** Extract the relative file path prefix from a full span string. */
+export function filePathFromSpan(span: string): string | null {
+  const m = span.match(/^(.+):\d+:\d+-\d+:\d+$/);
+  return m ? m[1]! : null;
 }

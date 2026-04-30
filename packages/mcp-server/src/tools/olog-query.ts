@@ -1,8 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { spawnSync } from 'node:child_process';
+import { relative } from 'node:path';
 import { OlogStore } from '@olog/core';
 
-export function registerOlogQuery(server: McpServer, store: OlogStore): void {
+export function registerOlogQuery(server: McpServer, store: OlogStore, projectRoot: string): void {
   const elemKindEnum = [
     'file',
     'module',
@@ -66,7 +68,8 @@ export function registerOlogQuery(server: McpServer, store: OlogStore): void {
     'olog_query',
     {
       description:
-        'Query the ontology log for structural elements matching filters, or traverse the graph via multi-hop arrow following. Returns elements with their kind, name, module (file path), and span (location). Traversal returns both reached elements and the arrows traversed.',
+        'Query the ontology log for structural elements matching filters, or traverse the graph via multi-hop arrow following. Returns elements with their kind, name, module (file path), and span (location). Traversal returns both reached elements and the arrows traversed. ' +
+        'Use the literal parameter to find all functions/definitions whose source contains a specific keyword, string, or symbol (e.g. ":task.type/bond-verification") — this performs a grep-backed search and returns the enclosing elements.',
       inputSchema: z.object({
         start: z.union([startByIdSchema, startByFilterSchema]).optional().describe(
           'Start element specification: either an exact element ID, or a filter (kind/name/module) to find starting element(s). When omitted, falls back to the top-level kind/name/module parameters.'
@@ -123,6 +126,13 @@ export function registerOlogQuery(server: McpServer, store: OlogStore): void {
           .describe(
             'Minimum provenance confidence level. For filter queries, requires an exact match. For traversals, filters arrows by exact confidence match.'
           ),
+        literal: z
+          .string()
+          .optional()
+          .describe(
+            'Fixed string to search for in source files (grep-backed). Returns elements whose source span contains the literal. ' +
+            'Use for keyword/data literals not captured as structural arrows, e.g. ":task.type/bond-verification".'
+          ),
         limit: z
           .number()
           .int()
@@ -135,6 +145,52 @@ export function registerOlogQuery(server: McpServer, store: OlogStore): void {
     },
     async (args) => {
       try {
+        // Literal search: grep project files and return enclosing elements
+        if (args.literal) {
+          const grep = spawnSync('grep', ['-rnF', '--', args.literal, '.'], {
+            cwd: projectRoot,
+            encoding: 'utf8',
+            maxBuffer: 10 * 1024 * 1024,
+          });
+          if (grep.error) {
+            return { content: [{ type: 'text' as const, text: `grep error: ${grep.error.message}` }], isError: true };
+          }
+          const grepLines = (grep.stdout ?? '').split('\n').filter(Boolean);
+          // Parse "relative/path.clj:42:content"
+          const fileLineHits = new Map<string, Set<number>>();
+          for (const line of grepLines) {
+            const m = line.match(/^(.+?):(\d+):/);
+            if (!m) continue;
+            const rel = relative(projectRoot, m[1]!.startsWith('/') ? m[1]! : `${projectRoot}/${m[1]!}`);
+            const lineNum = parseInt(m[2]!, 10);
+            const set = fileLineHits.get(rel) ?? new Set();
+            set.add(lineNum);
+            fileLineHits.set(rel, set);
+          }
+          const matched: import('@olog/core').OlogElem[] = [];
+          const seen = new Set<string>();
+          for (const [relPath, hitLines] of fileLineHits) {
+            const elemsInFile = store.queryElements({ moduleRegex: relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), limit: 2000 });
+            for (const elem of elemsInFile) {
+              if (!elem.span || seen.has(elem.id)) continue;
+              const sm = elem.span.match(/(\d+):\d+-(\d+):\d+$/);
+              if (!sm) continue;
+              const startLine = parseInt(sm[1]!, 10);
+              const endLine = parseInt(sm[2]!, 10);
+              for (const hit of hitLines) {
+                if (hit >= startLine && hit <= endLine) {
+                  seen.add(elem.id);
+                  matched.push(elem);
+                  break;
+                }
+              }
+            }
+          }
+          return {
+            content: [{ type: 'text' as const, text: JSON.stringify(matched.slice(0, args.limit), null, 2) }],
+          };
+        }
+
         if (args.arrows && args.arrows.length > 0) {
           let startIds: string[];
 

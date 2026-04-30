@@ -1,13 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore } from '@olog/core';
+import { OlogStore, SourceResolver, filePathFromSpan } from '@olog/core';
 
-export function registerOlogInspect(server: McpServer, store: OlogStore): void {
+export function registerOlogInspect(server: McpServer, store: OlogStore, projectRoot: string): void {
   server.registerTool(
     'olog_inspect',
     {
       description:
-        'Get detailed information about a specific element by ID, including all its outgoing and incoming arrows (connections to other elements).',
+        'Get detailed information about a specific element by ID, including all its outgoing and incoming arrows (connections to other elements) and the source snippet of its body read directly from the file at its stored span. Use this instead of reading raw source files to understand what a function does.',
       inputSchema: z.object({
         id: z
           .string()
@@ -47,11 +47,26 @@ export function registerOlogInspect(server: McpServer, store: OlogStore): void {
           return configStr.includes(elemKind) || configStr.includes(elemModule);
         });
 
+        // Resolve source snippet from stored span
+        let sourceSnippet: string | null = null;
+        if (element.span) {
+          const filePath = filePathFromSpan(element.span) ?? element.module ?? '';
+          if (filePath) {
+            const resolver = new SourceResolver(projectRoot);
+            sourceSnippet = resolver.readFocused(filePath, element.span, 0, 0)
+              ?? resolver.readSpan(filePath, element.span);
+          }
+        }
+
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ element, outgoing, incoming, provenance, equations, constraints }, null, 2),
+              text: JSON.stringify(
+                { element, sourceSnippet, outgoing, incoming, provenance, equations, constraints },
+                null,
+                2
+              ),
             },
           ],
         };

@@ -35,6 +35,11 @@ const operationSchema = z.union([
     kind: z.literal('removeArrow'),
     arrowId: z.string(),
   }),
+  z.object({
+    kind: z.literal('rewrite_body'),
+    target: z.string().describe('Element ID of the function/method whose body will be rewritten'),
+    rationale: z.string().describe('Why the body needs rewriting and what the intended change is'),
+  }),
 ]);
 
 type PlanOperationInput = z.infer<typeof operationSchema>;
@@ -93,6 +98,9 @@ export function registerOlogPlan(server: McpServer, store: OlogStore): void {
               targetElementIds.add(op.dst);
               break;
             case 'removeArrow':
+              break;
+            case 'rewrite_body':
+              targetElementIds.add(op.target);
               break;
           }
         }

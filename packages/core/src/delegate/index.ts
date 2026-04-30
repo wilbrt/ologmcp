@@ -40,6 +40,12 @@ export interface DelegationBrief {
 
   importsInTargetFile: string[];
 
+  /**
+   * mustCall entries whose module is not imported in the target file.
+   * Each entry carries the import statement needed to fix it.
+   */
+  missingImports: Array<{ name: string; module: string; suggestedImport: string }>;
+
   analogues: Array<{
     name: string;
     similarity: number;
@@ -215,11 +221,32 @@ export function assembleBrief(
   });
 
   const resolvedImports = importEntries.map(imp => {
-    if (imp.sourceModule) {
-      return `import { ${imp.name} } from '${imp.sourceModule}'`;
-    }
+    if (imp.rawText) return imp.rawText;
+    if (imp.sourceModule) return `import { ${imp.name} } from '${imp.sourceModule}'`;
     return `import { ${imp.name} } from '...'`;
   });
+
+  // Detect which mustCall entries are not yet imported in the target file
+  const importedModuleSuffixes = new Set(
+    importEntries
+      .map(imp => imp.sourceModule)
+      .filter((m): m is string => !!m)
+  );
+  const missingImports = mustCallEntries
+    .filter(entry => {
+      if (!entry.module || entry.module === targetModule) return false;
+      return ![...importedModuleSuffixes].some(
+        im => im === entry.module || entry.module!.endsWith(im) || im.endsWith(entry.module!.split('/').pop() ?? '')
+      );
+    })
+    .map(entry => {
+      const entryFilePath = getModuleFilePath(store, entry.module ?? '') ?? localModuleToFilePath(entry.module ?? '');
+      return {
+        name: entry.name,
+        module: entry.module ?? '',
+        suggestedImport: resolver.computeImportStatement(entry.name, entry.module ?? '', targetModule),
+      };
+    });
 
   const resolvedAnalogues = analogueCandidates.map(candidate => {
     const candidateFilePath = getModuleFilePath(store, candidate.module ?? '') ?? localModuleToFilePath(candidate.module ?? '');
@@ -260,10 +287,11 @@ export function assembleBrief(
     mustCall: resolvedMustCall,
     mustImplement: resolvedMustImplement,
     usedBy: resolvedUsedBy,
-    importsInTargetFile: resolver.readImportBlock(filePath),
+    importsInTargetFile: resolvedImports.length > 0 ? resolvedImports : resolver.readImportBlock(filePath),
     analogues: resolvedAnalogues,
     targetFileContent,
     domainContext,
+    missingImports,
     acceptanceCriteria,
     provenance: {
       ologCommitSha: commitSha,
@@ -360,7 +388,8 @@ function localModuleToFilePath(modulePath: string): string {
 }
 
 function parseSpanSimple(span: string): { start: number; end: number } | null {
-  const m = span.match(/^(\d+):\d+-(\d+):\d+$/);
+  // Span format: "optional/file/path.ext:startLine:startCol-endLine:endCol"
+  const m = span.match(/(\d+):\d+-(\d+):\d+$/);
   if (!m) return null;
   return { start: parseInt(m[1]!, 10), end: parseInt(m[2]!, 10) };
 }

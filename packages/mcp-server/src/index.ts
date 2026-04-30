@@ -93,8 +93,8 @@ const server = new McpServer(
   }
 );
 
-registerOlogQuery(server, store);
-registerOlogInspect(server, store);
+registerOlogQuery(server, store, projectRoot);
+registerOlogInspect(server, store, projectRoot);
 registerOlogDump(server, store);
 registerOlogReindex(server, store, projectRoot);
 registerOlogProposeSchema(server, store);

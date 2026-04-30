@@ -169,6 +169,61 @@ const DEFINITION_FORMS = new Set([
   's/def', 's/defonce',
 ]);
 
+/**
+ * Extract (:require ...) entries from a (ns ...) form and emit them as import elements.
+ * Each [ns.path :as alias] vector becomes an import element with attrs.rawRequire set
+ * to the Clojure require string so the delegation brief can format it correctly.
+ */
+function extractNsRequires(nsNode: Node, elements: RawElement[]): void {
+  const vals = listValues(nsNode);
+  for (let i = 2; i < vals.length; i++) {
+    const clause = vals[i]!;
+    if (clause.type !== 'list_lit') continue;
+    const clauseVals = listValues(clause);
+    if (clauseVals[0]?.type !== 'kwd_lit' || clauseVals[0].text !== ':require') continue;
+
+    for (let j = 1; j < clauseVals.length; j++) {
+      const dep = clauseVals[j]!;
+      if (dep.type !== 'vec_lit') continue;
+      const depVals = dep.childrenForFieldName('value');
+      const nsPathNode = depVals[0];
+      if (!nsPathNode || nsPathNode.type !== 'sym_lit') continue;
+      const fullNs = nsPathNode.text;
+
+      let alias = '';
+      let rawRequire = `[${fullNs}]`;
+
+      for (let k = 1; k < depVals.length - 1; k++) {
+        const kw = depVals[k];
+        if (!kw || kw.type !== 'kwd_lit') continue;
+        if (kw.text === ':as') {
+          const aliasNode = depVals[k + 1];
+          if (aliasNode?.type === 'sym_lit') {
+            alias = aliasNode.text;
+            rawRequire = `[${fullNs} :as ${alias}]`;
+          }
+        } else if (kw.text === ':refer') {
+          const referVec = depVals[k + 1];
+          if (referVec?.type === 'vec_lit') {
+            const fns = referVec.childrenForFieldName('value').map(n => n.text).join(' ');
+            rawRequire = `[${fullNs} :refer [${fns}]]`;
+          }
+        }
+      }
+
+      if (!elements.find(e => e.kind === 'import' && e.attrs?.sourceModule === fullNs)) {
+        elements.push({
+          kind: 'import',
+          name: alias || fullNs,
+          module: '',
+          span: formatSpan(dep),
+          attrs: { sourceModule: fullNs, alias, rawRequire },
+        });
+      }
+    }
+  }
+}
+
 function walkForDefinitions(node: Node | null | undefined, elements: RawElement[]): void {
   if (!node) return;
   if (node.type === 'list_lit') {
@@ -204,6 +259,7 @@ function walkForDefinitions(node: Node | null | undefined, elements: RawElement[
           case 'ns':
             if (!elements.find(e => e.name === name && e.kind === 'namespace'))
               elements.push({ kind: 'namespace', name, module: '', span: formatSpan(node), attrs: {} });
+            extractNsRequires(node, elements);
             break;
           case 'defprotocol':
             if (!elements.find(e => e.name === name && e.kind === 'interface'))
