@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "olog": {
+      "command": "node",
+      "args": ["packages/mcp-server/dist/index.js"],
+      "env": {
+        "OLOG_ROOT": ".",
+        "OLOG_LANGUAGES": "typescript"
+      }
+    }
+  }
+}

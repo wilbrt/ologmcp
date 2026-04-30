@@ -19,7 +19,7 @@
     "tsup": "^8.3.5"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && mkdir -p dist/queries && cp src/queries/*.scm dist/queries/",
     "typecheck": "tsc --noEmit",
     "test": "echo \"No tests yet\""
   }
