@@ -2521,6 +2521,8 @@ function expandOperation(store, operation, readFile) {
     case "removeArrow": {
       return { edits: [], warnings: [`removeArrow: arrow removal does not currently affect source files`] };
     }
+    case "rewrite_body":
+      return { edits: [], warnings: [] };
     default:
       return { edits: [], warnings: [`Unknown operation kind: ${operation.kind}`] };
   }

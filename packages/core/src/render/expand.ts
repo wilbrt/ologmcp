@@ -40,6 +40,10 @@ export function expandOperation(
       return { edits: [], warnings: [`removeArrow: arrow removal does not currently affect source files`] };
     }
 
+    case 'rewrite_body':
+      // Body rewrites are handled via olog_delegate + @edit, not the render pipeline.
+      return { edits: [], warnings: [] };
+
     default:
       return { edits: [], warnings: [`Unknown operation kind: ${(operation as PlanOperation).kind}`] };
   }

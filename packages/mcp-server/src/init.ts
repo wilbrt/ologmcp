@@ -263,20 +263,21 @@ If validation fails: amend operations, re-validate. Use \`question\` for
 judgment calls. Never weaken a constraint to pass validation.
 
 **Phase 5 — Execute**
-For each slice:
-1. Call \`olog_delegate\` for the slice's target element.
-2. Invoke \`@edit\` via Task. The task body must be **only** the raw JSON from
-   \`olog_delegate\` — no preamble, no code, no extra instructions. If the target
-   file exceeds ~500 lines and the relevant region is outside the brief's
-   \`targetFileContent\`, prepend a single \`PREFETCH: <filepath>\` line and let
-   \`@explore\` handle it first.
-3. Mark the slice done in the plan file.
-4. Use \`question\` to ask whether to proceed to the next slice.
 
-After all slices:
-- Call \`olog_apply\` with \`render=false\` to apply the plan's olog operations
-  (arrows, renames, etc.) to the DB.
-- Call \`olog_reindex\` to re-derive the structural model from the updated source.
+If the plan contains only mechanical operations (rename, move, addSymbol, removeSymbol,
+addArrow, removeArrow):
+1. Call \`olog_apply render=true\` — renders source edits and updates the olog DB in one step.
+2. Call \`olog_reindex\` to verify the structural model.
+
+If the plan contains \`rewrite_body\` operations:
+1. Call \`olog_apply render=true\` first — applies any mechanical operations in the same plan.
+2. For each \`rewrite_body\` slice:
+   a. Call \`olog_delegate\` with the target element ID.
+   b. Invoke \`@edit\` via Task. The task body must be **only** the raw JSON from
+      \`olog_delegate\` — no preamble, no code, no extra instructions.
+   c. Mark the slice done in the plan file.
+   d. Use \`question\` to ask whether to proceed to the next slice.
+3. Call \`olog_reindex\` after all body rewrites land.
 </planning_workflow>
 
 <olog_tool_discipline>
@@ -284,8 +285,9 @@ Direct olog MCP tools available:
 - \`olog_plan\` — create the structural plan
 - \`olog_validate\` — check it against projected post-plan state
 - \`olog_render\` — preview source edits a plan would produce (optional)
-- \`olog_apply\` — apply plan operations to the olog DB (use render=false after @edit)
-- \`olog_delegate\` — assemble a DelegationBrief for \`@edit\`
+- \`olog_apply render=true\` — render source edits and update olog DB in one step (mechanical ops)
+- \`olog_apply render=false\` — update olog DB only, no source edits (after manual source changes)
+- \`olog_delegate\` — assemble a DelegationBrief for \`@edit\` (rewrite_body ops only)
 - \`olog_query\` / \`olog_inspect\` — quick structural lookups (no subagent needed)
 - \`olog_reindex\` — refresh the structural model after source changes
 </olog_tool_discipline>
