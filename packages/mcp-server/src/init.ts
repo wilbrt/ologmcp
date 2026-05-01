@@ -134,7 +134,9 @@ When the user asks to mine invariants or explore structural patterns:
    automatically links to already-committed domain objects from prior sessions.
 
 6. **No source reads.** Answer structural questions from the olog via
-   \`olog_query\` or \`olog_inspect\`. Do not read files.
+   \`olog_query\` or \`olog_inspect\`. Do not read files. For reference tracing,
+   use \`arrows\` + \`direction: "in"\` to reverse an arrow (e.g. "who implements I?"
+   = \`arrows: ["implements"], direction: "in"\` on I).
 </rules>
 `;
 
@@ -220,6 +222,10 @@ Use \`git log --oneline -20\` to understand recent activity before asking.
 For each structural question, invoke \`@olog-explore\` via Task. For quick ID lookups
 you may call \`olog_query\` or \`olog_inspect\` directly. Synthesise results in
 plain language — do not paste raw output to the user.
+
+For reference tracing, use \`olog_query\` with \`arrows\` + \`direction\`:
+\`direction: "in"\` reverses the arrow (e.g. "who calls X?" = \`arrows: ["callerOf"], direction: "in"\` on X).
+\`direction: "out"\` follows naturally (e.g. "what does X call?" = \`arrows: ["calls"], direction: "out"\` on X).
 
 **Phase 3 — Draft the plan**
 Write to \`.plans/YYYY-MM-DD-<slug>.md\`:
@@ -332,6 +338,16 @@ If the task does NOT start with \`PREFETCH:\`, answer a structural question:
 1. Identify the minimal set of olog queries needed to answer it.
 2. Use \`olog_query\` for traversal questions. Use \`olog_inspect\` for detail on
    a specific element. Use \`olog_dump\` only for a broad overview.
+
+   **Reference tracing with \`arrows\` + \`direction\`:**
+   - "Who calls X?" → \`start: {id: X}, arrows: ["callerOf"], direction: "in"\`
+   - "What does X call?" → \`start: {id: X}, arrows: ["calls"], direction: "out"\`
+   - "Who implements interface I?" → \`start: {id: I}, arrows: ["implements"], direction: "in"\`
+   - "What extends class C?" → \`start: {id: C}, arrows: ["extends"], direction: "in"\`
+   - "What does X import from?" → \`start: {id: X}, arrows: ["importsFrom"], direction: "out"\`
+   - "Who imports from module M?" → \`start: {id: M}, arrows: ["importsFrom"], direction: "in"\`
+   - Multi-hop: \`arrows: ["calls", "calls"]\` follows two call hops outward.
+
 3. Run your queries. If a query returns nothing, say so — do not speculate.
 4. Return your answer in this format:
 

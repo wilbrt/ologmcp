@@ -55,8 +55,8 @@ var init_exports = {};
 __export(init_exports, {
   runInit: () => runInit
 });
-import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
-import { join as join4 } from "path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync6, writeFileSync as writeFileSync2 } from "fs";
+import { join as join5 } from "path";
 function deepMerge(target, source) {
   const result = { ...target };
   for (const [key, value] of Object.entries(source)) {
@@ -73,8 +73,8 @@ async function runInit() {
   console.log("olog-mcp init\n");
   const languages2 = detectLanguages(root);
   console.log(`Detected languages: ${languages2.join(", ")}`);
-  const agentsDir = join4(root, ".opencode", "agents");
-  mkdirSync(agentsDir, { recursive: true });
+  const agentsDir = join5(root, ".opencode", "agents");
+  mkdirSync2(agentsDir, { recursive: true });
   const agents = [
     { file: "olog-ingestion.md", content: AGENT_INGESTION },
     { file: "olog-planning.md", content: AGENT_PLANNING },
@@ -82,12 +82,12 @@ async function runInit() {
     { file: "olog-edit.md", content: AGENT_EDIT }
   ];
   for (const agent of agents) {
-    const dest = join4(agentsDir, agent.file);
-    writeFileSync(dest, agent.content);
+    const dest = join5(agentsDir, agent.file);
+    writeFileSync2(dest, agent.content);
     console.log(`  wrote ${dest.replace(root + "/", "")}`);
   }
-  const configPath = join4(root, "opencode.json");
-  const existing = existsSync2(configPath) ? JSON.parse(readFileSync3(configPath, "utf8")) : {};
+  const configPath = join5(root, "opencode.json");
+  const existing = existsSync2(configPath) ? JSON.parse(readFileSync6(configPath, "utf8")) : {};
   const patch = {
     $schema: "https://opencode.ai/config.json",
     mcp: {
@@ -100,7 +100,7 @@ async function runInit() {
     }
   };
   const updated = deepMerge(existing, patch);
-  writeFileSync(configPath, JSON.stringify(updated, null, 2) + "\n");
+  writeFileSync2(configPath, JSON.stringify(updated, null, 2) + "\n");
   console.log(`  wrote opencode.json`);
   console.log(`
 Done! Next steps:
@@ -242,7 +242,9 @@ When the user asks to mine invariants or explore structural patterns:
    automatically links to already-committed domain objects from prior sessions.
 
 6. **No source reads.** Answer structural questions from the olog via
-   \`olog_query\` or \`olog_inspect\`. Do not read files.
+   \`olog_query\` or \`olog_inspect\`. Do not read files. For reference tracing,
+   use \`arrows\` + \`direction: "in"\` to reverse an arrow (e.g. "who implements I?"
+   = \`arrows: ["implements"], direction: "in"\` on I).
 </rules>
 `;
     AGENT_PLANNING = `---
@@ -327,6 +329,10 @@ Use \`git log --oneline -20\` to understand recent activity before asking.
 For each structural question, invoke \`@olog-explore\` via Task. For quick ID lookups
 you may call \`olog_query\` or \`olog_inspect\` directly. Synthesise results in
 plain language \u2014 do not paste raw output to the user.
+
+For reference tracing, use \`olog_query\` with \`arrows\` + \`direction\`:
+\`direction: "in"\` reverses the arrow (e.g. "who calls X?" = \`arrows: ["callerOf"], direction: "in"\` on X).
+\`direction: "out"\` follows naturally (e.g. "what does X call?" = \`arrows: ["calls"], direction: "out"\` on X).
 
 **Phase 3 \u2014 Draft the plan**
 Write to \`.plans/YYYY-MM-DD-<slug>.md\`:
@@ -438,6 +444,16 @@ If the task does NOT start with \`PREFETCH:\`, answer a structural question:
 1. Identify the minimal set of olog queries needed to answer it.
 2. Use \`olog_query\` for traversal questions. Use \`olog_inspect\` for detail on
    a specific element. Use \`olog_dump\` only for a broad overview.
+
+   **Reference tracing with \`arrows\` + \`direction\`:**
+   - "Who calls X?" \u2192 \`start: {id: X}, arrows: ["callerOf"], direction: "in"\`
+   - "What does X call?" \u2192 \`start: {id: X}, arrows: ["calls"], direction: "out"\`
+   - "Who implements interface I?" \u2192 \`start: {id: I}, arrows: ["implements"], direction: "in"\`
+   - "What extends class C?" \u2192 \`start: {id: C}, arrows: ["extends"], direction: "in"\`
+   - "What does X import from?" \u2192 \`start: {id: X}, arrows: ["importsFrom"], direction: "out"\`
+   - "Who imports from module M?" \u2192 \`start: {id: M}, arrows: ["importsFrom"], direction: "in"\`
+   - Multi-hop: \`arrows: ["calls", "calls"]\` follows two call hops outward.
+
 3. Run your queries. If a query returns nothing, say so \u2014 do not speculate.
 4. Return your answer in this format:
 
@@ -587,8 +603,8 @@ After editing, confirm:
 });
 
 // src/index.ts
-import { mkdirSync as mkdirSync2 } from "fs";
-import { join as join5 } from "path";
+import { mkdirSync as mkdirSync3 } from "fs";
+import { join as join6 } from "path";
 import { McpServer as McpServer15 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -5095,183 +5111,58 @@ ${stack}` }
 
 // src/tools/olog-apply.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
-import { z as z6 } from "zod";
-
-// src/tools/olog-plan.ts
-import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z5 } from "zod";
-import { createHash as createHash2 } from "crypto";
-var operationSchema = z5.union([
-  z5.object({
-    kind: z5.literal("rename"),
-    target: z5.string(),
-    newName: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("move"),
-    target: z5.string(),
-    newModule: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("addSymbol"),
-    module: z5.string(),
-    name: z5.string(),
-    symbolKind: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("removeSymbol"),
-    target: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("addArrow"),
-    arrowKind: z5.string(),
-    src: z5.string(),
-    dst: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("removeArrow"),
-    arrowId: z5.string()
-  }),
-  z5.object({
-    kind: z5.literal("rewrite_body"),
-    target: z5.string().describe("Element ID of the function/method whose body will be rewritten"),
-    rationale: z5.string().describe("Why the body needs rewriting and what the intended change is")
-  })
-]);
+
+// src/tools/olog-plan-store.ts
+import { mkdirSync, readFileSync as readFileSync3, writeFileSync } from "fs";
+import { join as join4 } from "path";
 var planStore = /* @__PURE__ */ new Map();
-function registerOlogPlan(server2, store2) {
-  server2.registerTool(
-    "olog_plan",
-    {
-      description: "Describe a set of structural changes as a plan with invariants. The plan is stored in-memory keyed by its hash for later validation and application.",
-      inputSchema: z5.object({
-        operations: z5.array(operationSchema).describe("List of planned structural operations"),
-        rationale: z5.string().describe("Human-readable rationale for the plan")
-      }),
-      annotations: { readOnlyHint: false, idempotentHint: false }
-    },
-    async ({ operations, rationale }) => {
-      try {
-        const hash = createHash2("sha256").update(JSON.stringify(operations)).digest("hex");
-        const targetElementIds = /* @__PURE__ */ new Set();
-        const targetKinds = /* @__PURE__ */ new Set();
-        const targetModules = /* @__PURE__ */ new Set();
-        for (const op of operations) {
-          switch (op.kind) {
-            case "rename":
-            case "move":
-            case "removeSymbol":
-              targetElementIds.add(op.target);
-              break;
-            case "addSymbol":
-              targetModules.add(op.module);
-              targetKinds.add(op.symbolKind);
-              break;
-            case "addArrow":
-              targetElementIds.add(op.src);
-              targetElementIds.add(op.dst);
-              break;
-            case "removeArrow":
-              break;
-            case "rewrite_body":
-              targetElementIds.add(op.target);
-              break;
-          }
-        }
-        for (const id of targetElementIds) {
-          const elem = store2.getElem(id);
-          if (elem) {
-            targetKinds.add(elem.kind);
-            if (elem.module) {
-              targetModules.add(elem.module);
-            }
-          }
-        }
-        const equationsById = /* @__PURE__ */ new Map();
-        for (const id of targetElementIds) {
-          for (const eq of store2.getEquationsForObject(id)) {
-            equationsById.set(eq.id, eq);
-          }
-        }
-        const constraintsById = /* @__PURE__ */ new Map();
-        for (const constraint of store2.getConstraints()) {
-          const configStr = JSON.stringify(constraint.config);
-          let matched = false;
-          for (const kind of targetKinds) {
-            if (configStr.includes(kind)) {
-              matched = true;
-              break;
-            }
-          }
-          if (!matched) {
-            for (const mod of targetModules) {
-              if (configStr.includes(mod)) {
-                matched = true;
-                break;
-              }
-            }
-          }
-          if (matched) {
-            constraintsById.set(constraint.id, constraint);
-          }
-        }
-        const invariants = {
-          equations: Array.from(equationsById.values()),
-          constraints: Array.from(constraintsById.values())
-        };
-        const plan = {
-          operations,
-          hash,
-          rationale,
-          invariants
-        };
-        planStore.set(hash, plan);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                { ok: true, plan: { operations, hash, invariants } },
-                null,
-                2
-              )
-            }
-          ]
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text", text: `Error: ${message}` }],
-          isError: true
-        };
-      }
-    }
-  );
+function persistPlan(hash, plan, projectRoot2) {
+  planStore.set(hash, plan);
+  const dir = join4(projectRoot2, ".olog", "plans");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join4(dir, `${hash}.json`), JSON.stringify(plan, null, 2));
+}
+function loadPlan(hash, projectRoot2) {
+  const cached = planStore.get(hash);
+  if (cached) return cached;
+  const filePath = join4(projectRoot2, ".olog", "plans", `${hash}.json`);
+  try {
+    const content = readFileSync3(filePath, "utf-8");
+    const plan = JSON.parse(content);
+    planStore.set(hash, plan);
+    return plan;
+  } catch {
+    return void 0;
+  }
 }
 
 // src/tools/olog-apply.ts
-var planOperationSchema = z6.union([
-  z6.object({ kind: z6.literal("rename"), target: z6.string(), newName: z6.string() }),
-  z6.object({ kind: z6.literal("move"), target: z6.string(), newModule: z6.string() }),
-  z6.object({ kind: z6.literal("addSymbol"), module: z6.string(), name: z6.string(), symbolKind: z6.string() }),
-  z6.object({ kind: z6.literal("removeSymbol"), target: z6.string() }),
-  z6.object({ kind: z6.literal("addArrow"), arrowKind: z6.string(), src: z6.string(), dst: z6.string() }),
-  z6.object({ kind: z6.literal("removeArrow"), arrowId: z6.string() })
+var planOperationSchema = z5.union([
+  z5.object({ kind: z5.literal("rename"), target: z5.string(), newName: z5.string() }),
+  z5.object({ kind: z5.literal("move"), target: z5.string(), newModule: z5.string() }),
+  z5.object({ kind: z5.literal("addSymbol"), module: z5.string(), name: z5.string(), symbolKind: z5.string() }),
+  z5.object({ kind: z5.literal("removeSymbol"), target: z5.string() }),
+  z5.object({ kind: z5.literal("addArrow"), arrowKind: z5.string(), src: z5.string(), dst: z5.string() }),
+  z5.object({ kind: z5.literal("removeArrow"), arrowId: z5.string() }),
+  z5.object({ kind: z5.literal("addReexport"), module: z5.string(), name: z5.string(), fromModule: z5.string() }),
+  z5.object({ kind: z5.literal("amendType"), target: z5.string(), field: z5.string(), action: z5.enum(["addUnionMember", "addProperty"]), value: z5.string() }),
+  z5.object({ kind: z5.literal("rewrite_body"), target: z5.string(), rationale: z5.string() })
 ]);
-var planSchema = z6.object({
-  operations: z6.array(planOperationSchema),
-  hash: z6.string(),
-  rationale: z6.string()
+var planSchema = z5.object({
+  operations: z5.array(planOperationSchema),
+  hash: z5.string(),
+  rationale: z5.string()
 });
 function registerOlogApply(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_apply",
     {
-      description: "Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match.",
-      inputSchema: z6.object({
+      description: "Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match. Supports rename, move, addSymbol, removeSymbol, addArrow, removeArrow, addReexport, amendType, and rewrite_body operations.",
+      inputSchema: z5.object({
         plan: planSchema.describe("The plan object to apply, including its hash."),
-        planHash: z6.string().describe("The expected hash of the plan. Must match plan.hash."),
-        render: z6.boolean().default(false).describe("When true, also render source-file edits and apply them to disk, then re-ingest.")
+        planHash: z5.string().describe("The expected hash of the plan. Must match plan.hash."),
+        render: z5.boolean().default(false).describe("When true, also render source-file edits and apply them to disk, then re-ingest.")
       }),
       annotations: {
         readOnlyHint: false,
@@ -5281,7 +5172,17 @@ function registerOlogApply(server2, store2, projectRoot2) {
     },
     async ({ plan, planHash, render }) => {
       try {
-        const storedPlan = planStore.get(planHash);
+        if (!projectRoot2) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ ok: false, reason: "projectRoot is required to load plans" }, null, 2)
+              }
+            ]
+          };
+        }
+        const storedPlan = loadPlan(planHash, projectRoot2);
         if (!storedPlan) {
           return {
             content: [
@@ -5366,6 +5267,8 @@ function registerOlogApply(server2, store2, projectRoot2) {
                   text: JSON.stringify(
                     {
                       ok: true,
+                      reindexed: true,
+                      note: "Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.",
                       summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
                       dbChanges: result.changes,
                       sourceEdits: renderResult.edits.map((e) => ({
@@ -5391,6 +5294,8 @@ function registerOlogApply(server2, store2, projectRoot2) {
                 text: JSON.stringify(
                   {
                     ok: true,
+                    reindexed: true,
+                    note: "Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.",
                     summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
                     dbChanges: result.changes,
                     sourceEdits: renderResult.edits.map((e) => ({
@@ -5409,6 +5314,7 @@ function registerOlogApply(server2, store2, projectRoot2) {
             ]
           };
         }
+        reindexProject(projectRoot2, store2, getDefaultRegistry());
         return {
           content: [
             {
@@ -5416,6 +5322,8 @@ function registerOlogApply(server2, store2, projectRoot2) {
               text: JSON.stringify(
                 {
                   ok: true,
+                  reindexed: true,
+                  note: "Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.",
                   summary: `Applied ${result.applied} DB operations (no source edits needed)`,
                   dbChanges: result.changes,
                   warnings: renderResult.warnings
@@ -5435,6 +5343,170 @@ function registerOlogApply(server2, store2, projectRoot2) {
               text: JSON.stringify({ ok: false, reason: message }, null, 2)
             }
           ],
+          isError: true
+        };
+      }
+    }
+  );
+}
+
+// src/tools/olog-plan.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z6 } from "zod";
+import { createHash as createHash2 } from "crypto";
+function registerOlogPlan(server2, store2, projectRoot2) {
+  const operationSchema = z6.union([
+    z6.object({
+      kind: z6.literal("rename"),
+      target: z6.string(),
+      newName: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("move"),
+      target: z6.string(),
+      newModule: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("addSymbol"),
+      module: z6.string(),
+      name: z6.string(),
+      symbolKind: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("removeSymbol"),
+      target: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("addArrow"),
+      arrowKind: z6.string(),
+      src: z6.string(),
+      dst: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("removeArrow"),
+      arrowId: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("rewrite_body"),
+      target: z6.string().describe("Element ID of the function/method whose body will be rewritten"),
+      rationale: z6.string().describe("Why the body needs rewriting and what the intended change is")
+    }),
+    z6.object({
+      kind: z6.literal("addReexport"),
+      module: z6.string(),
+      name: z6.string(),
+      fromModule: z6.string()
+    }),
+    z6.object({
+      kind: z6.literal("amendType"),
+      target: z6.string().describe("Element ID of the type/interface to amend"),
+      field: z6.string().describe("Name of the field/property to amend"),
+      action: z6.enum(["addUnionMember", "addProperty"]).describe("Type of amendment"),
+      value: z6.string().describe("Value to add (e.g. union member name or type string)")
+    })
+  ]);
+  server2.registerTool(
+    "olog_plan",
+    {
+      description: "Describe a set of structural changes as a plan with invariants. The plan is persisted to disk keyed by its hash for later validation and application.",
+      inputSchema: z6.object({
+        operations: z6.array(operationSchema).describe("List of planned structural operations"),
+        rationale: z6.string().describe("Human-readable rationale for the plan")
+      }),
+      annotations: { readOnlyHint: false, idempotentHint: false }
+    },
+    async ({ operations, rationale }) => {
+      try {
+        const hash = createHash2("sha256").update(JSON.stringify(operations)).digest("hex");
+        const targetElementIds = /* @__PURE__ */ new Set();
+        const targetKinds = /* @__PURE__ */ new Set();
+        const targetModules = /* @__PURE__ */ new Set();
+        for (const op of operations) {
+          switch (op.kind) {
+            case "rename":
+            case "move":
+            case "removeSymbol":
+              targetElementIds.add(op.target);
+              break;
+            case "addSymbol":
+              targetModules.add(op.module);
+              targetKinds.add(op.symbolKind);
+              break;
+            case "addArrow":
+              targetElementIds.add(op.src);
+              targetElementIds.add(op.dst);
+              break;
+            case "removeArrow":
+              break;
+            case "rewrite_body":
+              targetElementIds.add(op.target);
+              break;
+          }
+        }
+        for (const id of targetElementIds) {
+          const elem = store2.getElem(id);
+          if (elem) {
+            targetKinds.add(elem.kind);
+            if (elem.module) {
+              targetModules.add(elem.module);
+            }
+          }
+        }
+        const equationsById = /* @__PURE__ */ new Map();
+        for (const id of targetElementIds) {
+          for (const eq of store2.getEquationsForObject(id)) {
+            equationsById.set(eq.id, eq);
+          }
+        }
+        const constraintsById = /* @__PURE__ */ new Map();
+        for (const constraint of store2.getConstraints()) {
+          const configStr = JSON.stringify(constraint.config);
+          let matched = false;
+          for (const kind of targetKinds) {
+            if (configStr.includes(kind)) {
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) {
+            for (const mod of targetModules) {
+              if (configStr.includes(mod)) {
+                matched = true;
+                break;
+              }
+            }
+          }
+          if (matched) {
+            constraintsById.set(constraint.id, constraint);
+          }
+        }
+        const invariants = {
+          equations: Array.from(equationsById.values()),
+          constraints: Array.from(constraintsById.values())
+        };
+        const plan = {
+          operations,
+          hash,
+          rationale,
+          invariants
+        };
+        persistPlan(hash, plan, projectRoot2);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { ok: true, plan: { operations, hash, invariants } },
+                null,
+                2
+              )
+            }
+          ]
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text", text: `Error: ${message}` }],
           isError: true
         };
       }
@@ -5521,7 +5593,7 @@ var ProjectedState = class {
     return false;
   }
 };
-function registerOlogValidate(server2, store2) {
+function registerOlogValidate(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_validate",
     {
@@ -5533,7 +5605,7 @@ function registerOlogValidate(server2, store2) {
     },
     async ({ planHash }) => {
       try {
-        const plan = planStore.get(planHash);
+        const plan = loadPlan(planHash, projectRoot2);
         if (!plan) {
           return {
             content: [
@@ -5906,7 +5978,7 @@ function registerOlogRender(server2, store2, projectRoot2) {
     },
     async ({ planHash }) => {
       try {
-        const plan = planStore.get(planHash);
+        const plan = loadPlan(planHash, projectRoot2);
         if (!plan) {
           return {
             content: [
@@ -6947,16 +7019,16 @@ var ADAPTER_CLASS = {
   clojure: "ClojureAdapter"
 };
 var projectRoot = process.env.OLOG_ROOT || process.cwd();
-var ologDir = join5(projectRoot, ".olog");
+var ologDir = join6(projectRoot, ".olog");
 try {
-  mkdirSync2(ologDir, { recursive: true });
+  mkdirSync3(ologDir, { recursive: true });
 } catch (err) {
   console.error(
     `[olog] Failed to create ${ologDir}: ${err instanceof Error ? err.message : String(err)}`
   );
   process.exit(1);
 }
-var dbPath = join5(ologDir, "olog.sqlite");
+var dbPath = join6(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 var start = Date.now();
@@ -7005,8 +7077,8 @@ registerOlogInspect(server, store, projectRoot);
 registerOlogDump(server, store);
 registerOlogReindex(server, store, projectRoot);
 registerOlogProposeSchema(server, store);
-registerOlogPlan(server, store);
-registerOlogValidate(server, store);
+registerOlogPlan(server, store, projectRoot);
+registerOlogValidate(server, store, projectRoot);
 registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
