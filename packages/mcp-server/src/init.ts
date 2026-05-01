@@ -381,7 +381,9 @@ If the task starts with \`PREFETCH: <filepath>\`:
 
 <constraints>
 - No edits. No subagent calls.
-- Mode A: all information from olog MCP tools only. No file reads.
+- Mode A: **never use the read tool**. If the question asks for source code of a function
+  or class, use \`olog_query\` to find the element by name, then \`olog_inspect\` on its ID —
+  \`olog_inspect\` returns the source snippet directly from the stored span. Do not read files.
 - Mode B: read the specified file only. No olog queries.
 - If confidence is \`unresolved\` or \`tentative\`, flag it: \`[ref: <id>, confidence: unresolved]\`
 - Cite element IDs, not just names.
