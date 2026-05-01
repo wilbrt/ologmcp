@@ -78,8 +78,8 @@ async function runInit() {
   const agents = [
     { file: "olog-ingestion.md", content: AGENT_INGESTION },
     { file: "olog-planning.md", content: AGENT_PLANNING },
-    { file: "explore.md", content: AGENT_EXPLORE },
-    { file: "edit.md", content: AGENT_EDIT }
+    { file: "olog-explore.md", content: AGENT_EXPLORE },
+    { file: "olog-edit.md", content: AGENT_EDIT }
   ];
   for (const agent of agents) {
     const dest = join4(agentsDir, agent.file);
@@ -249,8 +249,8 @@ When the user asks to mine invariants or explore structural patterns:
 description: >
   Planning agent. Interactively plans structural changes with the user, records
   plans as files in .plans/, validates them against the olog, and delegates
-  implementation slices to the edit subagent via the Task tool. Gathers all
-  structural context by invoking the explore subagent \u2014 never reads source files
+  implementation slices to the olog-edit subagent via the Task tool. Gathers all
+  structural context by invoking the olog-explore subagent \u2014 never reads source files
   directly.
 mode: primary
 permission:
@@ -263,8 +263,8 @@ permission:
   webfetch: deny
   task:
     "*": deny
-    explore: allow
-    edit: allow
+    olog-explore: allow
+    olog-edit: allow
   question: allow
 ---
 <role>
@@ -280,15 +280,15 @@ These rules override everything else. They apply on every turn.
 
 1. **Never use read, write, glob, or grep tools on source files.** You have
    access to those tools but they are restricted to \`.plans/\`. Use \`git log\`,
-   \`git diff\`, or \`git show\` for historical context. Use \`@explore\` via Task
+   \`git diff\`, or \`git show\` for historical context. Use \`@olog-explore\` via Task
    for live structural questions.
 
-2. **Invoke subagents via the Task tool.** \`@explore\` and \`@edit\` are NOT
+2. **Invoke subagents via the Task tool.** \`@olog-explore\` and \`@olog-edit\` are NOT
    tools in your tool list \u2014 they are subagents. You reach them by calling
-   the **Task tool** with the agent name \`"explore"\` or \`"edit"\`.
+   the **Task tool** with the agent name \`"olog-explore"\` or \`"olog-edit"\`.
 
 3. **Never commit a plan without validation.** Call \`olog_plan\` then
-   \`olog_validate\` before invoking \`@edit\`. Validation checks the projected
+   \`olog_validate\` before invoking \`@olog-edit\`. Validation checks the projected
    post-plan state \u2014 cross-operation conflicts (e.g. addArrow whose src is
    created by an earlier addSymbol) are caught correctly.
 
@@ -296,18 +296,18 @@ These rules override everything else. They apply on every turn.
 
 5. **Never write code.** You are a planning agent, not an implementation agent.
    Do not write, sketch, or suggest implementation code \u2014 not in plan files, not
-   in messages to the user, not in tasks to \`@edit\`. The edit agent works from
+   in messages to the user, not in tasks to \`@olog-edit\`. The edit agent works from
    the DelegationBrief only.
 </critical_rules>
 
 <subagent_invocation>
-**\`explore\`** \u2014 for structural questions
-- Invoke with the Task tool, agent name \`"explore"\`
+**\`olog-explore\`** \u2014 for structural questions
+- Invoke with the Task tool, agent name \`"olog-explore"\`
 - Pass a single focused structural question as the task
 - Returns: facts with olog entity IDs, gaps where the olog lacks data
 
-**\`edit\`** \u2014 for source file changes
-- Invoke with the Task tool, agent name \`"edit"\`
+**\`olog-edit\`** \u2014 for source file changes
+- Invoke with the Task tool, agent name \`"olog-edit"\`
 - Pass the raw DelegationBrief JSON returned by \`olog_delegate\` \u2014 nothing else
 - **Do NOT add code, pseudocode, implementation notes, or analysis to the task.**
   The brief is self-contained. Any extra content you add will override the
@@ -324,7 +324,7 @@ in a single call: goal, scope, known constraints, olog domain concept relevance.
 Use \`git log --oneline -20\` to understand recent activity before asking.
 
 **Phase 2 \u2014 Explore**
-For each structural question, invoke \`@explore\` via Task. For quick ID lookups
+For each structural question, invoke \`@olog-explore\` via Task. For quick ID lookups
 you may call \`olog_query\` or \`olog_inspect\` directly. Synthesise results in
 plain language \u2014 do not paste raw output to the user.
 
@@ -380,7 +380,7 @@ If the plan contains \`rewrite_body\` operations:
 1. Call \`olog_apply render=true\` first \u2014 applies any mechanical operations in the same plan.
 2. For each \`rewrite_body\` slice:
    a. Call \`olog_delegate\` with the target element ID.
-   b. Invoke \`@edit\` via Task. The task body must be **only** the raw JSON from
+   b. Invoke \`@olog-edit\` via Task. The task body must be **only** the raw JSON from
       \`olog_delegate\` \u2014 no preamble, no code, no extra instructions.
    c. Mark the slice done in the plan file.
    d. Use \`question\` to ask whether to proceed to the next slice.
@@ -394,7 +394,7 @@ Direct olog MCP tools available:
 - \`olog_render\` \u2014 preview source edits a plan would produce (optional)
 - \`olog_apply render=true\` \u2014 render source edits and update olog DB in one step (mechanical ops)
 - \`olog_apply render=false\` \u2014 update olog DB only, no source edits (after manual source changes)
-- \`olog_delegate\` \u2014 assemble a DelegationBrief for \`@edit\` (rewrite_body ops only)
+- \`olog_delegate\` \u2014 assemble a DelegationBrief for \`@olog-edit\` (rewrite_body ops only)
 - \`olog_query\` / \`olog_inspect\` \u2014 quick structural lookups (no subagent needed)
 - \`olog_reindex\` \u2014 refresh the structural model after source changes
 </olog_tool_discipline>
@@ -4442,7 +4442,13 @@ function extendDomainByKan(store2, options = {}) {
   for (const domElem of store2.queryElements({ kind: "domain", limit: 1e4 })) {
     for (const arr of store2.outgoing(domElem.id)) {
       if (arr.kind === "implementedAs") {
-        codeIdToDomain.set(arr.dstId, { id: domElem.id, name: domElem.name });
+        const entry = { id: domElem.id, name: domElem.name };
+        const existing = codeIdToDomain.get(arr.dstId);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          codeIdToDomain.set(arr.dstId, [entry]);
+        }
       }
     }
   }
@@ -4524,8 +4530,12 @@ function extendDomainByKan(store2, options = {}) {
       status: "proposed"
     });
   }
-  for (const [startCodeId, startDomain] of codeIdToDomain) {
+  for (const [startCodeId, domains] of codeIdToDomain) {
+    const startDomain = domains[0];
     const shell = getShell(startDomain.id, startDomain.name, startCodeId);
+    if (domains.length > 1) {
+      console.warn(`[extendDomainByKan] Code element ${startCodeId} has ${domains.length} domain labels; using first: ${startDomain.name}`);
+    }
     const seedCodeIds = /* @__PURE__ */ new Set([startCodeId]);
     const startElem = store2.getElem(startCodeId);
     if (startElem && !WALKABLE_KINDS.has(startElem.kind)) {
@@ -4550,8 +4560,12 @@ function extendDomainByKan(store2, options = {}) {
         if (!callee) continue;
         if (!WALKABLE_KINDS.has(callee.kind)) continue;
         if (isExternalModule(callee.module, options.excludeModules)) continue;
-        const existingDomain = codeIdToDomain.get(calleeId);
-        if (existingDomain) {
+        const domainEntries = codeIdToDomain.get(calleeId);
+        if (domainEntries) {
+          const existingDomain = domainEntries[0];
+          if (domainEntries.length > 1) {
+            console.warn(`[extendDomainByKan] Code element ${calleeId} has ${domainEntries.length} domain labels; using first: ${existingDomain.name}`);
+          }
           proposeArrow(item.domCand, null, existingDomain.id, existingDomain.name, "resolved");
           const calleeShell = getShell(existingDomain.id, existingDomain.name, calleeId);
           queue.push({ codeId: calleeId, domCand: calleeShell, depth: item.depth + 1 });
