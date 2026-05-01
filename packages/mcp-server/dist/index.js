@@ -4245,6 +4245,73 @@ function canonicalEquationKey(lhs, rhs) {
   }
   return `${rhsKey}\u2261${lhsKey}`;
 }
+function minePullbacks(store2, options = {}) {
+  const codeIdToDomains = /* @__PURE__ */ new Map();
+  for (const domElem of store2.queryElements({ kind: "domain", limit: 1e4 })) {
+    for (const arr of store2.outgoing(domElem.id)) {
+      if (arr.kind === "implementedAs") {
+        const entry = { id: domElem.id, name: domElem.name };
+        const existing = codeIdToDomains.get(arr.dstId);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          codeIdToDomains.set(arr.dstId, [entry]);
+        }
+      }
+    }
+  }
+  const candidates = [];
+  for (const [codeId, domains] of codeIdToDomains) {
+    if (domains.length < 2) continue;
+    const codeElem = store2.getElem(codeId);
+    if (!codeElem) continue;
+    if (isExternalModule(codeElem.module, options.excludeModules)) continue;
+    if (options.scopeRegex) {
+      try {
+        if (!new RegExp(options.scopeRegex).test(codeElem.module ?? "")) continue;
+      } catch {
+      }
+    }
+    const candidateId = randomUUID5();
+    const proposedName = toNounPhraseFromName(codeElem.name);
+    const proposedArrows = domains.map((domain) => ({
+      id: randomUUID5(),
+      name: `projects to ${domain.name}`,
+      domainCandidateId: candidateId,
+      codomainName: domain.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: domain.id,
+      total: true,
+      source: "pullback",
+      confidence: "tentative",
+      status: "proposed"
+    }));
+    const bridgeArrow = {
+      id: randomUUID5(),
+      name: "implemented as",
+      domainCandidateId: candidateId,
+      codomainName: codeElem.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: null,
+      total: true,
+      source: "pullback",
+      confidence: "tentative",
+      status: "proposed"
+    };
+    const domainNames = domains.map((d) => d.name);
+    const question = `Is this a single responsibility \u2014 should ${domainNames.join(" and ")} share implementation?`;
+    candidates.push({
+      id: candidateId,
+      codeElementId: codeId,
+      proposedName,
+      proposedArrows,
+      bridgeArrow,
+      questions: [question],
+      status: "proposed"
+    });
+  }
+  return candidates;
+}
 var ABBREV_MAP = {
   Elem: "Element",
   Arr: "Arrow",
@@ -6092,14 +6159,14 @@ function registerOlogDomainDiscover(server2, store2) {
   server2.registerTool(
     "olog_domain_discover",
     {
-      description: 'Domain modeling session tool. Two-phase workflow:\n\nPHASE 1 \u2014 type-driven discovery (action="start")\nReads interface/type/class elements and proposes domain concepts with arrows derived from field types (hasProperty\u2192hasType chains) and structural relationships (extends/implements). Scope with scopeRegex to focus on one layer at a time. Review with action="refine", then action="commit" to persist.\n\nPHASE 2 \u2014 call-graph propagation (action="extend")\nAfter at least one session has been committed, run action="extend" to execute a left Kan extension of the implementedAs functor along the call graph. Starting from every committed domain element, follows callerOf edges (up to maxDepth hops, default 2) and proposes:\n  \u2022 "calls" arrows between two already-labeled domain concepts (confidence=resolved)\n  \u2022 New domain candidates for unlabeled callees, each with a "calls" arrow from the nearest upstream domain concept (confidence=tentative)\nReturns a session with shells (existing concepts gaining new arrows) and newCandidates (unlabeled functions proposed for labeling). Review with action="refine", commit with action="commit". Repeat extend\u2192refine\u2192commit to grow coverage iteratively.\n\nRecommended workflow:\n  1. start (scopeRegex on core types) \u2192 refine \u2192 commit\n  2. extend \u2192 refine \u2192 commit   (repeat until call graph is covered)\n  3. start on a broader scope to pick up remaining types\n\nActions:\n- action="start": Begin a type-driven discovery session. Optional: scopeRegex, excludeModules. Returns sessionId, candidateCount, arrowCount, candidates with proposedNames, proposedArrows, bridgeArrows, and clarifyingQuestions.\n- action="extend": Run Kan extension from committed domain elements along the call graph. Optional: maxDepth (1\u20135, default 2), excludeModules. Returns sessionId, existingWithNewArrows, newCandidates count, shells list (existing domains + new arrows), newCandidates list.\n- action="refine": Accept/reject/rename candidates in a session. Required: sessionId, responses (array of {candidateId, status: "accepted"|"rejected"|"deferred", optional nameOverride, optional arrowOverrides: [{arrowId, status, optional newName, optional totalOverride}]}). Returns accepted/rejected/pending counts and remaining pendingCandidates.\n- action="commit": Write accepted candidates and arrows to the olog. Required: sessionId, provenance ({source: "manual"|"llm", commitSha, confidence: "resolved"|"unresolved"|"tentative"}). Returns addedObjects, reusedObjects, addedArrows, addedBridges.\n- action="list": List all sessions with status, candidateCount, commitSha, createdAt.\n- action="get": Get full session details. Required: sessionId.',
+      description: 'Domain modeling session tool. Two-phase workflow:\n\nPHASE 1 \u2014 type-driven discovery (action="start")\nReads interface/type/class elements and proposes domain concepts with arrows derived from field types (hasProperty\u2192hasType chains) and structural relationships (extends/implements). Scope with scopeRegex to focus on one layer at a time. Review with action="refine", then action="commit" to persist.\n\nPHASE 2 \u2014 call-graph propagation (action="extend")\nAfter at least one session has been committed, run action="extend" to execute a left Kan extension of the implementedAs functor along the call graph. Starting from every committed domain element, follows callerOf edges (up to maxDepth hops, default 2) and proposes:\n  \u2022 "calls" arrows between two already-labeled domain concepts (confidence=resolved)\n  \u2022 New domain candidates for unlabeled callees, each with a "calls" arrow from the nearest upstream domain concept (confidence=tentative)\nReturns a session with shells (existing concepts gaining new arrows) and newCandidates (unlabeled functions proposed for labeling). Review with action="refine", commit with action="commit". Repeat extend\u2192refine\u2192commit to grow coverage iteratively.\n\nRecommended workflow:\n  1. start (scopeRegex on core types) \u2192 refine \u2192 commit\n  2. extend \u2192 refine \u2192 commit   (repeat until call graph is covered)\n  3. start on a broader scope to pick up remaining types\n\nActions:\n- action="start": Begin a type-driven discovery session. Optional: scopeRegex, excludeModules. Returns sessionId, candidateCount, arrowCount, candidates with proposedNames, proposedArrows, bridgeArrows, and clarifyingQuestions.\n- action="extend": Run Kan extension from committed domain elements along the call graph. Optional: maxDepth (1\u20135, default 2), excludeModules. Returns sessionId, existingWithNewArrows, newCandidates count, shells list (existing domains + new arrows), newCandidates list.\n- action="refine": Accept/reject/rename candidates in a session. Required: sessionId, responses (array of {candidateId, status: "accepted"|"rejected"|"deferred", optional nameOverride, optional arrowOverrides: [{arrowId, status, optional newName, optional totalOverride}]}). Returns accepted/rejected/pending counts and remaining pendingCandidates.\n- action="commit": Write accepted candidates and arrows to the olog. Required: sessionId, provenance ({source: "manual"|"llm", commitSha, confidence: "resolved"|"unresolved"|"tentative"}). Returns addedObjects, reusedObjects, addedArrows, addedBridges.\n- action="list": List all sessions with status, candidateCount, commitSha, createdAt.\n- action="get": Get full session details. Required: sessionId.\n- action="mine_pullbacks": Discover pullback candidates \u2014 code elements with 2+ incoming implementedAs arrows indicate shared implementations that may represent domain pullbacks. Optional: scopeRegex, excludeModules. Returns sessionId, candidates.',
       inputSchema: z12.object({
-        action: z12.enum(["start", "extend", "refine", "commit", "list", "get"]).describe(
-          '"start" \u2014 type-driven discovery from interfaces/classes. "extend" \u2014 Kan extension: propagate committed labels along the call graph. "refine" \u2014 accept/reject/rename candidates in a session. "commit" \u2014 write accepted candidates to the olog. "list" \u2014 list all sessions. "get" \u2014 fetch a session by ID.'
+        action: z12.enum(["start", "extend", "refine", "commit", "list", "get", "mine_pullbacks"]).describe(
+          '"start" \u2014 type-driven discovery from interfaces/classes. "extend" \u2014 Kan extension: propagate committed labels along the call graph. "refine" \u2014 accept/reject/rename candidates in a session. "commit" \u2014 write accepted candidates to the olog. "list" \u2014 list all sessions. "get" \u2014 fetch a session by ID. "mine_pullbacks" \u2014 discover pullback candidates from shared implementations.'
         ),
         // start
-        scopeRegex: z12.string().optional().describe('(start) Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
-        excludeModules: z12.array(z12.string()).optional().describe("(start/extend) Module path patterns to exclude from discovery"),
+        scopeRegex: z12.string().optional().describe('(start/mine_pullbacks) Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
+        excludeModules: z12.array(z12.string()).optional().describe("(start/extend/mine_pullbacks) Module path patterns to exclude from discovery"),
         maxDepth: z12.number().int().min(1).max(5).optional().describe("(extend) Maximum call-graph hops to follow from each labeled domain element. Default 2."),
         // refine, commit, get
         sessionId: z12.string().optional().describe("(refine/commit/get) Session ID returned by start"),
@@ -6136,6 +6203,59 @@ function registerOlogDomainDiscover(server2, store2) {
             ...params.excludeModules !== void 0 && { excludeModules: params.excludeModules }
           };
           const candidates = discoverDomainCandidates(store2, discoveryOpts);
+          const sessionId = store2.sessions.create({
+            ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
+            candidates,
+            equations: [],
+            commitSha: store2.commitSha()
+          });
+          const allQuestions = [];
+          for (const c of candidates) {
+            allQuestions.push(...c.questions);
+            for (const a of c.proposedArrows) {
+              if (a.question) allQuestions.push(a.question);
+            }
+          }
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    sessionId,
+                    candidateCount: candidates.length,
+                    arrowCount: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
+                    candidates: candidates.map((c) => ({
+                      id: c.id,
+                      proposedName: c.proposedName,
+                      codeElement: c.codeElementId,
+                      proposedArrows: c.proposedArrows.map((a) => ({
+                        id: a.id,
+                        name: a.name,
+                        codomain: a.codomainName,
+                        total: a.total,
+                        confidence: a.confidence,
+                        question: a.question
+                      })),
+                      bridgeArrow: { name: c.bridgeArrow.name, codomain: c.bridgeArrow.codomainName },
+                      questions: c.questions,
+                      status: c.status
+                    })),
+                    clarifyingQuestions: [...new Set(allQuestions)].slice(0, 10)
+                  },
+                  null,
+                  2
+                )
+              }
+            ]
+          };
+        }
+        if (params.action === "mine_pullbacks") {
+          const opts = {
+            ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
+            ...params.excludeModules !== void 0 && { excludeModules: params.excludeModules }
+          };
+          const candidates = minePullbacks(store2, opts);
           const sessionId = store2.sessions.create({
             ...params.scopeRegex !== void 0 && { scopeRegex: params.scopeRegex },
             candidates,

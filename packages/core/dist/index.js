@@ -3914,6 +3914,73 @@ function canonicalEquationKey(lhs, rhs) {
 
 // src/domain/discover.ts
 import { randomUUID as randomUUID5 } from "crypto";
+function minePullbacks(store, options = {}) {
+  const codeIdToDomains = /* @__PURE__ */ new Map();
+  for (const domElem of store.queryElements({ kind: "domain", limit: 1e4 })) {
+    for (const arr of store.outgoing(domElem.id)) {
+      if (arr.kind === "implementedAs") {
+        const entry = { id: domElem.id, name: domElem.name };
+        const existing = codeIdToDomains.get(arr.dstId);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          codeIdToDomains.set(arr.dstId, [entry]);
+        }
+      }
+    }
+  }
+  const candidates = [];
+  for (const [codeId, domains] of codeIdToDomains) {
+    if (domains.length < 2) continue;
+    const codeElem = store.getElem(codeId);
+    if (!codeElem) continue;
+    if (isExternalModule(codeElem.module, options.excludeModules)) continue;
+    if (options.scopeRegex) {
+      try {
+        if (!new RegExp(options.scopeRegex).test(codeElem.module ?? "")) continue;
+      } catch {
+      }
+    }
+    const candidateId = randomUUID5();
+    const proposedName = toNounPhraseFromName(codeElem.name);
+    const proposedArrows = domains.map((domain) => ({
+      id: randomUUID5(),
+      name: `projects to ${domain.name}`,
+      domainCandidateId: candidateId,
+      codomainName: domain.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: domain.id,
+      total: true,
+      source: "pullback",
+      confidence: "tentative",
+      status: "proposed"
+    }));
+    const bridgeArrow = {
+      id: randomUUID5(),
+      name: "implemented as",
+      domainCandidateId: candidateId,
+      codomainName: codeElem.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: null,
+      total: true,
+      source: "pullback",
+      confidence: "tentative",
+      status: "proposed"
+    };
+    const domainNames = domains.map((d) => d.name);
+    const question = `Is this a single responsibility \u2014 should ${domainNames.join(" and ")} share implementation?`;
+    candidates.push({
+      id: candidateId,
+      codeElementId: codeId,
+      proposedName,
+      proposedArrows,
+      bridgeArrow,
+      questions: [question],
+      status: "proposed"
+    });
+  }
+  return candidates;
+}
 var ABBREV_MAP = {
   Elem: "Element",
   Arr: "Arrow",
@@ -4111,7 +4178,13 @@ function extendDomainByKan(store, options = {}) {
   for (const domElem of store.queryElements({ kind: "domain", limit: 1e4 })) {
     for (const arr of store.outgoing(domElem.id)) {
       if (arr.kind === "implementedAs") {
-        codeIdToDomain.set(arr.dstId, { id: domElem.id, name: domElem.name });
+        const entry = { id: domElem.id, name: domElem.name };
+        const existing = codeIdToDomain.get(arr.dstId);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          codeIdToDomain.set(arr.dstId, [entry]);
+        }
       }
     }
   }
@@ -4193,8 +4266,12 @@ function extendDomainByKan(store, options = {}) {
       status: "proposed"
     });
   }
-  for (const [startCodeId, startDomain] of codeIdToDomain) {
+  for (const [startCodeId, domains] of codeIdToDomain) {
+    const startDomain = domains[0];
     const shell = getShell(startDomain.id, startDomain.name, startCodeId);
+    if (domains.length > 1) {
+      console.warn(`[extendDomainByKan] Code element ${startCodeId} has ${domains.length} domain labels; using first: ${startDomain.name}`);
+    }
     const seedCodeIds = /* @__PURE__ */ new Set([startCodeId]);
     const startElem = store.getElem(startCodeId);
     if (startElem && !WALKABLE_KINDS.has(startElem.kind)) {
@@ -4219,8 +4296,12 @@ function extendDomainByKan(store, options = {}) {
         if (!callee) continue;
         if (!WALKABLE_KINDS.has(callee.kind)) continue;
         if (isExternalModule(callee.module, options.excludeModules)) continue;
-        const existingDomain = codeIdToDomain.get(calleeId);
-        if (existingDomain) {
+        const domainEntries = codeIdToDomain.get(calleeId);
+        if (domainEntries) {
+          const existingDomain = domainEntries[0];
+          if (domainEntries.length > 1) {
+            console.warn(`[extendDomainByKan] Code element ${calleeId} has ${domainEntries.length} domain labels; using first: ${existingDomain.name}`);
+          }
           proposeArrow(item.domCand, null, existingDomain.id, existingDomain.name, "resolved");
           const calleeShell = getShell(existingDomain.id, existingDomain.name, calleeId);
           queue.push({ codeId: calleeId, domCand: calleeShell, depth: item.depth + 1 });
@@ -4267,6 +4348,7 @@ export {
   isExternalModule,
   isNounPhrase,
   mineEquations,
+  minePullbacks,
   offsetAt,
   reindexProject,
   renderAndApplyPlan,

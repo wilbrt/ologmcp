@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, discoverDomainCandidates, extendDomainByKan, getExistingDomainElementsByCodeId } from '@olog/core';
+import { OlogStore, discoverDomainCandidates, extendDomainByKan, getExistingDomainElementsByCodeId, minePullbacks } from '@olog/core';
 
 export function registerOlogDomainDiscover(server: McpServer, store: OlogStore): void {
   server.registerTool(
@@ -42,26 +42,30 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
         'provenance ({source: "manual"|"llm", commitSha, confidence: "resolved"|"unresolved"|"tentative"}). ' +
         'Returns addedObjects, reusedObjects, addedArrows, addedBridges.\n' +
         '- action="list": List all sessions with status, candidateCount, commitSha, createdAt.\n' +
-        '- action="get": Get full session details. Required: sessionId.',
+        '- action="get": Get full session details. Required: sessionId.\n' +
+        '- action="mine_pullbacks": Discover pullback candidates — code elements with 2+ incoming implementedAs ' +
+        'arrows indicate shared implementations that may represent domain pullbacks. ' +
+        'Optional: scopeRegex, excludeModules. Returns sessionId, candidates.',
       inputSchema: z.object({
         action: z
-          .enum(['start', 'extend', 'refine', 'commit', 'list', 'get'])
+          .enum(['start', 'extend', 'refine', 'commit', 'list', 'get', 'mine_pullbacks'])
           .describe(
             '"start" — type-driven discovery from interfaces/classes. ' +
             '"extend" — Kan extension: propagate committed labels along the call graph. ' +
             '"refine" — accept/reject/rename candidates in a session. ' +
             '"commit" — write accepted candidates to the olog. ' +
-            '"list" — list all sessions. "get" — fetch a session by ID.',
+            '"list" — list all sessions. "get" — fetch a session by ID. ' +
+            '"mine_pullbacks" — discover pullback candidates from shared implementations.',
           ),
         // start
         scopeRegex: z
           .string()
           .optional()
-          .describe('(start) Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
+          .describe('(start/mine_pullbacks) Regex to restrict discovery to matching module paths (e.g. "packages/core/src/ontology")'),
         excludeModules: z
           .array(z.string())
           .optional()
-          .describe('(start/extend) Module path patterns to exclude from discovery'),
+          .describe('(start/extend/mine_pullbacks) Module path patterns to exclude from discovery'),
         maxDepth: z
           .number()
           .int()
@@ -115,6 +119,63 @@ export function registerOlogDomainDiscover(server: McpServer, store: OlogStore):
             ...(params.excludeModules !== undefined && { excludeModules: params.excludeModules }),
           };
           const candidates = discoverDomainCandidates(store, discoveryOpts);
+
+          const sessionId = store.sessions.create({
+            ...(params.scopeRegex !== undefined && { scopeRegex: params.scopeRegex }),
+            candidates,
+            equations: [],
+            commitSha: store.commitSha(),
+          });
+
+          const allQuestions: string[] = [];
+          for (const c of candidates) {
+            allQuestions.push(...c.questions);
+            for (const a of c.proposedArrows) {
+              if (a.question) allQuestions.push(a.question);
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(
+                  {
+                    sessionId,
+                    candidateCount: candidates.length,
+                    arrowCount: candidates.reduce((n, c) => n + c.proposedArrows.length, 0),
+                    candidates: candidates.map(c => ({
+                      id: c.id,
+                      proposedName: c.proposedName,
+                      codeElement: c.codeElementId,
+                      proposedArrows: c.proposedArrows.map(a => ({
+                        id: a.id,
+                        name: a.name,
+                        codomain: a.codomainName,
+                        total: a.total,
+                        confidence: a.confidence,
+                        question: a.question,
+                      })),
+                      bridgeArrow: { name: c.bridgeArrow.name, codomain: c.bridgeArrow.codomainName },
+                      questions: c.questions,
+                      status: c.status,
+                    })),
+                    clarifyingQuestions: [...new Set(allQuestions)].slice(0, 10),
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
+
+        if (params.action === 'mine_pullbacks') {
+          const opts = {
+            ...(params.scopeRegex !== undefined && { scopeRegex: params.scopeRegex }),
+            ...(params.excludeModules !== undefined && { excludeModules: params.excludeModules }),
+          };
+          const candidates = minePullbacks(store, opts);
 
           const sessionId = store.sessions.create({
             ...(params.scopeRegex !== undefined && { scopeRegex: params.scopeRegex }),

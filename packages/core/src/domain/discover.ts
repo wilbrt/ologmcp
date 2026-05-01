@@ -2,6 +2,90 @@ import { randomUUID } from 'node:crypto';
 import type { OlogStore } from '../db.js';
 import type { DomainCandidate, ArrowProposal, DiscoveryOptions } from './types.js';
 
+export function minePullbacks(
+  store: OlogStore,
+  options: DiscoveryOptions = {},
+): DomainCandidate[] {
+  // Build map from code element ID to domain elements that implement it
+  const codeIdToDomains = new Map<string, Array<{ id: string; name: string }>>();
+  for (const domElem of store.queryElements({ kind: 'domain', limit: 10000 })) {
+    for (const arr of store.outgoing(domElem.id)) {
+      if (arr.kind === 'implementedAs') {
+        const entry = { id: domElem.id, name: domElem.name };
+        const existing = codeIdToDomains.get(arr.dstId);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          codeIdToDomains.set(arr.dstId, [entry]);
+        }
+      }
+    }
+  }
+
+  // Find code elements with 2+ incoming implementedAs arrows
+  const candidates: DomainCandidate[] = [];
+  for (const [codeId, domains] of codeIdToDomains) {
+    if (domains.length < 2) continue;
+
+    const codeElem = store.getElem(codeId);
+    if (!codeElem) continue;
+    if (isExternalModule(codeElem.module, options.excludeModules)) continue;
+    if (options.scopeRegex) {
+      try {
+        if (!new RegExp(options.scopeRegex).test(codeElem.module ?? '')) continue;
+      } catch {
+        // invalid regex — skip filter
+      }
+    }
+
+    const candidateId = randomUUID();
+    const proposedName = toNounPhraseFromName(codeElem.name);
+
+    // Projection arrows P → A, P → B for each source domain
+    const proposedArrows: ArrowProposal[] = domains.map((domain) => ({
+      id: randomUUID(),
+      name: `projects to ${domain.name}`,
+      domainCandidateId: candidateId,
+      codomainName: domain.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: domain.id,
+      total: true,
+      source: 'pullback' as const,
+      confidence: 'tentative' as const,
+      status: 'proposed' as const,
+    }));
+
+    // Bridge arrow: P is implemented as the shared code element
+    const bridgeArrow: ArrowProposal = {
+      id: randomUUID(),
+      name: 'implemented as',
+      domainCandidateId: candidateId,
+      codomainName: codeElem.name,
+      codomainCandidateId: null,
+      codomainExistingElemId: null,
+      total: true,
+      source: 'pullback',
+      confidence: 'tentative',
+      status: 'proposed',
+    };
+
+    const domainNames = domains.map(d => d.name);
+    const question = `Is this a single responsibility — should ${domainNames.join(' and ')} share implementation?`;
+
+    candidates.push({
+      id: candidateId,
+      codeElementId: codeId,
+      proposedName,
+      proposedArrows,
+      bridgeArrow,
+      questions: [question],
+      status: 'proposed',
+    });
+  }
+
+  return candidates;
+}
+
 const ABBREV_MAP: Record<string, string> = {
   Elem: 'Element',
   Arr: 'Arrow',
@@ -286,11 +370,17 @@ export function extendDomainByKan(
   const maxDepth = options.maxDepth ?? 2;
 
   // code element id → existing domain element
-  const codeIdToDomain = new Map<string, { id: string; name: string }>();
+  const codeIdToDomain = new Map<string, Array<{ id: string; name: string }>>();
   for (const domElem of store.queryElements({ kind: 'domain', limit: 10000 })) {
     for (const arr of store.outgoing(domElem.id)) {
       if (arr.kind === 'implementedAs') {
-        codeIdToDomain.set(arr.dstId, { id: domElem.id, name: domElem.name });
+        const entry = { id: domElem.id, name: domElem.name };
+        const existing = codeIdToDomain.get(arr.dstId);
+        if (existing) {
+          existing.push(entry);
+        } else {
+          codeIdToDomain.set(arr.dstId, [entry]);
+        }
       }
     }
   }
@@ -364,8 +454,12 @@ export function extendDomainByKan(
     });
   }
 
-  for (const [startCodeId, startDomain] of codeIdToDomain) {
+  for (const [startCodeId, domains] of codeIdToDomain) {
+    const startDomain = domains[0]!; // Use first entry for BFS seeding (backward compatible)
     const shell = getShell(startDomain.id, startDomain.name, startCodeId);
+    if (domains.length > 1) {
+      console.warn(`[extendDomainByKan] Code element ${startCodeId} has ${domains.length} domain labels; using first: ${startDomain.name}`);
+    }
 
     // Expand type/class/interface elements to their member functions, because
     // callerOf arrows live on function/method nodes, not on type declarations.
@@ -399,8 +493,12 @@ export function extendDomainByKan(
         if (!WALKABLE_KINDS.has(callee.kind)) continue;
         if (isExternalModule(callee.module, options.excludeModules)) continue;
 
-        const existingDomain = codeIdToDomain.get(calleeId);
-        if (existingDomain) {
+        const domainEntries = codeIdToDomain.get(calleeId);
+        if (domainEntries) {
+          const existingDomain = domainEntries[0]!; // Use first entry for backward compatibility
+          if (domainEntries.length > 1) {
+            console.warn(`[extendDomainByKan] Code element ${calleeId} has ${domainEntries.length} domain labels; using first: ${existingDomain.name}`);
+          }
           proposeArrow(item.domCand, null, existingDomain.id, existingDomain.name, 'resolved');
           const calleeShell = getShell(existingDomain.id, existingDomain.name, calleeId);
           queue.push({ codeId: calleeId, domCand: calleeShell, depth: item.depth + 1 });

@@ -19,7 +19,7 @@ export interface ArrowProposal {
   /** ID of an already-committed domain element (fallback when codomainCandidateId is null). */
   codomainExistingElemId: string | null;
   total: boolean;
-  source: 'field' | 'method' | 'type_ref' | 'extends' | 'implements' | 'kan_extension';
+  source: 'field' | 'method' | 'type_ref' | 'extends' | 'implements' | 'kan_extension' | 'pullback';
   confidence: ConfidenceLevel;
   question?: string;
   status: 'proposed' | 'accepted' | 'rejected' | 'modified';
