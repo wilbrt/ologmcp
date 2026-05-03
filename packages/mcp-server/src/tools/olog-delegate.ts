@@ -61,17 +61,36 @@ export function registerOlogDelegate(
         snippetLines: z.number().int().min(10).max(200).default(50).describe(
           'Maximum lines of source code per snippet.',
         ),
+        lineRange: z.object({
+          start: z.number(),
+          end: z.number(),
+        }).optional().describe(
+          'Line range to narrow focus within a file.',
+        ),
+        skipAnalogues: z.boolean().optional().describe(
+          'Skip analogue discovery; overrides maxAnalogues to 0.',
+        ),
+        signatureChange: z.boolean().optional().describe(
+          'Allow signature changes in generated code.',
+        ),
+        rationale: z.string().optional().describe(
+          'Why this body rewrite is needed. Passed through to the delegation brief so the edit agent understands the intent. Populate from pendingDelegations[].rationale returned by olog_apply.',
+        ),
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines }) => {
+    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines, lineRange, skipAnalogues, signatureChange, rationale }) => {
       try {
+        const effectiveMaxAnalogues = skipAnalogues ? 0 : maxAnalogues;
         const overrides: ContextOverrides | undefined =
           contextOverrides
             ? {
                 ...(contextOverrides.mustCall ? { mustCall: contextOverrides.mustCall } : {}),
                 ...(contextOverrides.mustImplement ? { mustImplement: contextOverrides.mustImplement } : {}),
                 ...(contextOverrides.analogues ? { analogues: contextOverrides.analogues } : {}),
+                ...(lineRange ? { lineRange } : {}),
+                ...(skipAnalogues !== undefined ? { skipAnalogues } : {}),
+                ...(signatureChange !== undefined ? { signatureChange } : {}),
               }
             : undefined;
         const result = assembleBrief(
@@ -80,9 +99,10 @@ export function registerOlogDelegate(
           task as DelegationTask,
           target,
           overrides,
-          maxAnalogues,
+          effectiveMaxAnalogues,
           snippetLines,
           acceptanceCriteria,
+          rationale,
         );
 
         if ('ok' in result && result.ok === false) {

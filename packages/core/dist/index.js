@@ -3260,7 +3260,7 @@ var TASK_CRITERIA = {
     "Must describe thrown errors."
   ]
 };
-function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria) {
+function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria, rationale) {
   const target = store.getElem(targetId);
   if (!target) {
     return { ok: false, error: `Element not found: ${targetId}` };
@@ -3279,7 +3279,8 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
   const mustImplementEntries = overrides?.mustImplement ? resolveElementList(store, overrides.mustImplement) : gatherMustImplement(store, targetId);
   const usedByEntries = gatherUsedBy(store, targetId);
   const importEntries = gatherImports(store, targetModule);
-  const analogueCandidates = overrides?.analogues ? resolveAnalogueList(store, overrides.analogues) : findAnalogues(store, target, maxAnalogues);
+  const shouldSkipAnalogues = overrides?.skipAnalogues === true || maxAnalogues === 0;
+  const analogueCandidates = shouldSkipAnalogues ? [] : overrides?.analogues ? resolveAnalogueList(store, overrides.analogues) : findAnalogues(store, target, maxAnalogues);
   const resolvedMustCall = mustCallEntries.map((entry) => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
     const calleeCallees = getDirectCallees(store, entry.id).slice(0, 5).flatMap((tc) => {
@@ -3304,8 +3305,14 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
       importStatement: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule)
     };
   });
-  const resolvedUsedBy = usedByEntries.map((entry) => {
+  const resolvedUsedBy = usedByEntries.slice(0, overrides?.signatureChange ? 3 : void 0).map((entry) => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    if (overrides?.signatureChange) {
+      return {
+        name: entry.name,
+        fullDeclaration: resolver.readDeclaration(entryFilePath, entry.span ?? "", entry.kind) ?? ""
+      };
+    }
     const callSiteSnippet = entry.span ? resolver.readSpan(entryFilePath, entry.span) ?? "" : "";
     return { name: entry.name, callSiteSnippet };
   });
@@ -3341,7 +3348,8 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
       modulePath: candidate.module ?? ""
     };
   });
-  const targetFileContent = target.span ? resolver.readFocused(filePath, target.span, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? "" : resolver.readFileContent(filePath, 500) ?? "";
+  const targetSpan = overrides?.lineRange ? `${overrides.lineRange.start}:0-${overrides.lineRange.end}:0` : target.span ?? "";
+  const targetFileContent = targetSpan ? resolver.readFocused(filePath, targetSpan, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? "" : resolver.readFileContent(filePath, 500) ?? "";
   const domainContext = gatherDomainContext(store, targetId);
   const defaultCriteria = TASK_CRITERIA[task] ?? [];
   const acceptanceCriteria = [...defaultCriteria, ...extraCriteria ?? []];
@@ -3349,6 +3357,7 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
   const provenanceConfidence = determineConfidence(store, targetId);
   return {
     task,
+    ...rationale !== void 0 ? { rationale } : {},
     target: {
       id: target.id,
       name: target.name,
@@ -3357,7 +3366,7 @@ function assembleBrief(store, projectRoot, task, targetId, overrides, maxAnalogu
       signature: targetSignature,
       bodyPlaceholder,
       filePath,
-      lineRange: parsedSpan ?? { start: 1, end: 1 }
+      lineRange: overrides?.lineRange ?? parsedSpan ?? { start: 1, end: 1 }
     },
     mustCall: resolvedMustCall,
     mustImplement: resolvedMustImplement,

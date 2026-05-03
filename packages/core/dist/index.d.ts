@@ -1065,6 +1065,7 @@ declare function renderAndApplyPlan(store: OlogStore, operations: PlanOperation[
 type DelegationTask = 'write_function_body' | 'write_test' | 'write_migration' | 'rewrite_body' | 'write_documentation';
 interface DelegationBrief {
     task: DelegationTask;
+    rationale?: string;
     target: {
         id: string;
         name: string;
@@ -1096,7 +1097,8 @@ interface DelegationBrief {
     }>;
     usedBy: Array<{
         name: string;
-        callSiteSnippet: string;
+        callSiteSnippet?: string;
+        fullDeclaration?: string;
     }>;
     importsInTargetFile: string[];
     /**
@@ -1150,9 +1152,15 @@ interface ContextOverrides {
     mustCall?: string[];
     mustImplement?: string[];
     analogues?: string[];
+    lineRange?: {
+        start: number;
+        end: number;
+    };
+    skipAnalogues?: boolean;
+    signatureChange?: boolean;
 }
 
-declare function assembleBrief(store: OlogStore, projectRoot: string, task: DelegationTask, targetId: string, overrides?: ContextOverrides, maxAnalogues?: number, snippetLines?: number, extraCriteria?: string[]): DelegationBrief | {
+declare function assembleBrief(store: OlogStore, projectRoot: string, task: DelegationTask, targetId: string, overrides?: ContextOverrides, maxAnalogues?: number, snippetLines?: number, extraCriteria?: string[], rationale?: string): DelegationBrief | {
     ok: false;
     error: string;
 };

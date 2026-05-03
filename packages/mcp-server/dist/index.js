@@ -5373,7 +5373,15 @@ function registerOlogApply(server2, store2, projectRoot2) {
             ]
           };
         }
-        const result = store2.applyPlan(plan.operations);
+        const allOps = plan.operations;
+        const mechanicalOps = allOps.filter((op) => op.kind !== "rewrite_body");
+        const rewriteBodyOps = allOps.filter((op) => op.kind === "rewrite_body");
+        const pendingDelegations = rewriteBodyOps.map((op) => ({
+          target: op.target,
+          task: "rewrite_body",
+          rationale: op.rationale
+        }));
+        const result = store2.applyPlan(allOps);
         if (!render || !projectRoot2) {
           if (result.errors.length > 0) {
             return {
@@ -5402,7 +5410,7 @@ function registerOlogApply(server2, store2, projectRoot2) {
             ]
           };
         }
-        const renderResult = renderPlan(store2, plan.operations, projectRoot2);
+        const renderResult = renderPlan(store2, mechanicalOps, projectRoot2);
         if (renderResult.edits.length > 0) {
           const applyResult = await applySourceEdits(renderResult.edits, projectRoot2);
           if (applyResult.errors.length > 0) {
@@ -5448,7 +5456,8 @@ function registerOlogApply(server2, store2, projectRoot2) {
                         newText: e.newText
                       })),
                       warnings: renderResult.warnings,
-                      reingestWarning: `Re-ingest failed: ${msg}`
+                      reingestWarning: `Re-ingest failed: ${msg}`,
+                      pendingDelegations
                     },
                     null,
                     2
@@ -5475,7 +5484,8 @@ function registerOlogApply(server2, store2, projectRoot2) {
                       newText: e.newText
                     })),
                     warnings: renderResult.warnings,
-                    affectedFiles: applyResult.affectedFiles
+                    affectedFiles: applyResult.affectedFiles,
+                    pendingDelegations
                   },
                   null,
                   2
@@ -5496,7 +5506,8 @@ function registerOlogApply(server2, store2, projectRoot2) {
                   note: "Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.",
                   summary: `Applied ${result.applied} DB operations (no source edits needed)`,
                   dbChanges: result.changes,
-                  warnings: renderResult.warnings
+                  warnings: renderResult.warnings,
+                  pendingDelegations
                 },
                 null,
                 2

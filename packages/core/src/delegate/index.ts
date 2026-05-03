@@ -7,6 +7,7 @@ export type DelegationTask =
 
 export interface DelegationBrief {
   task: DelegationTask;
+  rationale?: string;
 
   target: {
     id: string;
@@ -35,7 +36,8 @@ export interface DelegationBrief {
 
   usedBy: Array<{
     name: string;
-    callSiteSnippet: string;
+    callSiteSnippet?: string;
+    fullDeclaration?: string;
   }>;
 
   importsInTargetFile: string[];
@@ -89,6 +91,9 @@ export interface ContextOverrides {
   mustCall?: string[];
   mustImplement?: string[];
   analogues?: string[];
+  lineRange?: { start: number; end: number };
+  skipAnalogues?: boolean;
+  signatureChange?: boolean;
 }
 
 import type { OlogStore } from '../db.js';
@@ -153,6 +158,7 @@ export function assembleBrief(
   maxAnalogues: number = 3,
   snippetLines: number = 50,
   extraCriteria?: string[],
+  rationale?: string,
 ): DelegationBrief | { ok: false; error: string } {
   const target = store.getElem(targetId);
   if (!target) {
@@ -184,7 +190,10 @@ export function assembleBrief(
   const usedByEntries = gatherUsedBy(store, targetId);
   const importEntries = gatherImports(store, targetModule);
 
-  const analogueCandidates = overrides?.analogues
+  const shouldSkipAnalogues = overrides?.skipAnalogues === true || maxAnalogues === 0;
+  const analogueCandidates = shouldSkipAnalogues
+    ? []
+    : overrides?.analogues
     ? resolveAnalogueList(store, overrides.analogues)
     : findAnalogues(store, target, maxAnalogues);
 
@@ -214,8 +223,14 @@ export function assembleBrief(
     };
   });
 
-  const resolvedUsedBy = usedByEntries.map(entry => {
+  const resolvedUsedBy = usedByEntries.slice(0, overrides?.signatureChange ? 3 : undefined).map(entry => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? '') ?? localModuleToFilePath(entry.module ?? '');
+    if (overrides?.signatureChange) {
+      return {
+        name: entry.name,
+        fullDeclaration: resolver.readDeclaration(entryFilePath, entry.span ?? '', entry.kind) ?? '',
+      };
+    }
     const callSiteSnippet = entry.span ? resolver.readSpan(entryFilePath, entry.span) ?? '' : '';
     return { name: entry.name, callSiteSnippet };
   });
@@ -260,8 +275,11 @@ export function assembleBrief(
     };
   });
 
-  const targetFileContent = target.span
-    ? resolver.readFocused(filePath, target.span, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? ''
+  const targetSpan = overrides?.lineRange
+    ? `${overrides.lineRange.start}:0-${overrides.lineRange.end}:0`
+    : target.span ?? '';
+  const targetFileContent = targetSpan
+    ? resolver.readFocused(filePath, targetSpan, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? ''
     : resolver.readFileContent(filePath, 500) ?? '';
 
   const domainContext = gatherDomainContext(store, targetId);
@@ -274,6 +292,7 @@ export function assembleBrief(
 
   return {
     task,
+    ...(rationale !== undefined ? { rationale } : {}),
     target: {
       id: target.id,
       name: target.name,
@@ -282,7 +301,7 @@ export function assembleBrief(
       signature: targetSignature,
       bodyPlaceholder: bodyPlaceholder,
       filePath,
-      lineRange: parsedSpan ?? { start: 1, end: 1 },
+      lineRange: overrides?.lineRange ?? parsedSpan ?? { start: 1, end: 1 },
     },
     mustCall: resolvedMustCall,
     mustImplement: resolvedMustImplement,
