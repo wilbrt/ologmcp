@@ -9,14 +9,14 @@ export interface AddSymbolEdits {
 }
 
 const STUB_TEMPLATES: Record<string, (name: string) => string> = {
-  function: (name) => `export function ${name}() {\n  // TODO: implement\n}\n`,
-  method: (name) => `${name}() {\n    // TODO: implement\n  }\n`,
-  class: (name) => `export class ${name} {\n  // TODO: implement\n}\n`,
-  interface: (name) => `export interface ${name} {\n  // TODO: define properties\n}\n`,
-  type: (name) => `export type ${name} = unknown;\n`,
-  enum: (name) => `export enum ${name} {\n  // TODO: add members\n}\n`,
+  function: (name) => `export function ${name}() {\n  throw new Error('Not implemented');\n}\n`,
+  method: (name) => `${name}() {\n  throw new Error('Not implemented');\n}\n`,
+  class: (name) => `export class ${name} {\n  throw new Error('Not implemented');\n}\n`,
+  interface: (name) => `export interface ${name} {}\n`,
+  type: (name) => `export type ${name} = never;\n`,
+  enum: (name) => `export enum ${name} {}\n`,
   const: (name) => `export const ${name} = undefined;\n`,
-  var: (name) => `export var ${name}: unknown;\n`,
+  var: (name) => `export var ${name}: any;\n`,
 };
 
 const CLJ_STUB_TEMPLATES: Record<string, (name: string) => string> = {

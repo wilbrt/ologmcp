@@ -5,6 +5,8 @@ import { computeRenameEdits } from './strategies/rename.js';
 import { computeRemoveSymbolEdits } from './strategies/remove-symbol.js';
 import { computeAddSymbolEdits } from './strategies/add-symbol.js';
 import { computeMoveEdits } from './strategies/move.js';
+import { computeAddReexportEdits } from './strategies/add-reexport.js';
+import { computeAmendTypeEdits } from './strategies/amend-type.js';
 
 export interface AtomicEdits {
   edits: SourceEdit[];
@@ -43,6 +45,12 @@ export function expandOperation(
     case 'rewrite_body':
       // Body rewrites are handled via olog_delegate + @edit, not the render pipeline.
       return { edits: [], warnings: [] };
+
+    case 'addReexport':
+      return computeAddReexportEdits(store, operation.module, operation.name, operation.fromModule, readFile);
+
+    case 'amendType':
+      return computeAmendTypeEdits(store, operation.target, operation.field, operation.action, operation.value, readFile);
 
     default:
       return { edits: [], warnings: [`Unknown operation kind: ${(operation as PlanOperation).kind}`] };

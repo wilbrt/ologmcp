@@ -152,6 +152,43 @@ function verifyOperation(store: OlogStore, op: PlanOperation): string[] {
       }
       break;
     }
+    case 'addReexport': {
+      const found = store.queryElements({
+        kind: 'any',
+        nameRegex: `^${op.name}$`,
+        moduleRegex: `^${op.module.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+        limit: 1,
+      });
+      if (found.length === 0) {
+        discrepancies.push(`addReexport: "${op.name}" not found in "${op.module}" after render`);
+      }
+      break;
+    }
+    case 'amendType': {
+      const elem = store.getElem(op.target);
+      if (!elem) {
+        discrepancies.push(`amendType: "${op.target}" does not exist after render`);
+      }
+      break;
+    }
+    case 'addArrow': {
+      const srcElem = store.getElem(op.src);
+      const dstElem = store.getElem(op.dst);
+      if (!srcElem) {
+        discrepancies.push(`addArrow: source element "${op.src}" does not exist after render`);
+      }
+      if (!dstElem) {
+        discrepancies.push(`addArrow: destination element "${op.dst}" does not exist after render`);
+      }
+      break;
+    }
+    case 'removeArrow': {
+      const arr = store.getArr(op.arrowId);
+      if (arr) {
+        discrepancies.push(`removeArrow: arrow "${op.arrowId}" still exists after render`);
+      }
+      break;
+    }
   }
 
   return discrepancies;

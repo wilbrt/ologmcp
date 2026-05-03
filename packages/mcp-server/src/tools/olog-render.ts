@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, renderPlan } from '@olog/core';
-import { planStore } from './olog-plan.js';
+import { OlogStore, renderPlan, type PlanOperation } from '@olog/core';
+import { loadPlan } from './olog-plan-store.js';
 
 export function registerOlogRender(server: McpServer, store: OlogStore, projectRoot: string): void {
   server.registerTool(
@@ -16,7 +16,7 @@ export function registerOlogRender(server: McpServer, store: OlogStore, projectR
     },
     async ({ planHash }) => {
       try {
-        const plan = planStore.get(planHash);
+        const plan = loadPlan(planHash, projectRoot);
         if (!plan) {
           return {
             content: [
@@ -29,7 +29,7 @@ export function registerOlogRender(server: McpServer, store: OlogStore, projectR
           };
         }
 
-        const result = renderPlan(store, plan.operations, projectRoot);
+        const result = renderPlan(store, plan.operations as unknown as PlanOperation[], projectRoot);
 
         return {
           content: [

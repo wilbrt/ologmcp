@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { OlogStore, type PlanOperation, renderPlan, applySourceEdits, rollback, reindexProject, getDefaultRegistry } from '@olog/core';
-import { planStore } from './olog-plan.js';
+import { loadPlan } from './olog-plan-store.js';
 
 const planOperationSchema = z.union([
   z.object({ kind: z.literal('rename'), target: z.string(), newName: z.string() }),
@@ -10,6 +10,9 @@ const planOperationSchema = z.union([
   z.object({ kind: z.literal('removeSymbol'), target: z.string() }),
   z.object({ kind: z.literal('addArrow'), arrowKind: z.string(), src: z.string(), dst: z.string() }),
   z.object({ kind: z.literal('removeArrow'), arrowId: z.string() }),
+  z.object({ kind: z.literal('addReexport'), module: z.string(), name: z.string(), fromModule: z.string() }),
+  z.object({ kind: z.literal('amendType'), target: z.string(), field: z.string(), action: z.enum(['addUnionMember', 'addProperty']), value: z.string() }),
+  z.object({ kind: z.literal('rewrite_body'), target: z.string(), rationale: z.string() }),
 ]);
 
 const planSchema = z.object({
@@ -23,7 +26,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
     'olog_apply',
     {
       description:
-        'Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match.',
+        'Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match. Supports rename, move, addSymbol, removeSymbol, addArrow, removeArrow, addReexport, amendType, and rewrite_body operations.',
       inputSchema: z.object({
         plan: planSchema.describe('The plan object to apply, including its hash.'),
         planHash: z.string().describe('The expected hash of the plan. Must match plan.hash.'),
@@ -37,7 +40,17 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
     },
     async ({ plan, planHash, render }) => {
       try {
-        const storedPlan = planStore.get(planHash);
+        if (!projectRoot) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify({ ok: false, reason: 'projectRoot is required to load plans' }, null, 2),
+              },
+            ],
+          };
+        }
+        const storedPlan = loadPlan(planHash, projectRoot);
         if (!storedPlan) {
           return {
             content: [
@@ -133,6 +146,8 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
                   text: JSON.stringify(
                     {
                       ok: true,
+                      reindexed: true,
+                      note: 'Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.',
                       summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
                       dbChanges: result.changes,
                       sourceEdits: renderResult.edits.map(e => ({
@@ -159,6 +174,8 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
                 text: JSON.stringify(
                   {
                     ok: true,
+                    reindexed: true,
+                    note: 'Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.',
                     summary: `Applied ${result.applied} DB operations and ${applyResult.applied} source edits`,
                     dbChanges: result.changes,
                     sourceEdits: renderResult.edits.map(e => ({
@@ -179,6 +196,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
         }
 
         // No source edits needed
+        reindexProject(projectRoot, store, getDefaultRegistry());
         return {
           content: [
             {
@@ -186,6 +204,8 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
               text: JSON.stringify(
                 {
                   ok: true,
+                  reindexed: true,
+                  note: 'Element IDs may have shifted due to re-ingestion. Re-query elements before subsequent operations.',
                   summary: `Applied ${result.applied} DB operations (no source edits needed)`,
                   dbChanges: result.changes,
                   warnings: renderResult.warnings,

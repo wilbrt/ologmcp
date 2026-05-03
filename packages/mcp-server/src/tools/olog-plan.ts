@@ -3,8 +3,15 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { OlogStore } from '@olog/core';
 import type { PathEquation, IntegrityConstraint } from '@olog/core';
+import type { StoredPlan } from './olog-plan-store.js';
+import { persistPlan, loadPlan } from './olog-plan-store.js';
 
-const operationSchema = z.union([
+export function registerOlogPlan(
+  server: McpServer,
+  store: OlogStore,
+  projectRoot: string
+): void {
+  const operationSchema = z.union([
   z.object({
     kind: z.literal('rename'),
     target: z.string(),
@@ -40,28 +47,28 @@ const operationSchema = z.union([
     target: z.string().describe('Element ID of the function/method whose body will be rewritten'),
     rationale: z.string().describe('Why the body needs rewriting and what the intended change is'),
   }),
+  z.object({
+    kind: z.literal('addReexport'),
+    module: z.string(),
+    name: z.string(),
+    fromModule: z.string(),
+  }),
+  z.object({
+    kind: z.literal('amendType'),
+    target: z.string().describe('Element ID of the type/interface to amend'),
+    field: z.string().describe('Name of the field/property to amend'),
+    action: z.enum(['addUnionMember', 'addProperty']).describe('Type of amendment'),
+    value: z.string().describe('Value to add (e.g. union member name or type string)'),
+  }),
 ]);
 
 type PlanOperationInput = z.infer<typeof operationSchema>;
 
-interface StoredPlan {
-  operations: PlanOperationInput[];
-  hash: string;
-  rationale: string;
-  invariants: {
-    equations: PathEquation[];
-    constraints: IntegrityConstraint[];
-  };
-}
-
-export const planStore = new Map<string, StoredPlan>();
-
-export function registerOlogPlan(server: McpServer, store: OlogStore): void {
   server.registerTool(
     'olog_plan',
     {
       description:
-        'Describe a set of structural changes as a plan with invariants. The plan is stored in-memory keyed by its hash for later validation and application.',
+        'Describe a set of structural changes as a plan with invariants. The plan is persisted to disk keyed by its hash for later validation and application.',
       inputSchema: z.object({
         operations: z
           .array(operationSchema)
@@ -157,7 +164,7 @@ export function registerOlogPlan(server: McpServer, store: OlogStore): void {
           invariants,
         };
 
-        planStore.set(hash, plan);
+        persistPlan(hash, plan, projectRoot);
 
         return {
           content: [
@@ -182,6 +189,6 @@ export function registerOlogPlan(server: McpServer, store: OlogStore): void {
   );
 }
 
-export function getPlanByHash(hash: string): StoredPlan | undefined {
-  return planStore.get(hash);
+export function getPlanByHash(hash: string, projectRoot: string): StoredPlan | undefined {
+  return loadPlan(hash, projectRoot);
 }

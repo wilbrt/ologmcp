@@ -1434,9 +1434,10 @@ var OlogStore = class {
               const moduleElems = this.db.prepare(
                 "SELECT id FROM olog_elem WHERE module = ? LIMIT 1"
               ).all(op.module);
-              if (moduleElems.length > 0) {
-                const arrId = `${moduleElems[0].id}:references:${id}`;
-                insertArr.run(arrId, "references", moduleElems[0].id, id, "{}");
+              const firstModuleElem = moduleElems[0];
+              if (firstModuleElem) {
+                const arrId = `${firstModuleElem.id}:references:${id}`;
+                insertArr.run(arrId, "references", firstModuleElem.id, id, "{}");
               }
               applied++;
               changes.push({

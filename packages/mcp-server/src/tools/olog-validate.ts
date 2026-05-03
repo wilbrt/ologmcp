@@ -4,7 +4,7 @@ import { OlogStore } from '@olog/core';
 import { evaluateConstraints, evaluatePathEquations } from '@olog/core';
 import type { Violation } from '@olog/core';
 import type { PlanOperation } from '@olog/core';
-import { planStore } from './olog-plan.js';
+import { loadPlan } from './olog-plan-store.js';
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -49,6 +49,9 @@ class ProjectedState {
         this.removedArrIds.add(op.arrowId);
       } else if (op.kind === 'rewrite_body') {
         // no projected state change — body rewrites don't alter the graph structure
+      } else if (op.kind === 'addReexport') {
+        const id = `projected:${op.module}:other:${op.name}`;
+        this.addedElems.set(id, { id, kind: 'other', name: op.name, module: op.module });
       }
     }
   }
@@ -106,7 +109,7 @@ class ProjectedState {
   }
 }
 
-export function registerOlogValidate(server: McpServer, store: OlogStore): void {
+export function registerOlogValidate(server: McpServer, store: OlogStore, projectRoot: string): void {
   server.registerTool(
     'olog_validate',
     {
@@ -121,7 +124,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore): void 
     },
     async ({ planHash }) => {
       try {
-        const plan = planStore.get(planHash);
+        const plan = loadPlan(planHash, projectRoot);
         if (!plan) {
           return {
             content: [
@@ -245,6 +248,39 @@ export function registerOlogValidate(server: McpServer, store: OlogStore): void 
                 kind: 'constraint',
                 humanMessage: `rewrite_body: conflicts with "${conflict.kind}" on the same element "${op.target}"`,
                 involved: [op.target],
+              });
+            }
+          }
+
+          if (op.kind === 'amendType') {
+            if (!projected.elemExists(op.target)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: 'notFound',
+                humanMessage: `amendType: element not found: "${op.target}"`,
+                involved: [op.target],
+              });
+            }
+          }
+
+          if (op.kind === 'addReexport') {
+            const moduleExists = store.queryElements({
+              moduleRegex: `^${escapeRegex(op.module)}$`,
+              limit: 1,
+            });
+            if (moduleExists.length === 0) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: 'notFound',
+                humanMessage: `addReexport: module not found: "${op.module}"`,
+                involved: [],
+              });
+            } else if (projected.nameConflicts(op.name, op.module, '')) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: 'uniqueness',
+                humanMessage: `addReexport: "${op.name}" would conflict with an existing element in "${op.module}"`,
+                involved: [],
               });
             }
           }
