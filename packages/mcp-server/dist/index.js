@@ -487,7 +487,9 @@ If the task starts with \`PREFETCH: <filepath>\`:
 
 <constraints>
 - No edits. No subagent calls.
-- Mode A: all information from olog MCP tools only. No file reads.
+- Mode A: **never use the read tool**. If the question asks for source code of a function
+  or class, use \`olog_query\` to find the element by name, then \`olog_inspect\` on its ID \u2014
+  \`olog_inspect\` returns the source snippet directly from the stored span. Do not read files.
 - Mode B: read the specified file only. No olog queries.
 - If confidence is \`unresolved\` or \`tentative\`, flag it: \`[ref: <id>, confidence: unresolved]\`
 - Cite element IDs, not just names.
@@ -1426,11 +1428,63 @@ var OlogStore = class {
               });
               break;
             }
+            case "addReexport": {
+              const id = `projected:${op.module}:other:${op.name}`;
+              insertElem.run(id, "other", op.name, op.module, null, "{}");
+              const moduleElems = this.db.prepare(
+                "SELECT id FROM olog_elem WHERE module = ? LIMIT 1"
+              ).all(op.module);
+              if (moduleElems.length > 0) {
+                const arrId = `${moduleElems[0].id}:references:${id}`;
+                insertArr.run(arrId, "references", moduleElems[0].id, id, "{}");
+              }
+              applied++;
+              changes.push({
+                path: op.module,
+                line: 0,
+                column: 0,
+                oldText: "",
+                newText: op.name
+              });
+              break;
+            }
+            case "amendType": {
+              const elemRow = this.getElemStmt.get(op.target);
+              if (!elemRow) {
+                skipped++;
+                errors.push(`Element not found: ${op.target}`);
+                break;
+              }
+              const attrs = JSON.parse(elemRow.attrs);
+              if (op.action === "addUnionMember") {
+                if (!attrs[op.field]) {
+                  attrs[op.field] = [];
+                }
+                if (Array.isArray(attrs[op.field])) {
+                  attrs[op.field].push(op.value);
+                }
+              } else if (op.action === "addProperty") {
+                attrs[op.field] = op.value;
+              }
+              this.db.prepare("UPDATE olog_elem SET attrs = ? WHERE id = ?").run(JSON.stringify(attrs), op.target);
+              applied++;
+              changes.push({
+                path: elemRow.module ?? "",
+                line: 0,
+                column: 0,
+                oldText: "",
+                newText: `${op.field}: ${op.value}`
+              });
+              break;
+            }
+            default:
+              skipped++;
+              errors.push(`Unknown operation kind: ${op.kind}`);
+              break;
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          skipped++;
-          errors.push(`${op.kind}: ${msg}`);
+          errors.push(msg);
         }
       }
     });
@@ -2853,30 +2907,26 @@ function moduleToFilePath(moduleId) {
 }
 var STUB_TEMPLATES = {
   function: (name) => `export function ${name}() {
-  // TODO: implement
+  throw new Error('Not implemented');
 }
 `,
   method: (name) => `${name}() {
-    // TODO: implement
-  }
+  throw new Error('Not implemented');
+}
 `,
   class: (name) => `export class ${name} {
-  // TODO: implement
+  throw new Error('Not implemented');
 }
 `,
-  interface: (name) => `export interface ${name} {
-  // TODO: define properties
-}
+  interface: (name) => `export interface ${name} {}
 `,
-  type: (name) => `export type ${name} = unknown;
+  type: (name) => `export type ${name} = never;
 `,
-  enum: (name) => `export enum ${name} {
-  // TODO: add members
-}
+  enum: (name) => `export enum ${name} {}
 `,
   const: (name) => `export const ${name} = undefined;
 `,
-  var: (name) => `export var ${name}: unknown;
+  var: (name) => `export var ${name}: any;
 `
 };
 var CLJ_STUB_TEMPLATES = {
@@ -3075,6 +3125,121 @@ function computeMoveEdits(store2, elementId, newModule, readFile) {
   }
   return { edits, warnings };
 }
+function computeAddReexportEdits(store2, module, name, fromModule, readFile) {
+  const edits = [];
+  const warnings = [];
+  const relativePath = computeRelativeImportPath(module, fromModule);
+  const reexportLine = `export { ${name} } from '${relativePath}';`;
+  const source = readFile(module);
+  if (source === null) {
+    edits.push({
+      filePath: module,
+      label: `create barrel file with re-export: ${name}`,
+      oldText: null,
+      newText: reexportLine + "\n",
+      startLine: 1,
+      startCol: 1,
+      endLine: 1,
+      endCol: 1
+    });
+  } else {
+    const lines = source.split("\n");
+    let lastNonEmpty = lines.length - 1;
+    while (lastNonEmpty > 0 && lines[lastNonEmpty].trim() === "") lastNonEmpty--;
+    const insertLine = lastNonEmpty;
+    edits.push({
+      filePath: module,
+      label: `add re-export: ${name}`,
+      oldText: null,
+      newText: "\n" + reexportLine,
+      startLine: insertLine + 1,
+      startCol: 1,
+      endLine: insertLine + 1,
+      endCol: 1
+    });
+  }
+  return { edits, warnings };
+}
+function parseSpan2(span) {
+  const m = span.match(/^([^:]+):(\d+):(\d+)-(\d+):(\d+)$/);
+  if (!m) return null;
+  return {
+    startLine: parseInt(m[2], 10),
+    startCol: parseInt(m[3], 10),
+    endLine: parseInt(m[4], 10),
+    endCol: parseInt(m[5], 10)
+  };
+}
+function computeAmendTypeEdits(store2, target, field, action, value, readFile) {
+  const edits = [];
+  const warnings = [];
+  const elem = store2.getElem(target);
+  if (!elem) {
+    warnings.push(`Element not found: ${target}`);
+    return { edits, warnings };
+  }
+  if (!elem.span) {
+    warnings.push(`Element has no span: ${target}`);
+    return { edits, warnings };
+  }
+  const parsedSpan = parseSpan2(elem.span);
+  if (!parsedSpan) {
+    warnings.push(`Failed to parse span: ${elem.span}`);
+    return { edits, warnings };
+  }
+  const source = readFile(elem.module ?? "");
+  if (source === null) {
+    warnings.push(`Could not read file: ${elem.module}`);
+    return { edits, warnings };
+  }
+  const lines = source.split("\n");
+  if (action === "addUnionMember") {
+    const typeLine = lines[parsedSpan.startLine - 1] ?? "";
+    const endLineContent = lines[parsedSpan.endLine - 1] ?? "";
+    const semicolonMatch = endLineContent.lastIndexOf(";", parsedSpan.endCol - 1);
+    const equalsMatch = endLineContent.lastIndexOf("=", parsedSpan.endCol - 1);
+    const insertPos = Math.max(semicolonMatch, equalsMatch);
+    if (insertPos < 0) {
+      warnings.push(`Could not find union termination for: ${target}`);
+      return { edits, warnings };
+    }
+    const isStringLiteral = value.startsWith("'") || value.startsWith('"');
+    const unionMember = isStringLiteral ? `| ${value}` : `| ${value}`;
+    edits.push({
+      filePath: elem.module ?? "",
+      label: `add union member: ${value} to ${elem.name}`,
+      oldText: endLineContent.slice(insertPos, insertPos + 1),
+      newText: `${unionMember};`,
+      startLine: parsedSpan.endLine,
+      startCol: insertPos + 1,
+      endLine: parsedSpan.endLine,
+      endCol: insertPos + 2
+    });
+  } else if (action === "addProperty") {
+    const endLineContent = lines[parsedSpan.endLine - 1] ?? "";
+    const closingBracePos = endLineContent.lastIndexOf("}", parsedSpan.endCol - 1);
+    if (closingBracePos < 0) {
+      warnings.push(`Could not find interface closing brace for: ${target}`);
+      return { edits, warnings };
+    }
+    const lineContent = lines[parsedSpan.startLine - 1] ?? "";
+    const indentMatch = lineContent.match(/^(\s*)/);
+    const indent = indentMatch ? indentMatch[1] : "  ";
+    const newProperty = `
+${indent}${field}: unknown;`;
+    edits.push({
+      filePath: elem.module ?? "",
+      label: `add property: ${field} to ${elem.name}`,
+      oldText: "}",
+      newText: newProperty + "\n}",
+      startLine: parsedSpan.endLine,
+      startCol: closingBracePos + 1,
+      endLine: parsedSpan.endLine,
+      endCol: closingBracePos + 2
+    });
+  }
+  return { edits, warnings };
+}
 function expandOperation(store2, operation, readFile) {
   switch (operation.kind) {
     case "rename":
@@ -3093,6 +3258,10 @@ function expandOperation(store2, operation, readFile) {
     }
     case "rewrite_body":
       return { edits: [], warnings: [] };
+    case "addReexport":
+      return computeAddReexportEdits(store2, operation.module, operation.name, operation.fromModule, readFile);
+    case "amendType":
+      return computeAmendTypeEdits(store2, operation.target, operation.field, operation.action, operation.value, readFile);
     default:
       return { edits: [], warnings: [`Unknown operation kind: ${operation.kind}`] };
   }
@@ -3317,7 +3486,7 @@ var SourceResolver = class {
   projectRoot;
   fileCache = /* @__PURE__ */ new Map();
   readSpan(filePath, span) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3327,7 +3496,7 @@ var SourceResolver = class {
     return lines.slice(start2, end).join("\n");
   }
   readContext(filePath, span, contextLines = 2) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3337,7 +3506,7 @@ var SourceResolver = class {
     return lines.slice(start2, end).join("\n");
   }
   readDeclaration(filePath, span, kind) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3408,7 +3577,7 @@ var SourceResolver = class {
    * comment if the file has content before the window.
    */
   readFocused(filePath, span, contextBefore = 25, contextAfter = 10) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3432,7 +3601,7 @@ var SourceResolver = class {
     }
   }
 };
-function parseSpan2(span) {
+function parseSpan3(span) {
   const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
   if (!m) return null;
   return {
@@ -5538,6 +5707,9 @@ var ProjectedState = class {
       } else if (op.kind === "removeArrow") {
         this.removedArrIds.add(op.arrowId);
       } else if (op.kind === "rewrite_body") {
+      } else if (op.kind === "addReexport") {
+        const id = `projected:${op.module}:other:${op.name}`;
+        this.addedElems.set(id, { id, kind: "other", name: op.name, module: op.module });
       }
     }
   }
@@ -5720,6 +5892,37 @@ function registerOlogValidate(server2, store2, projectRoot2) {
                 kind: "constraint",
                 humanMessage: `rewrite_body: conflicts with "${conflict.kind}" on the same element "${op.target}"`,
                 involved: [op.target]
+              });
+            }
+          }
+          if (op.kind === "amendType") {
+            if (!projected.elemExists(op.target)) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `amendType: element not found: "${op.target}"`,
+                involved: [op.target]
+              });
+            }
+          }
+          if (op.kind === "addReexport") {
+            const moduleExists = store2.queryElements({
+              moduleRegex: `^${escapeRegex3(op.module)}$`,
+              limit: 1
+            });
+            if (moduleExists.length === 0) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "notFound",
+                humanMessage: `addReexport: module not found: "${op.module}"`,
+                involved: []
+              });
+            } else if (projected.nameConflicts(op.name, op.module, "")) {
+              violations.push({
+                id: crypto.randomUUID(),
+                kind: "uniqueness",
+                humanMessage: `addReexport: "${op.name}" would conflict with an existing element in "${op.module}"`,
+                involved: []
               });
             }
           }

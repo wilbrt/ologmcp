@@ -808,7 +808,7 @@ export class OlogStore {
               });
               break;
             }
-            case 'removeArrow': {
+case 'removeArrow': {
               deleteArr.run(op.arrowId);
               applied++;
               changes.push({
@@ -820,11 +820,65 @@ export class OlogStore {
               });
               break;
             }
+            case 'addReexport': {
+              const id = `projected:${op.module}:other:${op.name}`;
+              insertElem.run(id, 'other', op.name, op.module, null, '{}');
+              // Find the module element to create a references arrow from it
+              const moduleElems = this.db.prepare(
+                "SELECT id FROM olog_elem WHERE module = ? LIMIT 1"
+              ).all(op.module) as Array<{ id: string }>;
+              const firstModuleElem = moduleElems[0];
+              if (firstModuleElem) {
+                const arrId = `${firstModuleElem.id}:references:${id}`;
+                insertArr.run(arrId, 'references', firstModuleElem.id, id, '{}');
+              }
+              applied++;
+              changes.push({
+                path: op.module,
+                line: 0,
+                column: 0,
+                oldText: '',
+                newText: op.name,
+              });
+              break;
+            }
+            case 'amendType': {
+              const elemRow = this.getElemStmt.get(op.target) as ElemRow | undefined;
+              if (!elemRow) {
+                skipped++;
+                errors.push(`Element not found: ${op.target}`);
+                break;
+              }
+              const attrs = JSON.parse(elemRow.attrs) as Record<string, unknown>;
+              if (op.action === 'addUnionMember') {
+                if (!attrs[op.field]) {
+                  attrs[op.field] = [];
+                }
+                if (Array.isArray(attrs[op.field])) {
+                  (attrs[op.field] as string[]).push(op.value);
+                }
+              } else if (op.action === 'addProperty') {
+                attrs[op.field] = op.value;
+              }
+              this.db.prepare("UPDATE olog_elem SET attrs = ? WHERE id = ?").run(JSON.stringify(attrs), op.target);
+              applied++;
+              changes.push({
+                path: elemRow.module ?? '',
+                line: 0,
+                column: 0,
+                oldText: '',
+                newText: `${op.field}: ${op.value}`,
+              });
+              break;
+            }
+            default:
+              skipped++;
+              errors.push(`Unknown operation kind: ${(op as PlanOperation).kind}`);
+              break;
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          skipped++;
-          errors.push(`${op.kind}: ${msg}`);
+          errors.push(msg);
         }
       }
     });

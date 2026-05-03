@@ -40,8 +40,8 @@
       "description": "Planning agent. Interactively plans structural changes with the user, records plans as olog-format files in .plans/, validates them against the olog, and delegates implementation slices to the 'edit' subagent via the Task tool. Gathers all structural context by invoking the 'explore' subagent via the Task tool — never reads source files directly.",
       "permission": {
         "edit": {
-          ".plans/*": "allow",
-          "*": "deny"
+          "*": "deny",
+          ".plans/*": "allow"
         },
         "bash": {
           "*": "deny"

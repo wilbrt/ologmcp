@@ -815,11 +815,64 @@ var OlogStore = class {
               });
               break;
             }
+            case "addReexport": {
+              const id = `projected:${op.module}:other:${op.name}`;
+              insertElem.run(id, "other", op.name, op.module, null, "{}");
+              const moduleElems = this.db.prepare(
+                "SELECT id FROM olog_elem WHERE module = ? LIMIT 1"
+              ).all(op.module);
+              const firstModuleElem = moduleElems[0];
+              if (firstModuleElem) {
+                const arrId = `${firstModuleElem.id}:references:${id}`;
+                insertArr.run(arrId, "references", firstModuleElem.id, id, "{}");
+              }
+              applied++;
+              changes.push({
+                path: op.module,
+                line: 0,
+                column: 0,
+                oldText: "",
+                newText: op.name
+              });
+              break;
+            }
+            case "amendType": {
+              const elemRow = this.getElemStmt.get(op.target);
+              if (!elemRow) {
+                skipped++;
+                errors.push(`Element not found: ${op.target}`);
+                break;
+              }
+              const attrs = JSON.parse(elemRow.attrs);
+              if (op.action === "addUnionMember") {
+                if (!attrs[op.field]) {
+                  attrs[op.field] = [];
+                }
+                if (Array.isArray(attrs[op.field])) {
+                  attrs[op.field].push(op.value);
+                }
+              } else if (op.action === "addProperty") {
+                attrs[op.field] = op.value;
+              }
+              this.db.prepare("UPDATE olog_elem SET attrs = ? WHERE id = ?").run(JSON.stringify(attrs), op.target);
+              applied++;
+              changes.push({
+                path: elemRow.module ?? "",
+                line: 0,
+                column: 0,
+                oldText: "",
+                newText: `${op.field}: ${op.value}`
+              });
+              break;
+            }
+            default:
+              skipped++;
+              errors.push(`Unknown operation kind: ${op.kind}`);
+              break;
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          skipped++;
-          errors.push(`${op.kind}: ${msg}`);
+          errors.push(msg);
         }
       }
     });
@@ -2279,30 +2332,26 @@ function moduleToFilePath(moduleId) {
 // src/render/strategies/add-symbol.ts
 var STUB_TEMPLATES = {
   function: (name) => `export function ${name}() {
-  // TODO: implement
+  throw new Error('Not implemented');
 }
 `,
   method: (name) => `${name}() {
-    // TODO: implement
-  }
+  throw new Error('Not implemented');
+}
 `,
   class: (name) => `export class ${name} {
-  // TODO: implement
+  throw new Error('Not implemented');
 }
 `,
-  interface: (name) => `export interface ${name} {
-  // TODO: define properties
-}
+  interface: (name) => `export interface ${name} {}
 `,
-  type: (name) => `export type ${name} = unknown;
+  type: (name) => `export type ${name} = never;
 `,
-  enum: (name) => `export enum ${name} {
-  // TODO: add members
-}
+  enum: (name) => `export enum ${name} {}
 `,
   const: (name) => `export const ${name} = undefined;
 `,
-  var: (name) => `export var ${name}: unknown;
+  var: (name) => `export var ${name}: any;
 `
 };
 var CLJ_STUB_TEMPLATES = {
@@ -2504,6 +2553,125 @@ function computeMoveEdits(store, elementId, newModule, readFile) {
   return { edits, warnings };
 }
 
+// src/render/strategies/add-reexport.ts
+function computeAddReexportEdits(store, module, name, fromModule, readFile) {
+  const edits = [];
+  const warnings = [];
+  const relativePath = computeRelativeImportPath(module, fromModule);
+  const reexportLine = `export { ${name} } from '${relativePath}';`;
+  const source = readFile(module);
+  if (source === null) {
+    edits.push({
+      filePath: module,
+      label: `create barrel file with re-export: ${name}`,
+      oldText: null,
+      newText: reexportLine + "\n",
+      startLine: 1,
+      startCol: 1,
+      endLine: 1,
+      endCol: 1
+    });
+  } else {
+    const lines = source.split("\n");
+    let lastNonEmpty = lines.length - 1;
+    while (lastNonEmpty > 0 && lines[lastNonEmpty].trim() === "") lastNonEmpty--;
+    const insertLine = lastNonEmpty;
+    edits.push({
+      filePath: module,
+      label: `add re-export: ${name}`,
+      oldText: null,
+      newText: "\n" + reexportLine,
+      startLine: insertLine + 1,
+      startCol: 1,
+      endLine: insertLine + 1,
+      endCol: 1
+    });
+  }
+  return { edits, warnings };
+}
+
+// src/render/strategies/amend-type.ts
+function parseSpan2(span) {
+  const m = span.match(/^([^:]+):(\d+):(\d+)-(\d+):(\d+)$/);
+  if (!m) return null;
+  return {
+    startLine: parseInt(m[2], 10),
+    startCol: parseInt(m[3], 10),
+    endLine: parseInt(m[4], 10),
+    endCol: parseInt(m[5], 10)
+  };
+}
+function computeAmendTypeEdits(store, target, field, action, value, readFile) {
+  const edits = [];
+  const warnings = [];
+  const elem = store.getElem(target);
+  if (!elem) {
+    warnings.push(`Element not found: ${target}`);
+    return { edits, warnings };
+  }
+  if (!elem.span) {
+    warnings.push(`Element has no span: ${target}`);
+    return { edits, warnings };
+  }
+  const parsedSpan = parseSpan2(elem.span);
+  if (!parsedSpan) {
+    warnings.push(`Failed to parse span: ${elem.span}`);
+    return { edits, warnings };
+  }
+  const source = readFile(elem.module ?? "");
+  if (source === null) {
+    warnings.push(`Could not read file: ${elem.module}`);
+    return { edits, warnings };
+  }
+  const lines = source.split("\n");
+  if (action === "addUnionMember") {
+    const typeLine = lines[parsedSpan.startLine - 1] ?? "";
+    const endLineContent = lines[parsedSpan.endLine - 1] ?? "";
+    const semicolonMatch = endLineContent.lastIndexOf(";", parsedSpan.endCol - 1);
+    const equalsMatch = endLineContent.lastIndexOf("=", parsedSpan.endCol - 1);
+    const insertPos = Math.max(semicolonMatch, equalsMatch);
+    if (insertPos < 0) {
+      warnings.push(`Could not find union termination for: ${target}`);
+      return { edits, warnings };
+    }
+    const isStringLiteral = value.startsWith("'") || value.startsWith('"');
+    const unionMember = isStringLiteral ? `| ${value}` : `| ${value}`;
+    edits.push({
+      filePath: elem.module ?? "",
+      label: `add union member: ${value} to ${elem.name}`,
+      oldText: endLineContent.slice(insertPos, insertPos + 1),
+      newText: `${unionMember};`,
+      startLine: parsedSpan.endLine,
+      startCol: insertPos + 1,
+      endLine: parsedSpan.endLine,
+      endCol: insertPos + 2
+    });
+  } else if (action === "addProperty") {
+    const endLineContent = lines[parsedSpan.endLine - 1] ?? "";
+    const closingBracePos = endLineContent.lastIndexOf("}", parsedSpan.endCol - 1);
+    if (closingBracePos < 0) {
+      warnings.push(`Could not find interface closing brace for: ${target}`);
+      return { edits, warnings };
+    }
+    const lineContent = lines[parsedSpan.startLine - 1] ?? "";
+    const indentMatch = lineContent.match(/^(\s*)/);
+    const indent = indentMatch ? indentMatch[1] : "  ";
+    const newProperty = `
+${indent}${field}: unknown;`;
+    edits.push({
+      filePath: elem.module ?? "",
+      label: `add property: ${field} to ${elem.name}`,
+      oldText: "}",
+      newText: newProperty + "\n}",
+      startLine: parsedSpan.endLine,
+      startCol: closingBracePos + 1,
+      endLine: parsedSpan.endLine,
+      endCol: closingBracePos + 2
+    });
+  }
+  return { edits, warnings };
+}
+
 // src/render/expand.ts
 function expandOperation(store, operation, readFile) {
   switch (operation.kind) {
@@ -2523,6 +2691,10 @@ function expandOperation(store, operation, readFile) {
     }
     case "rewrite_body":
       return { edits: [], warnings: [] };
+    case "addReexport":
+      return computeAddReexportEdits(store, operation.module, operation.name, operation.fromModule, readFile);
+    case "amendType":
+      return computeAmendTypeEdits(store, operation.target, operation.field, operation.action, operation.value, readFile);
     default:
       return { edits: [], warnings: [`Unknown operation kind: ${operation.kind}`] };
   }
@@ -2675,6 +2847,43 @@ function verifyOperation(store, op) {
       const elem = store.getElem(op.target);
       if (elem) {
         discrepancies.push(`removeSymbol: "${op.target}" still exists after render`);
+      }
+      break;
+    }
+    case "addReexport": {
+      const found = store.queryElements({
+        kind: "any",
+        nameRegex: `^${op.name}$`,
+        moduleRegex: `^${op.module.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        limit: 1
+      });
+      if (found.length === 0) {
+        discrepancies.push(`addReexport: "${op.name}" not found in "${op.module}" after render`);
+      }
+      break;
+    }
+    case "amendType": {
+      const elem = store.getElem(op.target);
+      if (!elem) {
+        discrepancies.push(`amendType: "${op.target}" does not exist after render`);
+      }
+      break;
+    }
+    case "addArrow": {
+      const srcElem = store.getElem(op.src);
+      const dstElem = store.getElem(op.dst);
+      if (!srcElem) {
+        discrepancies.push(`addArrow: source element "${op.src}" does not exist after render`);
+      }
+      if (!dstElem) {
+        discrepancies.push(`addArrow: destination element "${op.dst}" does not exist after render`);
+      }
+      break;
+    }
+    case "removeArrow": {
+      const arr = store.getArr(op.arrowId);
+      if (arr) {
+        discrepancies.push(`removeArrow: arrow "${op.arrowId}" still exists after render`);
       }
       break;
     }
@@ -2835,7 +3044,7 @@ var SourceResolver = class {
   projectRoot;
   fileCache = /* @__PURE__ */ new Map();
   readSpan(filePath, span) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -2845,7 +3054,7 @@ var SourceResolver = class {
     return lines.slice(start, end).join("\n");
   }
   readContext(filePath, span, contextLines = 2) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -2855,7 +3064,7 @@ var SourceResolver = class {
     return lines.slice(start, end).join("\n");
   }
   readDeclaration(filePath, span, kind) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -2926,7 +3135,7 @@ var SourceResolver = class {
    * comment if the file has content before the window.
    */
   readFocused(filePath, span, contextBefore = 25, contextAfter = 10) {
-    const parsed = parseSpan2(span);
+    const parsed = parseSpan3(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -2950,7 +3159,7 @@ var SourceResolver = class {
     }
   }
 };
-function parseSpan2(span) {
+function parseSpan3(span) {
   const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
   if (!m) return null;
   return {

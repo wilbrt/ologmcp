@@ -142,7 +142,7 @@ interface SchemaProposal {
     operations: PlanOperation[];
 }
 /**
- * A single operation within a plan — rename, move, addSymbol, removeSymbol, addArrow, or removeArrow.
+ * A single operation within a plan — rename, move, addSymbol, removeSymbol, addArrow, removeArrow, rewrite_body, addReexport, or amendType.
  */
 type PlanOperation = {
     kind: 'rename';
@@ -172,6 +172,17 @@ type PlanOperation = {
     kind: 'rewrite_body';
     target: string;
     rationale: string;
+} | {
+    kind: 'addReexport';
+    module: string;
+    name: string;
+    fromModule: string;
+} | {
+    kind: 'amendType';
+    target: string;
+    field: string;
+    action: 'addUnionMember' | 'addProperty';
+    value: string;
 };
 interface Plan {
     operations: PlanOperation[];
