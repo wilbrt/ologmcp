@@ -116,7 +116,7 @@ function extractFromFile(parser, source, queryPath) {
     }
   }
   const nsAliases = collectNsAliases(tree.rootNode);
-  walkForDefinitions(tree.rootNode, elements);
+  walkForDefinitions(tree.rootNode, elements, arrows);
   walkForCalls(tree.rootNode, elements, arrows, null, nsAliases);
   tree.delete();
   return { elements, arrows };
@@ -146,6 +146,36 @@ var DEFINITION_FORMS = /* @__PURE__ */ new Set([
   "s/def",
   "s/defonce"
 ]);
+function isReframeForm(sym, localName) {
+  return sym === localName || sym.endsWith("/" + localName);
+}
+function reframeKeyword(vals) {
+  const kw = vals[1];
+  if (!kw) return null;
+  if (kw.type === "kwd_lit") return kw.text;
+  return null;
+}
+function collectInputSignals(vals) {
+  const inputs = [];
+  for (let i = 2; i < vals.length - 1; i++) {
+    const kw = vals[i];
+    const vec = vals[i + 1];
+    if (kw?.type === "kwd_lit" && kw.text === ":<-" && vec?.type === "vec_lit") {
+      const vecVals = vec.childrenForFieldName("value");
+      const inputKw = vecVals[0];
+      if (inputKw?.type === "kwd_lit") inputs.push(inputKw.text);
+    }
+  }
+  return inputs;
+}
+function extractVectorKeyword(vals) {
+  const vec = vals[1];
+  if (!vec || vec.type !== "vec_lit") return null;
+  const vecVals = vec.childrenForFieldName("value");
+  const kw = vecVals[0];
+  if (kw?.type === "kwd_lit") return kw.text;
+  return null;
+}
 function extractNsRequires(nsNode, elements) {
   const vals = listValues(nsNode);
   for (let i = 2; i < vals.length; i++) {
@@ -191,11 +221,35 @@ function extractNsRequires(nsNode, elements) {
     }
   }
 }
-function walkForDefinitions(node, elements) {
+function walkForDefinitions(node, elements, arrows = []) {
   if (!node) return;
   if (node.type === "list_lit") {
     const vals = listValues(node);
     if (vals.length >= 2) {
+      const head = vals[0];
+      if (head?.type === "sym_lit") {
+        const sym = head.text;
+        const kwName = reframeKeyword(vals);
+        if (kwName) {
+          if (isReframeForm(sym, "reg-sub")) {
+            if (!elements.find((e) => e.name === kwName && e.kind === "const"))
+              elements.push({ kind: "const", name: kwName, module: "", span: formatSpan(node), attrs: { reframe: "subscription" } });
+            for (const inputKw of collectInputSignals(vals)) {
+              arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: kwName, dstModule: "", dstName: inputKw, attrs: {} });
+              arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: inputKw, dstModule: "", dstName: kwName, attrs: {} });
+            }
+          } else if (isReframeForm(sym, "reg-event-db") || isReframeForm(sym, "reg-event-fx")) {
+            if (!elements.find((e) => e.name === kwName && e.kind === "const"))
+              elements.push({ kind: "const", name: kwName, module: "", span: formatSpan(node), attrs: { reframe: "event" } });
+          } else if (isReframeForm(sym, "reg-fx")) {
+            if (!elements.find((e) => e.name === kwName && e.kind === "const"))
+              elements.push({ kind: "const", name: kwName, module: "", span: formatSpan(node), attrs: { reframe: "fx" } });
+          } else if (isReframeForm(sym, "reg-cofx")) {
+            if (!elements.find((e) => e.name === kwName && e.kind === "const"))
+              elements.push({ kind: "const", name: kwName, module: "", span: formatSpan(node), attrs: { reframe: "cofx" } });
+          }
+        }
+      }
       const first = vals[0];
       const second = vals[1];
       if (first?.type === "sym_lit" && second?.type === "sym_lit") {
@@ -268,7 +322,7 @@ function walkForDefinitions(node, elements) {
     }
   }
   for (const child of node.namedChildren) {
-    walkForDefinitions(child, elements);
+    walkForDefinitions(child, elements, arrows);
   }
 }
 function walkForCalls(node, elements, arrows, enclosingFn, nsAliases = { aliases: /* @__PURE__ */ new Map(), refers: /* @__PURE__ */ new Map() }) {
@@ -310,8 +364,33 @@ function walkForCalls(node, elements, arrows, enclosingFn, nsAliases = { aliases
           }
           return;
         }
+        if (isReframeForm(sym, "reg-sub") || isReframeForm(sym, "reg-event-db") || isReframeForm(sym, "reg-event-fx")) {
+          const kwName = reframeKeyword(vals);
+          if (kwName) {
+            for (const child of node.namedChildren) {
+              walkForCalls(child, elements, arrows, kwName, nsAliases);
+            }
+            return;
+          }
+        }
         if (sym === "throw" && enclosingFn) {
           collectThrowKeywords(node, elements, arrows, enclosingFn);
+        }
+        if (isReframeForm(sym, "subscribe") && enclosingFn) {
+          const kwName = extractVectorKeyword(vals);
+          if (kwName) {
+            arrows.push({ kind: "calls", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: enclosingFn, dstModule: "", dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: kwName, dstModule: "", dstName: enclosingFn, attrs: {} });
+          }
+        }
+        if ((isReframeForm(sym, "dispatch") || isReframeForm(sym, "dispatch-sync")) && enclosingFn) {
+          const kwName = extractVectorKeyword(vals);
+          if (kwName) {
+            arrows.push({ kind: "calls", srcModule: "", srcName: enclosingFn, dstModule: "", dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind("callerOf"), srcModule: "", srcName: enclosingFn, dstModule: "", dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind("calleeOf"), srcModule: "", srcName: kwName, dstModule: "", dstName: enclosingFn, attrs: {} });
+          }
         }
         if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
           let dstName = sym;

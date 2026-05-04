@@ -147,7 +147,7 @@ export function extractFromFile(
   }
 
   const nsAliases = collectNsAliases(tree.rootNode);
-  walkForDefinitions(tree.rootNode, elements);
+  walkForDefinitions(tree.rootNode, elements, arrows);
   walkForCalls(tree.rootNode, elements, arrows, null, nsAliases);
 
   tree.delete();
@@ -167,6 +167,55 @@ const DEFINITION_FORMS = new Set([
   's/defn', 's/defn-', 's/defschema', 's/defrecord', 's/defprotocol',
   's/def', 's/defonce',
 ]);
+
+/**
+ * Returns true if `sym` is a re-frame registration/dispatch form,
+ * matching both bare (e.g. "reg-sub") and namespace-qualified forms
+ * (e.g. "rf/reg-sub", "re-frame/reg-sub", "re-frame.core/reg-sub").
+ */
+function isReframeForm(sym: string, localName: string): boolean {
+  return sym === localName || sym.endsWith('/' + localName);
+}
+
+/** Extract the re-frame keyword from a reg-sub/reg-event-* form's second value node. */
+function reframeKeyword(vals: Node[]): string | null {
+  const kw = vals[1];
+  if (!kw) return null;
+  // Keywords: ::name, :ns/name, :name
+  if (kw.type === 'kwd_lit') return kw.text;
+  return null;
+}
+
+/**
+ * Collect `:<- [::sub]` input signal vectors from a reg-sub form.
+ * Returns the keyword names of all input subscriptions.
+ */
+function collectInputSignals(vals: Node[]): string[] {
+  const inputs: string[] = [];
+  for (let i = 2; i < vals.length - 1; i++) {
+    const kw = vals[i];
+    const vec = vals[i + 1];
+    if (kw?.type === 'kwd_lit' && kw.text === ':<-' && vec?.type === 'vec_lit') {
+      const vecVals = vec.childrenForFieldName('value');
+      const inputKw = vecVals[0];
+      if (inputKw?.type === 'kwd_lit') inputs.push(inputKw.text);
+    }
+  }
+  return inputs;
+}
+
+/**
+ * Extract the dispatch/subscribe keyword from a call like (rf/dispatch [::event args...])
+ * or (rf/subscribe [::sub]).
+ */
+function extractVectorKeyword(vals: Node[]): string | null {
+  const vec = vals[1];
+  if (!vec || vec.type !== 'vec_lit') return null;
+  const vecVals = vec.childrenForFieldName('value');
+  const kw = vecVals[0];
+  if (kw?.type === 'kwd_lit') return kw.text;
+  return null;
+}
 
 /**
  * Extract (:require ...) entries from a (ns ...) form and emit them as import elements.
@@ -223,11 +272,39 @@ function extractNsRequires(nsNode: Node, elements: RawElement[]): void {
   }
 }
 
-function walkForDefinitions(node: Node | null | undefined, elements: RawElement[]): void {
+function walkForDefinitions(node: Node | null | undefined, elements: RawElement[], arrows: RawArrow[] = []): void {
   if (!node) return;
   if (node.type === 'list_lit') {
     const vals = listValues(node);
     if (vals.length >= 2) {
+      const head = vals[0];
+
+      // re-frame registration forms: keyword as second element
+      if (head?.type === 'sym_lit') {
+        const sym = head.text;
+        const kwName = reframeKeyword(vals);
+        if (kwName) {
+          if (isReframeForm(sym, 'reg-sub')) {
+            if (!elements.find(e => e.name === kwName && e.kind === 'const'))
+              elements.push({ kind: 'const', name: kwName, module: '', span: formatSpan(node), attrs: { reframe: 'subscription' } });
+            // :<- input signal arrows: subscription → input subscription
+            for (const inputKw of collectInputSignals(vals)) {
+              arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: kwName, dstModule: '', dstName: inputKw, attrs: {} });
+              arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: inputKw, dstModule: '', dstName: kwName, attrs: {} });
+            }
+          } else if (isReframeForm(sym, 'reg-event-db') || isReframeForm(sym, 'reg-event-fx')) {
+            if (!elements.find(e => e.name === kwName && e.kind === 'const'))
+              elements.push({ kind: 'const', name: kwName, module: '', span: formatSpan(node), attrs: { reframe: 'event' } });
+          } else if (isReframeForm(sym, 'reg-fx')) {
+            if (!elements.find(e => e.name === kwName && e.kind === 'const'))
+              elements.push({ kind: 'const', name: kwName, module: '', span: formatSpan(node), attrs: { reframe: 'fx' } });
+          } else if (isReframeForm(sym, 'reg-cofx')) {
+            if (!elements.find(e => e.name === kwName && e.kind === 'const'))
+              elements.push({ kind: 'const', name: kwName, module: '', span: formatSpan(node), attrs: { reframe: 'cofx' } });
+          }
+        }
+      }
+
       const first = vals[0];
       const second = vals[1];
       if (first?.type === 'sym_lit' && second?.type === 'sym_lit') {
@@ -301,7 +378,7 @@ function walkForDefinitions(node: Node | null | undefined, elements: RawElement[
   }
 
   for (const child of node.namedChildren) {
-    walkForDefinitions(child, elements);
+    walkForDefinitions(child, elements, arrows);
   }
 }
 
@@ -365,10 +442,41 @@ function walkForCalls(
           return;
         }
 
+        // re-frame reg-sub / reg-event-*: enter body with keyword as context
+        if (isReframeForm(sym, 'reg-sub') || isReframeForm(sym, 'reg-event-db') || isReframeForm(sym, 'reg-event-fx')) {
+          const kwName = reframeKeyword(vals);
+          if (kwName) {
+            for (const child of node.namedChildren) {
+              walkForCalls(child, elements, arrows, kwName, nsAliases);
+            }
+            return;
+          }
+        }
+
         // throw: extract namespaced error keywords as throws arrows
         if (sym === 'throw' && enclosingFn) {
           collectThrowKeywords(node, elements, arrows, enclosingFn);
           // fall through to also walk children and record the throw call itself
+        }
+
+        // re-frame subscribe: (rf/subscribe [::sub-key ...]) → callerOf arrow to subscription element
+        if (isReframeForm(sym, 'subscribe') && enclosingFn) {
+          const kwName = extractVectorKeyword(vals);
+          if (kwName) {
+            arrows.push({ kind: 'calls', srcModule: '', srcName: enclosingFn, dstModule: '', dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: enclosingFn, dstModule: '', dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: kwName, dstModule: '', dstName: enclosingFn, attrs: {} });
+          }
+        }
+
+        // re-frame dispatch / dispatch-sync: (rf/dispatch [::event-key ...]) → callerOf arrow to event element
+        if ((isReframeForm(sym, 'dispatch') || isReframeForm(sym, 'dispatch-sync')) && enclosingFn) {
+          const kwName = extractVectorKeyword(vals);
+          if (kwName) {
+            arrows.push({ kind: 'calls', srcModule: '', srcName: enclosingFn, dstModule: '', dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: enclosingFn, dstModule: '', dstName: kwName, attrs: {} });
+            arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: kwName, dstModule: '', dstName: enclosingFn, attrs: {} });
+          }
         }
 
         if (!DEFINITION_FORMS.has(sym) && enclosingFn) {
