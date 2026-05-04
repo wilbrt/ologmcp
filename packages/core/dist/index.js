@@ -2702,7 +2702,18 @@ function expandOperation(store, operation, readFile) {
 function expandAllOperations(store, operations, readFile) {
   const allEdits = [];
   const allWarnings = [];
+  const rewriteBodyModules = /* @__PURE__ */ new Set();
   for (const op of operations) {
+    if (op.kind === "rewrite_body") {
+      const module = store.getElem(op.target)?.module;
+      if (module) rewriteBodyModules.add(module);
+    }
+  }
+  for (const op of operations) {
+    if (op.kind === "addSymbol" && rewriteBodyModules.has(op.module)) {
+      allWarnings.push(`addSymbol: skipping stub for "${op.name}" in "${op.module}" \u2014 rewrite_body targets same file`);
+      continue;
+    }
     const result = expandOperation(store, op, readFile);
     allEdits.push(...result.edits);
     allWarnings.push(...result.warnings);

@@ -147,7 +147,10 @@ export function extractFromFile(
     }
 
     for (const cap of byName.get('method.name') ?? []) {
-      elements.push({ kind: 'method', name: cap.node.text, module: '', span: formatSpan(cap.node), attrs: {} });
+      // Use the full method_definition node span so rewrite_body can target the body.
+      // Fall back to the name node for abstract method signatures which lack @method.
+      const methodNode = first(byName, 'method')?.node ?? cap.node;
+      elements.push({ kind: 'method', name: cap.node.text, module: '', span: formatSpan(methodNode), attrs: {} });
     }
 
     const importStmtNode = _first('import')?.node;

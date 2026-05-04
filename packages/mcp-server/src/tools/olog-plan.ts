@@ -2,8 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { OlogStore } from '@olog/core';
-import type { PathEquation, IntegrityConstraint } from '@olog/core';
-import type { StoredPlan } from './olog-plan-store.js';
+import type { PathEquation, IntegrityConstraint, Plan } from '@olog/core';
 import { persistPlan, loadPlan } from './olog-plan-store.js';
 
 export function registerOlogPlan(
@@ -61,8 +60,6 @@ export function registerOlogPlan(
     value: z.string().describe('Value to add (e.g. union member name or type string)'),
   }),
 ]);
-
-type PlanOperationInput = z.infer<typeof operationSchema>;
 
   server.registerTool(
     'olog_plan',
@@ -157,7 +154,7 @@ type PlanOperationInput = z.infer<typeof operationSchema>;
           constraints: Array.from(constraintsById.values()),
         };
 
-        const plan: StoredPlan = {
+        const plan: Plan = {
           operations,
           hash,
           rationale,
@@ -189,6 +186,6 @@ type PlanOperationInput = z.infer<typeof operationSchema>;
   );
 }
 
-export function getPlanByHash(hash: string, projectRoot: string): StoredPlan | undefined {
+export function getPlanByHash(hash: string, projectRoot: string): Plan | undefined {
   return loadPlan(hash, projectRoot);
 }

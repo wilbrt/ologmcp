@@ -143,44 +143,27 @@ Moving types to `@olog/core` is valuable but not blocking. Do it last when all f
 ### Wave 4 — Quality of Life
 
 #### Group H — Fast-path delegation without plan (Issue 9)
-**Status: PENDING**
-- `packages/mcp-server/src/tools/olog-delegate.ts` — Allow calling with `{ target, task, rationale }` directly without requiring `planHash`
-- If `planHash` + `operationIndex` provided: populate brief from stored plan (existing behavior)
-- If only `target` + `task` + `rationale` provided: skip plan lookup and call `assembleBrief` directly with the rationale passed through
+**Status: COMPLETE** — `olog_delegate` never had a `planHash` param; it always called `assembleBrief` directly. The tool accepts `{ target, task, rationale }` with everything else optional.
 
 ---
 
 ### Wave 5 — Cleanup
 
 #### Group N — Move shared types to @olog/core (Issue 16)
-**Status: PENDING**
-- `packages/core/src/types.ts` — New file: export `StoredPlan`, `PlanOperationInput`, re-export `PlanOperation`
-- `packages/core/src/index.ts` — Re-export from `types.ts`
-- `packages/mcp-server/src/tools/olog-plan.ts` — Import `StoredPlan`, `PlanOperationInput` from `@olog/core`
-- `packages/mcp-server/src/tools/olog-plan-store.ts` — Import `StoredPlan` from `@olog/core`; remove local interface definition
-- `packages/mcp-server/src/tools/olog-apply.ts` — Import `PlanOperation` from `@olog/core`; remove `as unknown as PlanOperation[]` casts
-- `packages/mcp-server/src/tools/olog-render.ts` — Import `PlanOperation` from `@olog/core`; remove `as unknown as PlanOperation[]` casts
+**Status: COMPLETE** — `StoredPlan` replaced by the existing `Plan` type from `@olog/core/ontology.ts` (identical shape, already exported). `PlanOperationInput` was unused dead code; deleted. Casts removed from `olog-apply.ts` and `olog-render.ts`. `olog-plan-store.ts` now imports `Plan` from `@olog/core`.
 
 ---
 
 ### Wave 6 — Olog Pipeline Improvements (from Wave 2 retrospective)
 
 #### Group O — Class method indexing (Issue 17)
-**Status: PENDING**
-- Update tree-sitter adapter to index methods on exported classes as `method` kind elements with their own spans
-- Targets like `OlogStore.applyPlan` should be addressable as `symbol:packages/core/src/db.ts:687:5:method:applyPlan`
-- This enables `rewrite_body` on class methods without sending the entire module file
+**Status: COMPLETE** — `extract.ts` now uses `@method` capture (full `method_definition` node) for the span instead of `@method.name` (just the identifier). Abstract methods fall back to the name node. Methods like `OlogStore.applyPlan` are now targetable via `rewrite_body`.
 
 #### Group P — Fuzzy element ID resolution (Issue 18)
-**Status: PENDING**
-- `packages/mcp-server/src/tools/olog-plan.ts` — When a target string in a `rewrite_body` operation doesn't match any element ID exactly, attempt fuzzy resolution: match by name, module prefix, or kind
-- `packages/mcp-server/src/tools/olog-validate.ts` — Same fuzzy resolution in validation
-- If exactly one match, use it automatically. If multiple matches, return them as candidates in the validation error
+**Status: COMPLETE** — Added `fuzzyFindElement` + `notFoundMessage` in `olog-validate.ts`. All `notFound` violations for `move`, `rewrite_body`, `addArrow src/dst`, `amendType` now include fuzzy candidates by name. Single candidate: "Did you mean X?". Multiple: lists all. Also removed remaining `as unknown as PlanOperation[]` cast.
 
 #### Group Q — Skip addSymbol stub when rewrite_body targets same file (Issue 19)
-**Status: PENDING**
-- `packages/core/src/render/expand.ts` — In `expandAllOperations`, before processing `addSymbol` ops, check if any `rewrite_body` ops target the same file. If so, skip the `addSymbol` stub for that file
-- Pass the full operations list to `expandOperation` (or check in `expandAllOperations` before the loop)
+**Status: COMPLETE** — `expandAllOperations` in `expand.ts` now pre-collects modules targeted by `rewrite_body` ops and skips `addSymbol` stubs for those modules, emitting a warning instead.
 
 ## Invariants to preserve
 
@@ -204,20 +187,20 @@ Moving types to `@olog/core` is valuable but not blocking. Do it last when all f
 - [ ] `skipAnalogues`: delegate brief omits analogues when true
 - [x] Plan persistence: plans survive server restart ✅
 - [x] Auto-reindex: olog_apply `render=true` response includes reindex note ✅
-- [ ] Fast-path delegation: `olog_delegate` callable with `{ target, task, rationale }` without planHash
+- [x] Fast-path delegation: `olog_delegate` callable with `{ target, task, rationale }` without planHash — no planHash param exists; always direct
 - [x] `olog_query direction="in"` returns all importers/referencers of a queried symbol (already implemented)
 - [ ] Delegation briefs include callers when `signatureChange=true`
 - [x] New-file `addSymbol` stubs compile without `unknown` types
-- [ ] `addSymbol` stubs are skipped when `rewrite_body` targets the same file (Issue 19)
-- [ ] Class methods are indexed by tree-sitter and targetable via `rewrite_body` (Issue 17)
-- [ ] Fuzzy element ID resolution works in `olog_plan` and `olog_validate` (Issue 18)
-- [ ] `StoredPlan` and `PlanOperation` imported from `@olog/core` with no casts needed (Wave 5)
+- [x] `addSymbol` stubs are skipped when `rewrite_body` targets the same file (Issue 19)
+- [x] Class methods are indexed by tree-sitter and targetable via `rewrite_body` (Issue 17)
+- [x] Fuzzy element ID resolution works in `olog_plan` and `olog_validate` (Issue 18)
+- [x] `StoredPlan` and `PlanOperation` imported from `@olog/core` with no casts needed (Wave 5)
 
 ## Validation status
 - [x] Plan reorganized (v2)
 - [x] Wave 1: Group J — already implemented (direction="in" was already wired)
 - [x] Wave 2: Groups M ✅ (partial), C ✅, F ✅ — render pipeline changes applied
-- [ ] Wave 3: Groups D, E, K — delegation pipeline changes
-- [ ] Wave 4: Group H — fast-path delegation
-- [ ] Wave 5: Group N — shared types to core
-- [ ] Wave 6: Groups O, P, Q — olog pipeline improvements
+- [x] Wave 3: Groups D, E, K — delegation pipeline changes (see 2026-05-03-wave3-delegation-pipeline.md)
+- [x] Wave 4: Group H — fast-path delegation (already satisfied; no planHash ever existed)
+- [x] Wave 5: Group N — shared types to core (StoredPlan → Plan; casts removed)
+- [x] Wave 6: Groups O, P, Q — olog pipeline improvements

@@ -73,7 +73,16 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
           };
         }
 
-        const result = store.applyPlan(plan.operations as unknown as PlanOperation[]);
+        const allOps = plan.operations;
+        const mechanicalOps = allOps.filter(op => op.kind !== 'rewrite_body');
+        const rewriteBodyOps = allOps.filter((op): op is Extract<PlanOperation, { kind: 'rewrite_body' }> => op.kind === 'rewrite_body');
+        const pendingDelegations = rewriteBodyOps.map(op => ({
+          target: op.target,
+          task: 'rewrite_body',
+          rationale: op.rationale,
+        }));
+
+        const result = store.applyPlan(allOps);
 
         if (!render || !projectRoot) {
           if (result.errors.length > 0) {
@@ -106,7 +115,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
         }
 
         // Render mode: compute source edits and apply them
-        const renderResult = renderPlan(store, plan.operations as unknown as PlanOperation[], projectRoot);
+        const renderResult = renderPlan(store, mechanicalOps, projectRoot);
 
         if (renderResult.edits.length > 0) {
           const applyResult = await applySourceEdits(renderResult.edits, projectRoot);
@@ -158,6 +167,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
                       })),
                       warnings: renderResult.warnings,
                       reingestWarning: `Re-ingest failed: ${msg}`,
+                      pendingDelegations,
                     },
                     null,
                     2
@@ -186,6 +196,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
                     })),
                     warnings: renderResult.warnings,
                     affectedFiles: applyResult.affectedFiles,
+                    pendingDelegations,
                   },
                   null,
                   2
@@ -209,6 +220,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
                   summary: `Applied ${result.applied} DB operations (no source edits needed)`,
                   dbChanges: result.changes,
                   warnings: renderResult.warnings,
+                  pendingDelegations,
                 },
                 null,
                 2

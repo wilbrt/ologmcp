@@ -3270,7 +3270,18 @@ function expandOperation(store2, operation, readFile) {
 function expandAllOperations(store2, operations, readFile) {
   const allEdits = [];
   const allWarnings = [];
+  const rewriteBodyModules = /* @__PURE__ */ new Set();
   for (const op of operations) {
+    if (op.kind === "rewrite_body") {
+      const module = store2.getElem(op.target)?.module;
+      if (module) rewriteBodyModules.add(module);
+    }
+  }
+  for (const op of operations) {
+    if (op.kind === "addSymbol" && rewriteBodyModules.has(op.module)) {
+      allWarnings.push(`addSymbol: skipping stub for "${op.name}" in "${op.module}" \u2014 rewrite_body targets same file`);
+      continue;
+    }
     const result = expandOperation(store2, op, readFile);
     allEdits.push(...result.edits);
     allWarnings.push(...result.warnings);
@@ -3699,7 +3710,7 @@ var TASK_CRITERIA = {
     "Must describe thrown errors."
   ]
 };
-function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria) {
+function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria, rationale) {
   const target = store2.getElem(targetId);
   if (!target) {
     return { ok: false, error: `Element not found: ${targetId}` };
@@ -3718,7 +3729,8 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
   const mustImplementEntries = overrides?.mustImplement ? resolveElementList(store2, overrides.mustImplement) : gatherMustImplement(store2, targetId);
   const usedByEntries = gatherUsedBy(store2, targetId);
   const importEntries = gatherImports(store2, targetModule);
-  const analogueCandidates = overrides?.analogues ? resolveAnalogueList(store2, overrides.analogues) : findAnalogues(store2, target, maxAnalogues);
+  const shouldSkipAnalogues = overrides?.skipAnalogues === true || maxAnalogues === 0;
+  const analogueCandidates = shouldSkipAnalogues ? [] : overrides?.analogues ? resolveAnalogueList(store2, overrides.analogues) : findAnalogues(store2, target, maxAnalogues);
   const resolvedMustCall = mustCallEntries.map((entry) => {
     const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
     const calleeCallees = getDirectCallees(store2, entry.id).slice(0, 5).flatMap((tc) => {
@@ -3743,8 +3755,14 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
       importStatement: resolver.computeImportStatement(entry.name, entry.module ?? "", targetModule)
     };
   });
-  const resolvedUsedBy = usedByEntries.map((entry) => {
+  const resolvedUsedBy = usedByEntries.slice(0, overrides?.signatureChange ? 3 : void 0).map((entry) => {
     const entryFilePath = getModuleFilePath(store2, entry.module ?? "") ?? localModuleToFilePath(entry.module ?? "");
+    if (overrides?.signatureChange) {
+      return {
+        name: entry.name,
+        fullDeclaration: resolver.readDeclaration(entryFilePath, entry.span ?? "", entry.kind) ?? ""
+      };
+    }
     const callSiteSnippet = entry.span ? resolver.readSpan(entryFilePath, entry.span) ?? "" : "";
     return { name: entry.name, callSiteSnippet };
   });
@@ -3780,7 +3798,8 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
       modulePath: candidate.module ?? ""
     };
   });
-  const targetFileContent = target.span ? resolver.readFocused(filePath, target.span, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? "" : resolver.readFileContent(filePath, 500) ?? "";
+  const targetSpan = overrides?.lineRange ? `${overrides.lineRange.start}:0-${overrides.lineRange.end}:0` : target.span ?? "";
+  const targetFileContent = targetSpan ? resolver.readFocused(filePath, targetSpan, 30, 15) ?? resolver.readFileContent(filePath, 500) ?? "" : resolver.readFileContent(filePath, 500) ?? "";
   const domainContext = gatherDomainContext(store2, targetId);
   const defaultCriteria = TASK_CRITERIA[task] ?? [];
   const acceptanceCriteria = [...defaultCriteria, ...extraCriteria ?? []];
@@ -3788,6 +3807,7 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
   const provenanceConfidence = determineConfidence(store2, targetId);
   return {
     task,
+    ...rationale !== void 0 ? { rationale } : {},
     target: {
       id: target.id,
       name: target.name,
@@ -3796,7 +3816,7 @@ function assembleBrief(store2, projectRoot2, task, targetId, overrides, maxAnalo
       signature: targetSignature,
       bodyPlaceholder,
       filePath,
-      lineRange: parsedSpan ?? { start: 1, end: 1 }
+      lineRange: overrides?.lineRange ?? parsedSpan ?? { start: 1, end: 1 }
     },
     mustCall: resolvedMustCall,
     mustImplement: resolvedMustImplement,
@@ -5701,6 +5721,24 @@ import { z as z7 } from "zod";
 function escapeRegex3(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+function fuzzyFindElement(store2, target) {
+  const namePart = target.split(":").pop() ?? "";
+  if (!namePart) return [];
+  const candidates = store2.queryElements({ nameRegex: `^${escapeRegex3(namePart)}$`, limit: 10 });
+  return candidates.map((e) => ({ id: e.id, name: e.name, module: e.module, kind: e.kind }));
+}
+function notFoundMessage(target, context, candidates) {
+  if (candidates.length === 1) {
+    const c = candidates[0];
+    return `${context}: element not found: "${target}". Did you mean "${c.id}" (${c.kind} "${c.name}" in ${c.module ?? "(root)"})?`;
+  }
+  if (candidates.length > 1) {
+    const list = candidates.map((c) => `  "${c.id}" (${c.kind} "${c.name}" in ${c.module ?? "(root)"})`).join("\n");
+    return `${context}: element not found: "${target}". Candidates by name:
+${list}`;
+  }
+  return `${context}: element not found: "${target}"`;
+}
 var ProjectedState = class {
   constructor(store2, ops) {
     this.store = store2;
@@ -5824,7 +5862,7 @@ function registerOlogValidate(server2, store2, projectRoot2) {
               violations.push({
                 id: crypto.randomUUID(),
                 kind: "notFound",
-                humanMessage: `move: element not found: "${op.target}"`,
+                humanMessage: notFoundMessage(op.target, "move", fuzzyFindElement(store2, op.target)),
                 involved: [op.target]
               });
             }
@@ -5855,7 +5893,7 @@ function registerOlogValidate(server2, store2, projectRoot2) {
               violations.push({
                 id: crypto.randomUUID(),
                 kind: "notFound",
-                humanMessage: `addArrow: source element not found: "${op.src}"`,
+                humanMessage: notFoundMessage(op.src, "addArrow src", fuzzyFindElement(store2, op.src)),
                 involved: [op.src]
               });
             }
@@ -5863,7 +5901,7 @@ function registerOlogValidate(server2, store2, projectRoot2) {
               violations.push({
                 id: crypto.randomUUID(),
                 kind: "notFound",
-                humanMessage: `addArrow: destination element not found: "${op.dst}"`,
+                humanMessage: notFoundMessage(op.dst, "addArrow dst", fuzzyFindElement(store2, op.dst)),
                 involved: [op.dst]
               });
             }
@@ -5884,7 +5922,7 @@ function registerOlogValidate(server2, store2, projectRoot2) {
               violations.push({
                 id: crypto.randomUUID(),
                 kind: "notFound",
-                humanMessage: `rewrite_body: element not found: "${op.target}"`,
+                humanMessage: notFoundMessage(op.target, "rewrite_body", fuzzyFindElement(store2, op.target)),
                 involved: [op.target]
               });
             } else if (!elem.span) {
@@ -5912,7 +5950,7 @@ function registerOlogValidate(server2, store2, projectRoot2) {
               violations.push({
                 id: crypto.randomUUID(),
                 kind: "notFound",
-                humanMessage: `amendType: element not found: "${op.target}"`,
+                humanMessage: notFoundMessage(op.target, "amendType", fuzzyFindElement(store2, op.target)),
                 involved: [op.target]
               });
             }
@@ -6268,16 +6306,35 @@ function registerOlogDelegate(server2, store2, projectRoot2) {
         ),
         snippetLines: z10.number().int().min(10).max(200).default(50).describe(
           "Maximum lines of source code per snippet."
+        ),
+        lineRange: z10.object({
+          start: z10.number(),
+          end: z10.number()
+        }).optional().describe(
+          "Line range to narrow focus within a file."
+        ),
+        skipAnalogues: z10.boolean().optional().describe(
+          "Skip analogue discovery; overrides maxAnalogues to 0."
+        ),
+        signatureChange: z10.boolean().optional().describe(
+          "Allow signature changes in generated code."
+        ),
+        rationale: z10.string().optional().describe(
+          "Why this body rewrite is needed. Passed through to the delegation brief so the edit agent understands the intent. Populate from pendingDelegations[].rationale returned by olog_apply."
         )
       }),
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
-    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines }) => {
+    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines, lineRange, skipAnalogues, signatureChange, rationale }) => {
       try {
+        const effectiveMaxAnalogues = skipAnalogues ? 0 : maxAnalogues;
         const overrides = contextOverrides ? {
           ...contextOverrides.mustCall ? { mustCall: contextOverrides.mustCall } : {},
           ...contextOverrides.mustImplement ? { mustImplement: contextOverrides.mustImplement } : {},
-          ...contextOverrides.analogues ? { analogues: contextOverrides.analogues } : {}
+          ...contextOverrides.analogues ? { analogues: contextOverrides.analogues } : {},
+          ...lineRange ? { lineRange } : {},
+          ...skipAnalogues !== void 0 ? { skipAnalogues } : {},
+          ...signatureChange !== void 0 ? { signatureChange } : {}
         } : void 0;
         const result = assembleBrief(
           store2,
@@ -6285,9 +6342,10 @@ function registerOlogDelegate(server2, store2, projectRoot2) {
           task,
           target,
           overrides,
-          maxAnalogues,
+          effectiveMaxAnalogues,
           snippetLines,
-          acceptanceCriteria
+          acceptanceCriteria,
+          rationale
         );
         if ("ok" in result && result.ok === false) {
           return {

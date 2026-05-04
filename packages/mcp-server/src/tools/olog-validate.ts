@@ -10,6 +10,28 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function fuzzyFindElement(
+  store: OlogStore,
+  target: string,
+): Array<{ id: string; name: string; module: string | null; kind: string }> {
+  const namePart = target.split(':').pop() ?? '';
+  if (!namePart) return [];
+  const candidates = store.queryElements({ nameRegex: `^${escapeRegex(namePart)}$`, limit: 10 });
+  return candidates.map(e => ({ id: e.id, name: e.name, module: e.module, kind: e.kind }));
+}
+
+function notFoundMessage(target: string, context: string, candidates: Array<{ id: string; name: string; module: string | null; kind: string }>): string {
+  if (candidates.length === 1) {
+    const c = candidates[0]!;
+    return `${context}: element not found: "${target}". Did you mean "${c.id}" (${c.kind} "${c.name}" in ${c.module ?? '(root)'})?`;
+  }
+  if (candidates.length > 1) {
+    const list = candidates.map(c => `  "${c.id}" (${c.kind} "${c.name}" in ${c.module ?? '(root)'})`).join('\n');
+    return `${context}: element not found: "${target}". Candidates by name:\n${list}`;
+  }
+  return `${context}: element not found: "${target}"`;
+}
+
 interface ProjectedElem {
   id: string;
   kind: string;
@@ -138,7 +160,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
         }
 
         const violations: Violation[] = [];
-        const ops = plan.operations as unknown as PlanOperation[];
+        const ops = plan.operations;
         const projected = new ProjectedState(store, ops);
 
         for (const op of ops) {
@@ -162,7 +184,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
               violations.push({
                 id: crypto.randomUUID(),
                 kind: 'notFound',
-                humanMessage: `move: element not found: "${op.target}"`,
+                humanMessage: notFoundMessage(op.target, 'move', fuzzyFindElement(store, op.target)),
                 involved: [op.target],
               });
             }
@@ -196,7 +218,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
               violations.push({
                 id: crypto.randomUUID(),
                 kind: 'notFound',
-                humanMessage: `addArrow: source element not found: "${op.src}"`,
+                humanMessage: notFoundMessage(op.src, 'addArrow src', fuzzyFindElement(store, op.src)),
                 involved: [op.src],
               });
             }
@@ -204,7 +226,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
               violations.push({
                 id: crypto.randomUUID(),
                 kind: 'notFound',
-                humanMessage: `addArrow: destination element not found: "${op.dst}"`,
+                humanMessage: notFoundMessage(op.dst, 'addArrow dst', fuzzyFindElement(store, op.dst)),
                 involved: [op.dst],
               });
             }
@@ -227,7 +249,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
               violations.push({
                 id: crypto.randomUUID(),
                 kind: 'notFound',
-                humanMessage: `rewrite_body: element not found: "${op.target}"`,
+                humanMessage: notFoundMessage(op.target, 'rewrite_body', fuzzyFindElement(store, op.target)),
                 involved: [op.target],
               });
             } else if (!elem.span) {
@@ -257,7 +279,7 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
               violations.push({
                 id: crypto.randomUUID(),
                 kind: 'notFound',
-                humanMessage: `amendType: element not found: "${op.target}"`,
+                humanMessage: notFoundMessage(op.target, 'amendType', fuzzyFindElement(store, op.target)),
                 involved: [op.target],
               });
             }

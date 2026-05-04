@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, renderPlan, type PlanOperation } from '@olog/core';
+import { OlogStore, renderPlan } from '@olog/core';
 import { loadPlan } from './olog-plan-store.js';
 
 export function registerOlogRender(server: McpServer, store: OlogStore, projectRoot: string): void {
@@ -29,7 +29,7 @@ export function registerOlogRender(server: McpServer, store: OlogStore, projectR
           };
         }
 
-        const result = renderPlan(store, plan.operations as unknown as PlanOperation[], projectRoot);
+        const result = renderPlan(store, plan.operations, projectRoot);
 
         return {
           content: [

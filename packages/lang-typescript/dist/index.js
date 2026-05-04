@@ -109,7 +109,8 @@ function extractFromFile(parser, source, queryPath, resolveImport) {
       elements.push({ kind: "enum", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
     }
     for (const cap of byName.get("method.name") ?? []) {
-      elements.push({ kind: "method", name: cap.node.text, module: "", span: formatSpan(cap.node), attrs: {} });
+      const methodNode = first(byName, "method")?.node ?? cap.node;
+      elements.push({ kind: "method", name: cap.node.text, module: "", span: formatSpan(methodNode), attrs: {} });
     }
     const importStmtNode = _first("import")?.node;
     const rawImport = importStmtNode?.text;

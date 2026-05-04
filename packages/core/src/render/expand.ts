@@ -65,7 +65,21 @@ export function expandAllOperations(
   const allEdits: SourceEdit[] = [];
   const allWarnings: string[] = [];
 
+  // Collect modules targeted by rewrite_body ops so addSymbol stubs can be skipped.
+  // The rewrite_body delegation will produce the full file content, making a stub wasteful.
+  const rewriteBodyModules = new Set<string>();
   for (const op of operations) {
+    if (op.kind === 'rewrite_body') {
+      const module = store.getElem(op.target)?.module;
+      if (module) rewriteBodyModules.add(module);
+    }
+  }
+
+  for (const op of operations) {
+    if (op.kind === 'addSymbol' && rewriteBodyModules.has(op.module)) {
+      allWarnings.push(`addSymbol: skipping stub for "${op.name}" in "${op.module}" — rewrite_body targets same file`);
+      continue;
+    }
     const result = expandOperation(store, op, readFile);
     allEdits.push(...result.edits);
     allWarnings.push(...result.warnings);
