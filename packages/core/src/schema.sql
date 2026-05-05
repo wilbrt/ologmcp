@@ -99,3 +99,24 @@ CREATE TABLE IF NOT EXISTS olog_domain_session (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_domain_session_status ON olog_domain_session(status);
+
+CREATE TABLE IF NOT EXISTS olog_working_set (
+  id         TEXT    NOT NULL,
+  name       TEXT    NOT NULL,
+  plan_hash  TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS olog_working_set_elem (
+  set_id  TEXT NOT NULL REFERENCES olog_working_set(id) ON DELETE CASCADE,
+  elem_id TEXT NOT NULL,
+  PRIMARY KEY (set_id, elem_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS olog_working_set_arr (
+  set_id TEXT NOT NULL REFERENCES olog_working_set(id) ON DELETE CASCADE,
+  arr_id TEXT NOT NULL,
+  PRIMARY KEY (set_id, arr_id)
+) STRICT, WITHOUT ROWID;

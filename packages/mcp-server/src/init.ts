@@ -198,10 +198,28 @@ Use the \`question\` tool to gather requirements. Ask all clarifying questions
 in a single call: goal, scope, known constraints, olog domain concept relevance.
 Use \`git log --oneline -20\` to understand recent activity before asking.
 
+Open a working set immediately after understanding the goal:
+\`\`\`
+olog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })
+\`\`\`
+Record the returned \`setId\` — carry it through all subsequent phases.
+
 **Phase 2 — Explore**
-For each structural question, invoke \`@olog-explore\` via Task. For quick ID lookups
-you may call \`olog_query\` or \`olog_inspect\` directly. Synthesise results in
-plain language — do not paste raw output to the user.
+Before invoking \`@olog-explore\`, check the working set:
+\`\`\`
+olog_ws_query({ setId, nameRegex: "<name>" })
+\`\`\`
+If the element is already there, use it directly — skip the explore call.
+
+For new questions, invoke \`@olog-explore\` via Task. It returns JSON:
+\`{ elements, arrows, gaps }\`. After each explore call, add the results:
+\`\`\`
+olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
+\`\`\`
+
+For quick ID lookups you may call \`olog_query\` or \`olog_inspect\` directly and
+add those results to the working set too. Synthesise findings in plain language —
+do not paste raw JSON to the user.
 
 For reference tracing, use \`olog_query\` with \`arrows\` + \`direction\`:
 \`direction: "in"\` reverses the arrow (e.g. "who calls X?" = \`arrows: ["callerOf"], direction: "in"\` on X).
@@ -264,6 +282,7 @@ If the plan contains \`rewrite_body\` operations:
    c. Mark the slice done in the plan file.
    d. Use \`question\` to ask whether to proceed to the next slice.
 3. Call \`olog_reindex\` after all body rewrites land.
+4. Drop the working set: \`olog_ws_drop({ setId })\`.
 </planning_workflow>
 `;
 
@@ -296,19 +315,19 @@ If the task does NOT start with \`PREFETCH:\`, answer a structural question:
 2. Use \`olog_query\` for traversal questions. Use \`olog_inspect\` for detail on
    a specific element. Use \`olog_dump\` only for a broad overview.
 3. Run your queries. If a query returns nothing, say so — do not speculate.
-4. Return your answer in this format:
+4. Return your answer as JSON in this exact shape:
 
-\`\`\`
-## Facts
-
-- <fact 1> [ref: <entity-or-arrow-id>]
-- <fact 2> [ref: <entity-or-arrow-id>]
-
-## Gaps
-<Anything the olog does not contain. State "none" if fully answered.>
+\`\`\`json
+{
+  "elements": [ /* OlogElem objects */ ],
+  "arrows":   [ /* OlogArr objects */ ],
+  "gaps": "Free-text: what the olog does not contain, or null if fully answered."
+}
 \`\`\`
 
-5. Do not add interpretation, recommendations, or planning commentary.
+Include every element and arrow returned by your queries. Do not filter or
+summarise — the planning agent accumulates these directly into its working set.
+Do not add commentary outside the JSON object.
 
 ### Mode B — File prefetch
 
@@ -326,12 +345,10 @@ If the task starts with \`PREFETCH: <filepath>\`:
 
 <constraints>
 - No edits. No subagent calls.
-- Mode A: **never use the read tool**. If the question asks for source code of a function
-  or class, use \`olog_query\` to find the element by name, then \`olog_inspect\` on its ID —
-  \`olog_inspect\` returns the source snippet directly from the stored span. Do not read files.
-- Mode B: read the specified file only. No olog queries.
-- If confidence is \`unresolved\` or \`tentative\`, flag it: \`[ref: <id>, confidence: unresolved]\`
-- Cite element IDs, not just names.
+- Mode A: olog MCP tools only. No file reads. Output must be valid JSON matching the schema above.
+- Mode B: read the specified file only. No olog queries. Output is verbatim file content.
+- Preserve element and arrow IDs exactly as returned by the olog — the planning agent uses them directly.
+- If provenance confidence is \`unresolved\` or \`tentative\`, include the element as-is; the planning agent will see the confidence field on the element.
 </constraints>
 `;
 

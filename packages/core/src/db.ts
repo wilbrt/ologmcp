@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { DomainSessionStore } from './domain/session.js';
 import { MotifSessionStore } from './mining/session.js';
 import type { MotifShape, MotifCandidate } from './mining/types.js';
@@ -17,6 +18,8 @@ import type {
   ApplyResult,
   ChangeInstruction,
   ArrowKind,
+  WorkingSet,
+  WorkingSetMeta,
 } from './ontology.js';
 import { traverse as traverseGraph, type TraverseOptions } from './traverse.js';
 
@@ -104,6 +107,11 @@ export class OlogStore {
   private readonly hasArrowKindStmt: Database.Statement;
   private readonly insertMotifTemplateStmt: Database.Statement;
   private readonly insertMotifInstanceStmt: Database.Statement;
+  private readonly insertWorkingSetStmt: Database.Statement;
+  private readonly insertWorkingSetElemStmt: Database.Statement;
+  private readonly insertWorkingSetArrStmt: Database.Statement;
+  private readonly getWorkingSetStmt: Database.Statement;
+  private readonly deleteWorkingSetStmt: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -255,6 +263,22 @@ export class OlogStore {
     );
     this.insertMotifInstanceStmt = this.db.prepare(
       `INSERT INTO olog_motif_instance (id, template_id, mappings_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+    );
+
+    this.insertWorkingSetStmt = this.db.prepare(
+      'INSERT INTO olog_working_set (id, name, plan_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    );
+    this.insertWorkingSetElemStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO olog_working_set_elem (set_id, elem_id) VALUES (?, ?)'
+    );
+    this.insertWorkingSetArrStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO olog_working_set_arr (set_id, arr_id) VALUES (?, ?)'
+    );
+    this.getWorkingSetStmt = this.db.prepare(
+      'SELECT id, name, plan_hash, created_at, updated_at FROM olog_working_set WHERE id = ?'
+    );
+    this.deleteWorkingSetStmt = this.db.prepare(
+      'DELETE FROM olog_working_set WHERE id = ?'
     );
 
     this._sessions = new DomainSessionStore(this.db);
@@ -973,6 +997,71 @@ case 'removeArrow': {
     const params = [...elementKinds, ...elementKinds];
     const rows = this.db.prepare(sql).all(...params) as Array<{ kind: string }>;
     return rows.map((r) => r.kind as ArrowKind);
+  }
+
+  createWorkingSet(name: string, planHash?: string): string {
+    const id = randomUUID();
+    const now = Date.now();
+    this.insertWorkingSetStmt.run(id, name, planHash ?? null, now, now);
+    return id;
+  }
+
+  addToWorkingSet(setId: string, elemIds: string[], arrIds: string[]): { elementsAdded: number; arrowsAdded: number } {
+    const now = Date.now();
+    let elementsAdded = 0;
+    let arrowsAdded = 0;
+    const tx = this.db.transaction(() => {
+      for (const elemId of elemIds) {
+        const result = this.insertWorkingSetElemStmt.run(setId, elemId);
+        elementsAdded += result.changes;
+      }
+      for (const arrId of arrIds) {
+        const result = this.insertWorkingSetArrStmt.run(setId, arrId);
+        arrowsAdded += result.changes;
+      }
+      this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(now, setId);
+    });
+    tx();
+    return { elementsAdded, arrowsAdded };
+  }
+
+  getWorkingSet(setId: string): WorkingSet | null {
+    const row = this.getWorkingSetStmt.get(setId) as { id: string; name: string; plan_hash: string | null; created_at: number; updated_at: number } | undefined;
+    if (!row) return null;
+    const elemRows = this.db.prepare(
+      'SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?'
+    ).all(setId) as ElemRow[];
+    const arrRows = this.db.prepare(
+      'SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?'
+    ).all(setId) as ArrRow[];
+    return {
+      id: row.id,
+      name: row.name,
+      planHash: row.plan_hash,
+      elements: elemRows.map(r => this.rowToElem(r)),
+      arrows: arrRows.map(r => this.rowToArr(r)),
+    };
+  }
+
+  listWorkingSets(): WorkingSetMeta[] {
+    const rows = this.db.prepare(
+      `SELECT ws.id, ws.name, ws.plan_hash, ws.updated_at,
+        (SELECT COUNT(*) FROM olog_working_set_elem WHERE set_id = ws.id) AS element_count,
+        (SELECT COUNT(*) FROM olog_working_set_arr WHERE set_id = ws.id) AS arrow_count
+       FROM olog_working_set ws ORDER BY ws.updated_at DESC`
+    ).all() as Array<{ id: string; name: string; plan_hash: string | null; updated_at: number; element_count: number; arrow_count: number }>;
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      planHash: r.plan_hash,
+      elementCount: r.element_count,
+      arrowCount: r.arrow_count,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  deleteWorkingSet(setId: string): void {
+    this.deleteWorkingSetStmt.run(setId);
   }
 
   close(): void {

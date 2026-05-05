@@ -158,3 +158,20 @@ export interface ApplyResult {
   errors: string[];
   changes: ChangeInstruction[];
 }
+
+export interface WorkingSetMeta {
+  id: string;
+  name: string;
+  planHash: string | null;
+  elementCount: number;
+  arrowCount: number;
+  updatedAt: number;
+}
+
+export interface WorkingSet {
+  id: string;
+  name: string;
+  planHash: string | null;
+  elements: OlogElem[];
+  arrows: OlogArr[];
+}

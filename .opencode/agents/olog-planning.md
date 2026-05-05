@@ -68,10 +68,28 @@ Use the `question` tool to gather requirements. Ask all clarifying questions
 in a single call: goal, scope, known constraints, olog domain concept relevance.
 Use `git log --oneline -20` to understand recent activity before asking.
 
+Open a working set immediately after understanding the goal:
+```
+olog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })
+```
+Record the returned `setId` — carry it through all subsequent phases.
+
 **Phase 2 — Explore**
-For each structural question, invoke `@olog-explore` via Task. For quick ID lookups
-you may call `olog_query` or `olog_inspect` directly. Synthesise results in
-plain language — do not paste raw output to the user.
+Before invoking `@olog-explore`, check the working set:
+```
+olog_ws_query({ setId, nameRegex: "<name>" })
+```
+If the element is already there, use it directly — skip the explore call.
+
+For new questions, invoke `@olog-explore` via Task. It returns JSON:
+`{ elements, arrows, gaps }`. After each explore call, add the results:
+```
+olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
+```
+
+For quick ID lookups you may call `olog_query` or `olog_inspect` directly and
+add those results to the working set too. Synthesise findings in plain language —
+do not paste raw JSON to the user.
 
 For reference tracing, use `olog_query` with `arrows` + `direction`:
 `direction: "in"` reverses the arrow (e.g. "who calls X?" = `arrows: ["callerOf"], direction: "in"` on X).
@@ -134,4 +152,5 @@ If the plan contains `rewrite_body` operations:
    c. Mark the slice done in the plan file.
    d. Use `question` to ask whether to proceed to the next slice.
 3. Call `olog_reindex` after all body rewrites land.
+4. Drop the working set: `olog_ws_drop({ setId })`.
 </planning_workflow>

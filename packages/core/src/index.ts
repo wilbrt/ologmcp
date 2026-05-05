@@ -24,6 +24,8 @@ export type {
   ValidationResult,
   ChangeInstruction,
   ApplyResult,
+  WorkingSet,
+  WorkingSetMeta,
 } from './ontology.js';
 export { traverse, type TraverseOptions } from './traverse.js';
 export {
