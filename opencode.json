@@ -13,6 +13,16 @@
       "environment": {
         "OLOG_LANGUAGES": "typescript"
       }
+    },
+    "olog-mining": {
+      "type": "local",
+      "command": [
+        "./run-olog-mining-mcp.sh"
+      ],
+      "enabled": true,
+      "environment": {
+        "OLOG_LANGUAGES": "typescript"
+      }
     }
   },
   "agent": {
@@ -30,7 +40,11 @@
         "task": {
           "*": "deny"
         },
-        "question": "allow"
+        "question": "allow",
+        "mcp": {
+          "olog": "allow",
+          "olog-mining": "allow"
+        }
       }
     },
     "olog-planning": {
@@ -52,7 +66,10 @@
           "olog-explore": "allow",
           "olog-edit": "allow"
         },
-        "question": "allow"
+        "question": "allow",
+        "mcp": {
+          "olog": "allow"
+        }
       }
     },
     "olog-explore": {
@@ -91,6 +108,9 @@
         },
         "webfetch": "deny",
         "task": {
+          "*": "deny"
+        },
+        "mcp": {
           "*": "deny"
         }
       }
