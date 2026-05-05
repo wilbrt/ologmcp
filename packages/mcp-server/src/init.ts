@@ -21,6 +21,9 @@ permission:
   task:
     "*": deny
   question: allow
+  mcp:
+    olog: allow
+    olog-mining: allow
 ---
 <role>
 You are the domain ingestion agent. Your sole purpose is to build and maintain
@@ -161,6 +164,8 @@ permission:
     olog-explore: allow
     olog-edit: allow
   question: allow
+  mcp:
+    olog: allow
 ---
 <role>
 You are the planning agent. You help the user plan structural changes to the
@@ -411,6 +416,8 @@ permission:
   webfetch: deny
   task:
     "*": deny
+  mcp:
+    "*": deny
 ---
 # Edit Agent
 
@@ -556,6 +563,12 @@ export async function runInit(): Promise<void> {
       olog: {
         type: 'local',
         command: ['npx', '-y', '@olog/mcp-server'],
+        environment: { OLOG_LANGUAGES: languages.join(',') },
+        enabled: true,
+      },
+      'olog-mining': {
+        type: 'local',
+        command: ['npx', '-y', '-p', '@olog/mcp-server', 'olog-mcp-mining'],
         environment: { OLOG_LANGUAGES: languages.join(',') },
         enabled: true,
       },

@@ -96,6 +96,12 @@ async function runInit() {
         command: ["npx", "-y", "@olog/mcp-server"],
         environment: { OLOG_LANGUAGES: languages2.join(",") },
         enabled: true
+      },
+      "olog-mining": {
+        type: "local",
+        command: ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp-mining"],
+        environment: { OLOG_LANGUAGES: languages2.join(",") },
+        enabled: true
       }
     }
   };
@@ -129,6 +135,9 @@ permission:
   task:
     "*": deny
   question: allow
+  mcp:
+    olog: allow
+    olog-mining: allow
 ---
 <role>
 You are the domain ingestion agent. Your sole purpose is to build and maintain
@@ -268,6 +277,8 @@ permission:
     olog-explore: allow
     olog-edit: allow
   question: allow
+  mcp:
+    olog: allow
 ---
 <role>
 You are the planning agent. You help the user plan structural changes to the
@@ -515,6 +526,8 @@ permission:
     "clojure *": allow
   webfetch: deny
   task:
+    "*": deny
+  mcp:
     "*": deny
 ---
 # Edit Agent
