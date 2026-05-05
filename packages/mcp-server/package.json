@@ -10,7 +10,8 @@
   },
   "bin": {
     "olog-mcp": "./dist/index.js",
-    "olog-mcp-mining": "./dist/index-mining.js"
+    "olog-mcp-mining": "./dist/index-mining.js",
+    "olog-mcp-init": "./dist/index-init.js"
   },
   "dependencies": {
     "@olog/core": "*",

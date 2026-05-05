@@ -93,7 +93,7 @@ async function runInit() {
     mcp: {
       olog: {
         type: "local",
-        command: ["npx", "-y", "@olog/mcp-server"],
+        command: ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp"],
         environment: { OLOG_LANGUAGES: languages2.join(",") },
         enabled: true
       },
