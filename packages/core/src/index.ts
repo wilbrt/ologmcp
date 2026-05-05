@@ -26,6 +26,9 @@ export type {
   ApplyResult,
   WorkingSet,
   WorkingSetMeta,
+  WorkingSetNote,
+  SyntheticArr,
+  WorkingSetGraph,
 } from './ontology.js';
 export { traverse, type TraverseOptions } from './traverse.js';
 export {

@@ -20,6 +20,9 @@ import type {
   ArrowKind,
   WorkingSet,
   WorkingSetMeta,
+  WorkingSetNote,
+  SyntheticArr,
+  WorkingSetGraph,
 } from './ontology.js';
 import { traverse as traverseGraph, type TraverseOptions } from './traverse.js';
 
@@ -112,6 +115,12 @@ export class OlogStore {
   private readonly insertWorkingSetArrStmt: Database.Statement;
   private readonly getWorkingSetStmt: Database.Statement;
   private readonly deleteWorkingSetStmt: Database.Statement;
+  private readonly insertWorkingSetNoteStmt: Database.Statement;
+  private readonly getWorkingSetNoteStmt: Database.Statement;
+  private readonly getWorkingSetNotesStmt: Database.Statement;
+  private readonly deleteWorkingSetNoteStmt: Database.Statement;
+  private readonly insertSyntheticArrStmt: Database.Statement;
+  private readonly getSyntheticArrsStmt: Database.Statement;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -279,6 +288,24 @@ export class OlogStore {
     );
     this.deleteWorkingSetStmt = this.db.prepare(
       'DELETE FROM olog_working_set WHERE id = ?'
+    );
+    this.insertWorkingSetNoteStmt = this.db.prepare(
+      'INSERT OR REPLACE INTO olog_working_set_note (set_id, target_id, note, updated_at) VALUES (?, ?, ?, ?)'
+    );
+    this.getWorkingSetNoteStmt = this.db.prepare(
+      'SELECT set_id, target_id, note, updated_at FROM olog_working_set_note WHERE set_id = ? AND target_id = ?'
+    );
+    this.getWorkingSetNotesStmt = this.db.prepare(
+      'SELECT set_id, target_id, note, updated_at FROM olog_working_set_note WHERE set_id = ?'
+    );
+    this.deleteWorkingSetNoteStmt = this.db.prepare(
+      'DELETE FROM olog_working_set_note WHERE set_id = ? AND target_id = ?'
+    );
+    this.insertSyntheticArrStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO olog_ws_synthetic_arr (set_id, id, kind, src_id, dst_id, note) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    this.getSyntheticArrsStmt = this.db.prepare(
+      'SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ?'
     );
 
     this._sessions = new DomainSessionStore(this.db);
@@ -1025,7 +1052,7 @@ case 'removeArrow': {
     return { elementsAdded, arrowsAdded };
   }
 
-  getWorkingSet(setId: string): WorkingSet | null {
+  getWorkingSet(setId: string, includeAnnotations?: boolean): WorkingSet | null {
     const row = this.getWorkingSetStmt.get(setId) as { id: string; name: string; plan_hash: string | null; created_at: number; updated_at: number } | undefined;
     if (!row) return null;
     const elemRows = this.db.prepare(
@@ -1034,12 +1061,14 @@ case 'removeArrow': {
     const arrRows = this.db.prepare(
       'SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?'
     ).all(setId) as ArrRow[];
+    const notes = includeAnnotations !== false ? this.getAnnotations(setId) : [];
     return {
       id: row.id,
       name: row.name,
       planHash: row.plan_hash,
       elements: elemRows.map(r => this.rowToElem(r)),
       arrows: arrRows.map(r => this.rowToArr(r)),
+      notes,
     };
   }
 
@@ -1062,6 +1091,107 @@ case 'removeArrow': {
 
   deleteWorkingSet(setId: string): void {
     this.deleteWorkingSetStmt.run(setId);
+  }
+
+  annotateWorkingSet(setId: string, targetId: string, note: string): WorkingSetNote {
+    const now = Date.now();
+    this.insertWorkingSetNoteStmt.run(setId, targetId, note, now);
+    this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(now, setId);
+    return { setId, targetId, note, updatedAt: now };
+  }
+
+  getAnnotations(setId: string, targetIds?: string[]): WorkingSetNote[] {
+    if (targetIds && targetIds.length > 0) {
+      return targetIds.flatMap(tid => {
+        const row = this.getWorkingSetNoteStmt.get(setId, tid) as { set_id: string; target_id: string; note: string; updated_at: number } | undefined;
+        return row ? [{ setId: row.set_id, targetId: row.target_id, note: row.note, updatedAt: row.updated_at }] : [];
+      });
+    }
+    const rows = this.getWorkingSetNotesStmt.all(setId) as Array<{ set_id: string; target_id: string; note: string; updated_at: number }>;
+    return rows.map(r => ({ setId: r.set_id, targetId: r.target_id, note: r.note, updatedAt: r.updated_at }));
+  }
+
+  deleteAnnotation(setId: string, targetId: string): void {
+    this.deleteWorkingSetNoteStmt.run(setId, targetId);
+    this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(Date.now(), setId);
+  }
+
+  assertSyntheticArrow(setId: string, srcId: string, dstId: string, kind: string, note?: string): string {
+    const id = `syn:${randomUUID()}`;
+    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId, note ?? null);
+    this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(Date.now(), setId);
+    return id;
+  }
+
+  queryWorkingSetGraph(setId: string, opts: {
+    kind?: string;
+    nameRegex?: string;
+    moduleRegex?: string;
+    arrows?: string[];
+    direction?: 'in' | 'out';
+    includeAnnotations?: boolean;
+  }): WorkingSetGraph {
+    const { kind, nameRegex, moduleRegex, arrows, direction = 'out', includeAnnotations } = opts;
+
+    let seedElems = (this.db.prepare(
+      'SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?'
+    ).all(setId) as ElemRow[]).map(r => this.rowToElem(r));
+
+    if (kind) seedElems = seedElems.filter(e => e.kind === kind);
+    if (nameRegex) { const re = new RegExp(nameRegex); seedElems = seedElems.filter(e => re.test(e.name)); }
+    if (moduleRegex) { const re = new RegExp(moduleRegex); seedElems = seedElems.filter(e => e.module != null && re.test(e.module)); }
+
+    const syntheticRows = this.getSyntheticArrsStmt.all(setId) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null }>;
+    const allSyntheticArrows: SyntheticArr[] = syntheticRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id, note: r.note, synthetic: true as const }));
+
+    if (!arrows || arrows.length === 0) {
+      const realArrows = (this.db.prepare(
+        'SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?'
+      ).all(setId) as ArrRow[]).map(r => this.rowToArr(r));
+      const result: WorkingSetGraph = { elements: seedElems, arrows: realArrows, syntheticArrows: allSyntheticArrows };
+      if (includeAnnotations) this._attachAnnotations(setId, result);
+      return result;
+    }
+
+    const seedIds = seedElems.map(e => e.id);
+    if (seedIds.length === 0) return { elements: [], arrows: [], syntheticArrows: [] };
+
+    const col = direction === 'out' ? 'src_id' : 'dst_id';
+    const neighborCol = direction === 'out' ? 'dst_id' : 'src_id';
+    const idPh = seedIds.map(() => '?').join(', ');
+    const kindPh = arrows.map(() => '?').join(', ');
+
+    const realRows = this.db.prepare(
+      `SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE ${col} IN (${idPh}) AND kind IN (${kindPh})`
+    ).all(...seedIds, ...arrows) as ArrRow[];
+    const realArrows = realRows.map(r => this.rowToArr(r));
+
+    const synRows = this.db.prepare(
+      `SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
+    ).all(setId, ...seedIds, ...arrows) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null }>;
+    const syntheticArrows: SyntheticArr[] = synRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id, note: r.note, synthetic: true as const }));
+
+    const neighborIds = [
+      ...realRows.map(r => r[neighborCol as 'src_id' | 'dst_id'] as string),
+      ...synRows.map(r => r[neighborCol as 'src_id' | 'dst_id']),
+    ];
+    const allElemIds = [...new Set([...seedIds, ...neighborIds])];
+    const elemPh = allElemIds.map(() => '?').join(', ');
+    const allElems = (this.db.prepare(
+      `SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id IN (${elemPh})`
+    ).all(...allElemIds) as ElemRow[]).map(r => this.rowToElem(r));
+
+    const result: WorkingSetGraph = { elements: allElems, arrows: realArrows, syntheticArrows };
+    if (includeAnnotations) this._attachAnnotations(setId, result);
+    return result;
+  }
+
+  private _attachAnnotations(setId: string, graph: WorkingSetGraph): void {
+    const notes = this.getAnnotations(setId);
+    const notesMap = new Map(notes.map(n => [n.targetId, n.note]));
+    graph.elements = graph.elements.map(e => ({ ...e, annotation: notesMap.get(e.id) ?? null } as OlogElem & { annotation: string | null }));
+    graph.arrows = graph.arrows.map(a => ({ ...a, annotation: notesMap.get(a.id) ?? null } as OlogArr & { annotation: string | null }));
+    graph.syntheticArrows = graph.syntheticArrows.map(s => ({ ...s, annotation: notesMap.get(s.id) ?? null } as SyntheticArr & { annotation: string | null }));
   }
 
   close(): void {

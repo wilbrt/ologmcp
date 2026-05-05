@@ -48,9 +48,13 @@ These rules override everything else. They apply on every turn.
 <subagent_invocation>
 **`olog-explore`** — for structural questions
 - Invoke with the Task tool, agent name `"olog-explore"`
-- Prefix the task with `[ws:<setId>]` so explore adds results directly to the working set:
+- Prefix the task with `[ws:<setId>]` so explore writes findings directly to
+  the working set graph:
   `[ws:abc123] What are the callers of validateToken?`
-- Returns: `{ summary, gaps }` — plain-language description of what was found
+- Explore adds results to the working set and asserts synthetic arrows for
+  inferred relationships. Check `gaps` in its response for structural unknowns.
+- Do NOT read explore's output as the primary data source — query the working
+  set graph instead with `olog_ws_query`.
 
 **`olog-edit`** — for source file changes
 - Invoke with the Task tool, agent name `"olog-edit"`
@@ -76,22 +80,38 @@ olog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })
 Record the returned `setId` — carry it through all subsequent phases.
 
 **Phase 2 — Explore**
-Before invoking `@olog-explore`, check whether the element is already known:
+Before invoking `@olog-explore`, check whether the element is already in the
+working set graph:
 ```
 olog_ws_query({ setId, nameRegex: "<name>" })
 ```
-If found, use those IDs directly — skip the explore call.
+If found, use those results directly — skip the explore call.
 
-For new questions, invoke `@olog-explore` via Task with the `[ws:<setId>]` prefix.
-Explore filters results, adds them to the working set, and returns `{ summary, gaps }`.
-Use the summary to understand what was found; retrieve specific IDs with:
+For new questions, invoke `@olog-explore` via Task with the `[ws:<setId>]`
+prefix. After each explore call, query the working set graph with traversal
+to retrieve what was found — do NOT read explore's text output as the primary
+data source:
 ```
-olog_ws_query({ setId, kind: "<kind>", nameRegex: "<name>" })
+olog_ws_query({ setId, arrows: ["callerOf"], direction: "in", nameRegex: "<target>" })
 ```
 
-For reference tracing, use `olog_query` with `arrows` + `direction`:
-`direction: "in"` reverses the arrow (e.g. "who calls X?" = `arrows: ["callerOf"], direction: "in"` on X).
-`direction: "out"` follows naturally (e.g. "what does X call?" = `arrows: ["calls"], direction: "out"` on X).
+Use `arrows` + `direction` to traverse the accumulated graph:
+- `direction: "in"` — who points TO matched elements (e.g. callers of X)
+- `direction: "out"` — what matched elements point TO (e.g. what X calls)
+
+Synthetic arrows (marked `synthetic: true`) represent explore's structural
+inferences. Annotate them when you want to record your trust level:
+```
+olog_ws_annotate({ setId, targetId: "<synthetic-arr-id>", note: "Confirmed: only entry point" })
+```
+
+For reference tracing across multiple explore calls, query the union of
+everything accumulated so far:
+```
+olog_ws_query({ setId, arrows: ["callerOf", "calls", "structurallyDependsOn"], direction: "out" })
+```
+The working set graph accumulates structural knowledge across turns — no need
+to re-invoke explore for elements already in the set.
 
 **Phase 3 — Draft the plan**
 Write to `.plans/YYYY-MM-DD-<slug>.md`:

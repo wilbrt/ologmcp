@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { OlogStore, type OlogElem } from '@olog/core';
+import { OlogStore, type SyntheticArr } from '@olog/core';
 
 export function registerOlogWs(server: McpServer, store: OlogStore): void {
   server.registerTool(
@@ -47,27 +47,30 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
   server.registerTool(
     'olog_ws_query',
     {
-      description: 'Query the accumulated working set. Mirrors olog_query filters. Check this before calling olog_explore — if the element is already here, skip the explore call.',
+      description: 'Query the working set as a graph. Without arrows/direction: returns accumulated elements, real arrows, and synthetic arrows. With arrows/direction: performs one-hop traversal from matching seed elements through both main olog arrows and synthetic arrows, returning the reachable subgraph. Synthetic arrows (synthetic: true) are inferences asserted by explore agents. Check this before calling olog_explore — skip the explore call if the element is already here.',
       inputSchema: z.object({
         setId: z.string().describe('Working set ID'),
-        kind: z.string().optional().describe('Filter by element kind'),
+        kind: z.string().optional().describe('Filter seed elements by kind'),
         nameRegex: z.string().optional().describe('Regex filter on element name'),
         moduleRegex: z.string().optional().describe('Regex filter on element module'),
+        arrows: z.array(z.string()).optional().describe('Arrow kinds to follow for traversal (e.g. ["callerOf", "calls", "structurallyDependsOn"])'),
+        direction: z.enum(['in', 'out']).optional().describe('Traversal direction: "out" follows arrows where seed is source, "in" follows arrows where seed is destination'),
+        includeAnnotations: z.boolean().optional().describe('Include annotations on elements and arrows'),
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     async (args) => {
       try {
-        const ws = store.getWorkingSet(args.setId);
-        if (!ws) {
-          return { content: [{ type: 'text' as const, text: `Working set "${args.setId}" not found` }], isError: true };
-        }
-        let elements: OlogElem[] = ws.elements;
-        if (args.kind) elements = elements.filter((e: OlogElem) => e.kind === args.kind);
-        if (args.nameRegex) { const re = new RegExp(args.nameRegex); elements = elements.filter((e: OlogElem) => re.test(e.name)); }
-        if (args.moduleRegex) { const re = new RegExp(args.moduleRegex); elements = elements.filter((e: OlogElem) => e.module != null && re.test(e.module)); }
+        const graphOpts: Parameters<typeof store.queryWorkingSetGraph>[1] = {};
+        if (args.kind !== undefined) graphOpts.kind = args.kind;
+        if (args.nameRegex !== undefined) graphOpts.nameRegex = args.nameRegex;
+        if (args.moduleRegex !== undefined) graphOpts.moduleRegex = args.moduleRegex;
+        if (args.arrows !== undefined) graphOpts.arrows = args.arrows;
+        if (args.direction !== undefined) graphOpts.direction = args.direction;
+        if (args.includeAnnotations !== undefined) graphOpts.includeAnnotations = args.includeAnnotations;
+        const graph = store.queryWorkingSetGraph(args.setId, graphOpts);
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ elements, arrows: ws.arrows }, null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(graph, null, 2) }],
         };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
@@ -88,6 +91,56 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
       try {
         store.deleteWorkingSet(args.setId);
         return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'olog_ws_assert',
+    {
+      description: 'Assert a synthetic arrow into the working set — an inferred structural relationship not yet modeled as a real olog arrow. Use when you discover a relationship through querying (e.g. a de facto dependency, a gateway pattern, an unmodeled implementedAs) that would be lost if only stored in prose. Synthetic arrows appear in olog_ws_query traversal results with synthetic: true.',
+      inputSchema: z.object({
+        setId: z.string().describe('Working set ID'),
+        srcId: z.string().describe('Source element ID (must exist in olog_elem)'),
+        dstId: z.string().describe('Destination element ID (must exist in olog_elem)'),
+        kind: z.string().describe('Arrow kind — free-text, e.g. "structurallyDependsOn", "gatekeepedBy", "coordinatesWith", or a standard ArrowKind you verified empirically'),
+        note: z.string().optional().describe('Explanation of why this relationship holds — what evidence supports this inference'),
+      }),
+      annotations: { idempotentHint: false },
+    },
+    async (args) => {
+      try {
+        const id = store.assertSyntheticArrow(args.setId, args.srcId, args.dstId, args.kind, args.note);
+        const result: SyntheticArr = { id, setId: args.setId, kind: args.kind, srcId: args.srcId, dstId: args.dstId, note: args.note ?? null, synthetic: true };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'olog_ws_annotate',
+    {
+      description: 'Attach, update, or delete a note on a working set element or arrow. When delete is true, removes the annotation. Otherwise, upserts the note text (replaces any existing note for the same target).',
+      inputSchema: z.object({
+        setId: z.string().describe('Working set ID'),
+        targetId: z.string().describe('ID of the element or arrow to annotate'),
+        note: z.string().describe('Note text to attach'),
+        delete: z.boolean().default(false).describe('When true, removes the annotation'),
+      }),
+      annotations: { idempotentHint: true },
+    },
+    async (args) => {
+      try {
+        if (args.delete) {
+          store.deleteAnnotation(args.setId, args.targetId);
+          return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true }) }] };
+        }
+        const result = store.annotateWorkingSet(args.setId, args.targetId, args.note);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
       }

@@ -1,3 +1,4 @@
+
 -- olog SQLite schema
 -- Requires SQLite >= 3.37.0 for STRICT tables
 
@@ -119,4 +120,22 @@ CREATE TABLE IF NOT EXISTS olog_working_set_arr (
   set_id TEXT NOT NULL REFERENCES olog_working_set(id) ON DELETE CASCADE,
   arr_id TEXT NOT NULL,
   PRIMARY KEY (set_id, arr_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS olog_working_set_note (
+  set_id    TEXT NOT NULL REFERENCES olog_working_set(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL,
+  note      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (set_id, target_id)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS olog_ws_synthetic_arr (
+  set_id TEXT NOT NULL REFERENCES olog_working_set(id) ON DELETE CASCADE,
+  id     TEXT NOT NULL,
+  kind   TEXT NOT NULL,
+  src_id TEXT NOT NULL,
+  dst_id TEXT NOT NULL,
+  note   TEXT,
+  PRIMARY KEY (set_id, id)
 ) STRICT, WITHOUT ROWID;

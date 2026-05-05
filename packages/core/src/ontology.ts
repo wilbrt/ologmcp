@@ -1,3 +1,10 @@
+
+export interface WorkingSetNote {
+  setId: string;
+  targetId: string;
+  note: string;
+  updatedAt: number;
+}
 export const ELEM_KINDS = [
   'file', 'module', 'symbol', 'callsite', 'import', 'type', 'interface',
   'class', 'enum', 'function', 'method', 'const', 'var', 'namespace',
@@ -174,4 +181,21 @@ export interface WorkingSet {
   planHash: string | null;
   elements: OlogElem[];
   arrows: OlogArr[];
+  notes?: WorkingSetNote[];
+}
+
+export interface SyntheticArr {
+  id: string;
+  setId: string;
+  kind: string;
+  srcId: string;
+  dstId: string;
+  note: string | null;
+  synthetic: true;
+}
+
+export interface WorkingSetGraph {
+  elements: OlogElem[];
+  arrows: OlogArr[];
+  syntheticArrows: SyntheticArr[];
 }
