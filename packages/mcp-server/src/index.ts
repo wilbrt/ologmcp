@@ -85,7 +85,7 @@ try {
 const server = new McpServer(
   { name: 'olog-mcp', version: '0.0.1' },
   {
-    instructions: `Structural model (ontology log) of the codebase at ${projectRoot} (languages: ${languages.join(', ')}). Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_delegate (assemble delegation brief), olog_dot (export graph as Graphviz DOT). Name and module parameters accept JavaScript regex patterns.`,
+    instructions: `Structural olog for ${projectRoot} (${languages.join(', ')}). Name and module parameters accept JS regex. Call olog_dump first for orientation.`,
     capabilities: { logging: {} },
   }
 );

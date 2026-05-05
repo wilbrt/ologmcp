@@ -26,7 +26,7 @@ const store = new OlogStore(dbPath);
 const server = new McpServer(
   { name: 'olog-mining', version: '0.0.1' },
   {
-    instructions: `Heavy analysis tools for the olog at ${projectRoot}. Reads the DB ingested by the core olog server. Tools: olog_mine_equations (discover path equations; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: start/refine/commit), olog_discover_motifs (structural motif discovery: start/refine/commit).`,
+    instructions: `Mining tools for the olog at ${projectRoot}. Reads the DB owned by the core olog server. Use domain=["domain"] in mine_equations to focus on domain elements.`,
     capabilities: { logging: {} },
   }
 );

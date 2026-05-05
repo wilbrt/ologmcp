@@ -1,7 +1,6 @@
 import { OlogStore } from './db.js';
 import type {
   PathEquation,
-  PlanOperation,
   IntegrityConstraint,
   ConfidenceLevel,
   OlogElem,
@@ -23,7 +22,6 @@ const CONFIDENCE_RANK: Record<ConfidenceLevel, number> = {
 
 export function evaluateConstraints(
   store: OlogStore,
-  _operations: PlanOperation[],
 ): { valid: boolean; violations: Violation[] } {
   const violations: Violation[] = [];
   const constraints = store.getConstraints();
@@ -203,7 +201,6 @@ function evaluateTotality(
 
 export function evaluatePathEquations(
   store: OlogStore,
-  _operations: PlanOperation[],
 ): { valid: boolean; violations: Violation[] } {
   const violations: Violation[] = [];
   const equations = store.getEquations();

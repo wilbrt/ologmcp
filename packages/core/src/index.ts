@@ -1,4 +1,5 @@
 export { OlogStore } from './db.js';
+export { ELEM_KINDS, ARROW_KINDS } from './ontology.js';
 export type {
   OlogElem,
   OlogArr,

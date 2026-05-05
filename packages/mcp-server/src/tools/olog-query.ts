@@ -2,60 +2,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { spawnSync } from 'node:child_process';
 import { relative } from 'node:path';
-import { OlogStore } from '@olog/core';
+import { OlogStore, ELEM_KINDS, ARROW_KINDS } from '@olog/core';
 
 export function registerOlogQuery(server: McpServer, store: OlogStore, projectRoot: string): void {
-  const elemKindEnum = [
-    'file',
-    'module',
-    'symbol',
-    'callsite',
-    'import',
-    'type',
-    'interface',
-    'class',
-    'enum',
-    'function',
-    'method',
-    'const',
-    'var',
-    'namespace',
-    'property',
-    'domain',
-    'other',
-  ] as const;
-
-  const arrowKindEnum = [
-    'extends',
-    'implements',
-    'calls',
-    'imports',
-    'exports',
-    'references',
-    'contains',
-    'returns',
-    'param',
-    'typeof',
-    'instanceof',
-    'definedIn',
-    'inModule',
-    'memberOf',
-    'callerOf',
-    'calleeOf',
-    'importsFrom',
-    'locatedIn',
-    'hasProperty',
-    'hasType',
-    'implementedAs',
-    'other',
-  ] as const;
-
   const startByIdSchema = z.object({
     id: z.string().describe('Element ID to start from'),
   });
 
   const startByFilterSchema = z.object({
-    kind: z.enum(elemKindEnum).optional().describe("Element kind to filter by. Omit to match all kinds."),
+    kind: z.enum(ELEM_KINDS).optional().describe("Element kind to filter by. Omit to match all kinds."),
     name: z.string().optional().describe(
       "Regex pattern matched against element name. Examples: '^handle', 'User', 'Button$'"
     ),
@@ -75,25 +30,7 @@ export function registerOlogQuery(server: McpServer, store: OlogStore, projectRo
           'Start element specification: either an exact element ID, or a filter (kind/name/module) to find starting element(s). When omitted, falls back to the top-level kind/name/module parameters.'
         ),
         kind: z
-          .enum([
-            'file',
-            'module',
-            'symbol',
-            'callsite',
-            'import',
-            'type',
-            'interface',
-            'class',
-            'enum',
-            'function',
-            'method',
-            'const',
-            'var',
-            'namespace',
-            'property',
-            'domain',
-            'any',
-          ])
+          .enum([...ELEM_KINDS, 'any'] as unknown as [string, ...string[]])
           .default('any')
           .describe("Element kind to filter by. Use 'any' to match all kinds."),
         name: z
@@ -109,7 +46,7 @@ export function registerOlogQuery(server: McpServer, store: OlogStore, projectRo
             "Regex pattern matched against module (relative file path). Examples: 'src/components', 'utils/'"
           ),
         arrows: z
-          .array(z.enum(arrowKindEnum))
+          .array(z.enum(ARROW_KINDS))
           .optional()
           .describe(
             'Ordered array of arrow kinds to traverse multi-hop. When provided, the tool performs graph traversal instead of a simple filter query.'

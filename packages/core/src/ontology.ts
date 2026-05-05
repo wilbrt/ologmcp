@@ -1,61 +1,19 @@
-/**
- * Ontology type definitions for the olog (ontology log).
- * These types define the data model for elements and arrows in the ontology.
- */
+export const ELEM_KINDS = [
+  'file', 'module', 'symbol', 'callsite', 'import', 'type', 'interface',
+  'class', 'enum', 'function', 'method', 'const', 'var', 'namespace',
+  'property', 'domain', 'other',
+] as const;
 
-/**
- * Union of all element kinds in the ontology.
- */
-export type OlogKind =
-  | 'file'
-  | 'module'
-  | 'symbol'
-  | 'callsite'
-  | 'import'
-  | 'type'
-  | 'interface'
-  | 'class'
-  | 'enum'
-  | 'function'
-  | 'method'
-  | 'const'
-  | 'var'
-  | 'namespace'
-  | 'property'
-  | 'domain'
-  | 'other';
+export const ARROW_KINDS = [
+  'extends', 'implements', 'calls', 'imports', 'exports', 'references',
+  'contains', 'returns', 'param', 'typeof', 'instanceof', 'definedIn',
+  'inModule', 'memberOf', 'callerOf', 'calleeOf', 'importsFrom', 'locatedIn',
+  'hasProperty', 'hasType', 'implementedAs', 'throws', 'other',
+] as const;
 
-/**
- * Union of all arrow kinds in the ontology.
- */
-export type ArrowKind =
-  | 'extends'
-  | 'implements'
-  | 'calls'
-  | 'imports'
-  | 'exports'
-  | 'references'
-  | 'contains'
-  | 'returns'
-  | 'param'
-  | 'typeof'
-  | 'instanceof'
-  | 'definedIn'
-  | 'inModule'
-  | 'memberOf'
-  | 'callerOf'
-  | 'calleeOf'
-  | 'importsFrom'
-  | 'locatedIn'
-  | 'hasProperty'
-  | 'hasType'
-  | 'implementedAs'
-  | 'throws'
-  | 'other';
+export type OlogKind = typeof ELEM_KINDS[number];
+export type ArrowKind = typeof ARROW_KINDS[number];
 
-/**
- * Represents an element in the ontology.
- */
 export interface OlogElem {
   id: string;
   kind: OlogKind;
@@ -65,9 +23,6 @@ export interface OlogElem {
   attrs: Record<string, unknown>;
 }
 
-/**
- * Represents an arrow (relationship) in the ontology.
- */
 export interface OlogArr {
   id: string;
   kind: ArrowKind;
@@ -76,18 +31,12 @@ export interface OlogArr {
   attrs: Record<string, unknown>;
 }
 
-/**
- * Represents an attribute of an element.
- */
 export interface OlogAttr {
   elemId: string;
   key: string;
   value: string | null;
 }
 
-/**
- * Result of an ingest operation.
- */
 export interface IngestResult {
   filesProcessed: number;
   elementsCreated: number;
@@ -95,23 +44,14 @@ export interface IngestResult {
   durationMs: number;
 }
 
-/**
- * Result of a query operation - returns elements.
- */
 export type QueryResult = OlogElem[];
 
-/**
- * Result of inspecting a single element with its arrows.
- */
 export interface InspectResult {
   element: OlogElem;
   outgoing: OlogArr[];
   incoming: OlogArr[];
 }
 
-/**
- * Result of a full dump operation.
- */
 export interface DumpResult {
   commitSha: string;
   elementCounts: Record<string, number>;
@@ -120,9 +60,6 @@ export interface DumpResult {
   totalArrows: number;
 }
 
-/**
- * Raw element during extraction (before ID generation).
- */
 export interface RawElement {
   kind: OlogKind;
   name: string;
@@ -131,9 +68,6 @@ export interface RawElement {
   attrs: Record<string, unknown>;
 }
 
-/**
- * Raw arrow during extraction (before ID generation).
- */
 export interface RawArrow {
   kind: ArrowKind;
   srcModule: string;
@@ -145,18 +79,12 @@ export interface RawArrow {
 
 export type ConfidenceLevel = 'resolved' | 'unresolved' | 'tentative';
 
-/**
- * A path through the olog graph: a sequence of arrows from src to tgt.
- */
 export interface Path {
   src: string;
   tgt: string;
   arrows: string[];
 }
 
-/**
- * A path equation asserting that two paths are equivalent.
- */
 export interface PathEquation {
   id: string;
   name: string;
@@ -168,9 +96,6 @@ export interface PathEquation {
 
 export type ConstraintKind = 'existence' | 'layering' | 'monotonicity' | 'totality';
 
-/**
- * An integrity constraint on the olog graph.
- */
 export interface IntegrityConstraint {
   id: string;
   name: string;
@@ -180,9 +105,6 @@ export interface IntegrityConstraint {
   provenance: Provenance | null;
 }
 
-/**
- * Provenance information for an element, arrow, equation, or constraint.
- */
 export interface Provenance {
   source: string;
   commitSha: string;
@@ -190,17 +112,11 @@ export interface Provenance {
   confidence: ConfidenceLevel;
 }
 
-/**
- * A proposed change to the olog schema.
- */
 export interface SchemaProposal {
   description: string;
   operations: PlanOperation[];
 }
 
-/**
- * A single operation within a plan — rename, move, addSymbol, removeSymbol, addArrow, removeArrow, rewrite_body, addReexport, or amendType.
- */
 export type PlanOperation =
   | { kind: 'rename'; target: string; newName: string }
   | { kind: 'move'; target: string; newModule: string }
@@ -228,9 +144,6 @@ export interface ValidationResult {
   warnings: string[];
 }
 
-/**
- * File edit instruction with position and replacement text.
- */
 export interface ChangeInstruction {
   path: string;
   line: number;

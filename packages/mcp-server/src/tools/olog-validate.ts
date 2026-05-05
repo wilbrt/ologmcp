@@ -308,10 +308,10 @@ export function registerOlogValidate(server: McpServer, store: OlogStore, projec
           }
         }
 
-        const equationResult = evaluatePathEquations(store, ops);
+        const equationResult = evaluatePathEquations(store);
         violations.push(...equationResult.violations);
 
-        const constraintResult = evaluateConstraints(store, ops);
+        const constraintResult = evaluateConstraints(store);
         violations.push(...constraintResult.violations);
 
         if (violations.length === 0) {
