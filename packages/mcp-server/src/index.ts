@@ -42,50 +42,12 @@ try {
 const dbPath = join(ologDir, 'olog.sqlite');
 const store = new OlogStore(dbPath);
 
-console.error(`[olog] Starting ingestion for ${projectRoot}...`);
-const start = Date.now();
 let languages: string[] = [];
-try {
-  const adapterRegistry = new AdapterRegistry();
-  setDefaultRegistry(adapterRegistry);
-
-  const rawLanguages = process.env.OLOG_LANGUAGES;
-  languages = rawLanguages
-    ? rawLanguages.split(',').map((s) => s.trim()).filter(Boolean)
-    : detectLanguages(projectRoot);
-
-  for (const lang of languages) {
-    try {
-      const mod = await import(`@olog/lang-${lang}`);
-      const className = ADAPTER_CLASS[lang];
-      const AdapterClass = className ? mod[className] : mod.default;
-      if (typeof AdapterClass === 'function') {
-        if (typeof mod.init === 'function') await mod.init(); 
-        adapterRegistry.register(new AdapterClass());
-        console.error(`[olog] Loaded ${lang} adapter`);
-      } else {
-        console.error(`[olog] Warning: no adapter class found in @olog/lang-${lang}`);
-      }
-    } catch (err) {
-      console.error(`[olog] Warning: could not load @olog/lang-${lang}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  const result = ingestProject(projectRoot, store, adapterRegistry);
-  console.error(
-    `[olog] Ingestion complete in ${Date.now() - start}ms: ${result.filesProcessed} files, ${result.elementsCreated} elements, ${result.arrowsCreated} arrows`
-  );
-} catch (err) {
-  console.error(
-    `[olog] Ingestion failed: ${err instanceof Error ? err.message : String(err)}`
-  );
-  store.close();
-  process.exit(1);
-}
 
 const server = new McpServer(
   { name: 'olog-mcp', version: '0.0.1' },
   {
-    instructions: `Structural olog for ${projectRoot} (${languages.join(', ')}). Name and module parameters accept JS regex. Call olog_dump first for orientation.`,
+    instructions: `Structural olog for ${projectRoot}. Name and module parameters accept JS regex. Call olog_dump first for orientation.`,
     capabilities: { logging: {} },
   }
 );
@@ -105,6 +67,46 @@ registerOlogDot(server, store);
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error('[olog] MCP server connected on stdio');
+
+// Yield so the initialize response is flushed before synchronous ingestion blocks the event loop
+await new Promise<void>((resolve) => setImmediate(resolve));
+
+console.error(`[olog] Starting ingestion for ${projectRoot}...`);
+const start = Date.now();
+try {
+  const adapterRegistry = new AdapterRegistry();
+  setDefaultRegistry(adapterRegistry);
+
+  const rawLanguages = process.env.OLOG_LANGUAGES;
+  languages = rawLanguages
+    ? rawLanguages.split(',').map((s) => s.trim()).filter(Boolean)
+    : detectLanguages(projectRoot);
+
+  for (const lang of languages) {
+    try {
+      const mod = await import(`@olog/lang-${lang}`);
+      const className = ADAPTER_CLASS[lang];
+      const AdapterClass = className ? mod[className] : mod.default;
+      if (typeof AdapterClass === 'function') {
+        if (typeof mod.init === 'function') await mod.init();
+        adapterRegistry.register(new AdapterClass());
+        console.error(`[olog] Loaded ${lang} adapter`);
+      } else {
+        console.error(`[olog] Warning: no adapter class found in @olog/lang-${lang}`);
+      }
+    } catch (err) {
+      console.error(`[olog] Warning: could not load @olog/lang-${lang}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const result = ingestProject(projectRoot, store, adapterRegistry);
+  console.error(
+    `[olog] Ingestion complete in ${Date.now() - start}ms: ${result.filesProcessed} files, ${result.elementsCreated} elements, ${result.arrowsCreated} arrows`
+  );
+} catch (err) {
+  console.error(
+    `[olog] Ingestion failed: ${err instanceof Error ? err.message : String(err)}`
+  );
+}
 
 const cleanup = () => {
   try {
