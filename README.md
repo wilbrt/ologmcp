@@ -10,10 +10,12 @@ A structural model server for software codebases, exposed as an MCP server for u
 |---|---|
 | `@olog-ingestion` | Interactive domain modeling — discover objects, propose arrows, mine structural invariants |
 | `@olog-planning` | Plan structural changes, validate them against the olog, delegate implementation to the edit agent |
-| `@explore` | Read-only structural queries — answers focused questions about the codebase from olog facts |
-| `@edit` | Source editor — receives a fully-resolved brief and writes code, verified with `tsc` |
+| `@olog-explore` | Read-only structural queries — answers focused questions about the codebase from olog facts |
+| `@olog-edit` | Source editor — receives a fully-resolved brief and writes code, verified with `tsc` |
 
-**Fourteen MCP tools** your agents can call:
+**Two MCP servers** with different tool sets:
+
+### Core server (`olog`) — available to all agents
 
 | Tool | What it does |
 |---|---|
@@ -27,10 +29,17 @@ A structural model server for software codebases, exposed as an MCP server for u
 | `olog_apply` | Execute a validated plan — writes source edits and updates the olog |
 | `olog_render` | Preview the source edits a plan would produce without applying them |
 | `olog_delegate` | Assemble a DelegationBrief — all context an edit agent needs to implement one slice |
+| `olog_dot` | Export the domain graph as Graphviz DOT for visualisation |
+
+### Mining server (`olog-mining`) — `@olog-ingestion` only
+
+| Tool | What it does |
+|---|---|
 | `olog_mine_equations` | Discover path equations that hold in the graph (structural invariants) |
 | `olog_domain_discover` | Interactive session: surface domain objects from types/interfaces/classes |
 | `olog_discover_motifs` | Find recurring structural patterns across the codebase |
-| `olog_dot` | Export the domain graph as Graphviz DOT for visualisation |
+
+The mining server opens the existing DB without re-ingesting — the core server owns ingestion on startup.
 
 ## Prerequisites
 
@@ -42,15 +51,15 @@ A structural model server for software codebases, exposed as an MCP server for u
 Run this once in the root of the project you want to model:
 
 ```bash
-npx @olog/mcp-server init
+npx -p @olog/mcp-server olog-mcp-init
 ```
 
 This will:
 1. Detect which languages your project uses
 2. Write four agent files into `.opencode/agents/`
-3. Add the MCP server configuration to `opencode.json`
+3. Add both MCP server configurations to `opencode.json`
 
-Commit both files — teammates get the agents automatically when they open the project in opencode.
+Commit both — teammates get the agents automatically when they open the project in opencode.
 
 ```bash
 git add .opencode/agents/ opencode.json
@@ -64,9 +73,11 @@ The init command detects languages automatically by looking for indicator files:
 | Language | Detected by |
 |---|---|
 | TypeScript / JavaScript | `tsconfig.json`, `package.json`, `*.ts`, `*.tsx` |
-| Clojure | `deps.edn`, `project.clj`, `shadow-cljs.edn`, `*.clj`, `*.cljs` |
+| Clojure / ClojureScript | `deps.edn`, `project.clj`, `shadow-cljs.edn`, `*.clj`, `*.cljs` |
 
 Detection result is written into `opencode.json` as `OLOG_LANGUAGES`. Edit that value manually if you want to override it.
+
+For Clojure/ClojureScript projects using re-frame, the adapter indexes `reg-sub`, `reg-event-db`, `reg-event-fx`, `reg-fx`, and `reg-cofx` forms as named elements, and emits `callerOf` arrows for `subscribe` and `dispatch` call sites.
 
 For projects not yet supported, the server starts without a language adapter — the olog will be empty until a parser for your language is added. See [Adding a language adapter](#adding-a-language-adapter) below.
 
@@ -74,7 +85,7 @@ For projects not yet supported, the server starts without a language adapter —
 
 ### Ingestion
 
-When opencode starts, the MCP server automatically ingests your codebase using tree-sitter. Every function, class, type, interface, method, import, and call site becomes an element in the olog. Relationships between them (calls, imports, extends, implements, etc.) become arrows.
+When opencode starts, the core MCP server automatically ingests your codebase using tree-sitter. Every function, class, type, interface, method, import, and call site becomes an element in the olog. Relationships between them (calls, imports, extends, implements, etc.) become arrows.
 
 The olog is stored in `.olog/olog.sqlite` in your project root. Add it to `.gitignore` — it is regenerated on each start.
 
@@ -90,12 +101,12 @@ Use `@olog-ingestion` to:
 ### Planning and editing
 
 The `@olog-planning` agent helps you plan structural changes (renames, moves, extractions, new abstractions). It:
-1. Gathers structural context by delegating queries to `@explore`
+1. Gathers structural context by delegating queries to `@olog-explore`
 2. Writes a plan file to `.plans/`
 3. Validates the plan against olog constraints before touching any code
-4. Delegates each implementation slice to `@edit` with a fully-resolved brief
+4. Delegates each implementation slice to `@olog-edit` with a fully-resolved brief
 
-The `@edit` agent receives a `DelegationBrief` — a self-contained JSON with the target file, analogous implementations, required interfaces, and acceptance criteria. It writes the code and verifies with `tsc`.
+The `@olog-edit` agent receives a `DelegationBrief` — a self-contained JSON with the target file, analogous implementations, required interfaces, and acceptance criteria. It writes the code and verifies with `tsc`.
 
 ### Visualisation
 
@@ -117,10 +128,14 @@ The generated `opencode.json` section:
   "mcp": {
     "olog": {
       "type": "local",
-      "command": ["npx", "-y", "@olog/mcp-server"],
-      "environment": {
-        "OLOG_LANGUAGES": "typescript"
-      },
+      "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp"],
+      "environment": { "OLOG_LANGUAGES": "typescript" },
+      "enabled": true
+    },
+    "olog-mining": {
+      "type": "local",
+      "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp-mining"],
+      "environment": { "OLOG_LANGUAGES": "typescript" },
       "enabled": true
     }
   }
@@ -160,5 +175,5 @@ The repository is a monorepo with four packages:
 |---|---|
 | `packages/core` | Store (SQLite), ingestion pipeline, constraint engine, mining, planning |
 | `packages/lang-typescript` | Tree-sitter TypeScript/TSX adapter |
-| `packages/lang-clojure` | Tree-sitter Clojure adapter |
+| `packages/lang-clojure` | Tree-sitter Clojure/ClojureScript adapter (includes re-frame support) |
 | `packages/mcp-server` | MCP server, tool registration, `init` CLI |
