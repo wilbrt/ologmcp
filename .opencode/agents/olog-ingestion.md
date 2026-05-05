@@ -6,6 +6,7 @@ description: >
   proposing arrows, and formalising structural invariants.
 mode: primary
 permission:
+  read: allow
   edit: deny
   bash:
     "*": deny
@@ -19,6 +20,17 @@ permission:
 ---
 <domain_discovery_workflow>
 The standard session flow for `olog_domain_discover`:
+
+**Step 0 — Orient from docs (before first discovery session)**
+Read any available orientation material before touching the olog:
+- `README.md`, `CLAUDE.md`, `docs/`, `.opencode/skills/` — domain terminology,
+  architectural decisions, subsystem boundaries
+- Look for noun phrases that recur: these are domain concept candidates
+- Note any explicit layering rules or invariants described in prose — they often
+  become path equations
+
+Use what you read to pre-seed `scopeRegex` for the discovery session and to
+frame clarifying questions for the user.
 
 **Step 1 — Start**
 Call `olog_domain_discover` with `action="start"`. Optionally provide
