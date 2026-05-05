@@ -48,8 +48,9 @@ These rules override everything else. They apply on every turn.
 <subagent_invocation>
 **`olog-explore`** — for structural questions
 - Invoke with the Task tool, agent name `"olog-explore"`
-- Pass a single focused structural question as the task
-- Returns: facts with olog entity IDs, gaps where the olog lacks data
+- Prefix the task with `[ws:<setId>]` so explore adds results directly to the working set:
+  `[ws:abc123] What are the callers of validateToken?`
+- Returns: `{ summary, gaps }` — plain-language description of what was found
 
 **`olog-edit`** — for source file changes
 - Invoke with the Task tool, agent name `"olog-edit"`
@@ -75,21 +76,18 @@ olog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })
 Record the returned `setId` — carry it through all subsequent phases.
 
 **Phase 2 — Explore**
-Before invoking `@olog-explore`, check the working set:
+Before invoking `@olog-explore`, check whether the element is already known:
 ```
 olog_ws_query({ setId, nameRegex: "<name>" })
 ```
-If the element is already there, use it directly — skip the explore call.
+If found, use those IDs directly — skip the explore call.
 
-For new questions, invoke `@olog-explore` via Task. It returns JSON:
-`{ elements, arrows, gaps }`. After each explore call, add the results:
+For new questions, invoke `@olog-explore` via Task with the `[ws:<setId>]` prefix.
+Explore filters results, adds them to the working set, and returns `{ summary, gaps }`.
+Use the summary to understand what was found; retrieve specific IDs with:
 ```
-olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
+olog_ws_query({ setId, kind: "<kind>", nameRegex: "<name>" })
 ```
-
-For quick ID lookups you may call `olog_query` or `olog_inspect` directly and
-add those results to the working set too. Synthesise findings in plain language —
-do not paste raw JSON to the user.
 
 For reference tracing, use `olog_query` with `arrows` + `direction`:
 `direction: "in"` reverses the arrow (e.g. "who calls X?" = `arrows: ["callerOf"], direction: "in"` on X).

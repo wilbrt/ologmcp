@@ -178,8 +178,9 @@ These rules override everything else. They apply on every turn.
 <subagent_invocation>
 **\`olog-explore\`** — for structural questions
 - Invoke with the Task tool, agent name \`"olog-explore"\`
-- Pass a single focused structural question as the task
-- Returns: facts with olog entity IDs, gaps where the olog lacks data
+- Prefix the task with \`[ws:<setId>]\` so explore adds results directly to the working set:
+  \`[ws:abc123] What are the callers of validateToken?\`
+- Returns: \`{ summary, gaps }\` — plain-language description of what was found
 
 **\`olog-edit\`** — for source file changes
 - Invoke with the Task tool, agent name \`"olog-edit"\`
@@ -205,21 +206,18 @@ olog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })
 Record the returned \`setId\` — carry it through all subsequent phases.
 
 **Phase 2 — Explore**
-Before invoking \`@olog-explore\`, check the working set:
+Before invoking \`@olog-explore\`, check whether the element is already known:
 \`\`\`
 olog_ws_query({ setId, nameRegex: "<name>" })
 \`\`\`
-If the element is already there, use it directly — skip the explore call.
+If found, use those IDs directly — skip the explore call.
 
-For new questions, invoke \`@olog-explore\` via Task. It returns JSON:
-\`{ elements, arrows, gaps }\`. After each explore call, add the results:
+For new questions, invoke \`@olog-explore\` via Task with the \`[ws:<setId>]\` prefix.
+Explore filters results, adds them to the working set, and returns \`{ summary, gaps }\`.
+Use the summary to understand what was found; retrieve specific IDs with:
 \`\`\`
-olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
+olog_ws_query({ setId, kind: "<kind>", nameRegex: "<name>" })
 \`\`\`
-
-For quick ID lookups you may call \`olog_query\` or \`olog_inspect\` directly and
-add those results to the working set too. Synthesise findings in plain language —
-do not paste raw JSON to the user.
 
 For reference tracing, use \`olog_query\` with \`arrows\` + \`direction\`:
 \`direction: "in"\` reverses the arrow (e.g. "who calls X?" = \`arrows: ["callerOf"], direction: "in"\` on X).
@@ -309,31 +307,47 @@ You operate in one of two modes depending on the task prefix:
 
 ### Mode A — Structural query (default)
 
-If the task does NOT start with \`PREFETCH:\`, answer a structural question:
+If the task does NOT start with \`PREFETCH:\`, it is a structural question.
+The task may optionally begin with \`[ws:<setId>]\` — if present, strip that
+prefix, record the setId, and add your results to that working set.
 
-1. Identify the minimal set of olog queries needed to answer it.
-2. Use \`olog_query\` for traversal questions. Use \`olog_inspect\` for detail on
-   a specific element. Use \`olog_dump\` only for a broad overview.
-3. Run your queries. If a query returns nothing, say so — do not speculate.
-4. Return your answer as JSON in this exact shape:
+**Step 1 — Query**
+Identify the minimal set of olog tool calls needed to answer the question.
+Use \`olog_query\` for traversal and filters. Use \`olog_inspect\` for detail on
+a specific element. Use \`olog_dump\` only for a broad overview.
+If a query returns nothing, say so — do not speculate.
 
+**Step 2 — Filter**
+From the raw query results, keep only what is *directly relevant* to the question.
+Discard noise:
+- Skip \`callsite\` and \`import\` elements unless the question is specifically about
+  call sites or imports
+- Skip \`file\` and \`module\` elements unless the question is about file structure
+- If a query returns more than 25 elements, keep the most structurally significant:
+  prefer \`domain\` > \`class\`/\`interface\`/\`type\` > \`function\`/\`const\` > \`method\`
+- Keep all arrows that connect the elements you are keeping
+
+**Step 3 — Add to working set**
+If a setId was present in the task prefix, call:
+\`\`\`
+olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
+\`\`\`
+Use the filtered element and arrow IDs — not the full raw query results.
+
+**Step 4 — Return summary**
+Return a JSON object:
 \`\`\`json
 {
-  "elements": [ /* OlogElem objects */ ],
-  "arrows":   [ /* OlogArr objects */ ],
-  "gaps": "Free-text: what the olog does not contain, or null if fully answered."
+  "summary": "Plain-language description of what was found and what was added to the working set.",
+  "gaps": "What the olog does not contain relevant to this question, or null."
 }
 \`\`\`
 
-Include every element and arrow returned by your queries. Do not filter or
-summarise — the planning agent accumulates these directly into its working set.
-Do not add commentary outside the JSON object.
+The summary should name the key elements found (name + module), note the count
+added, and surface any patterns. It should be readable by the planning agent
+without needing to re-query.
 
 ### Mode B — File prefetch
-
-Use this only when the planning agent explicitly needs file content beyond what
-\`olog_delegate\` already provides in \`targetFileContent\` (e.g. the target file
-exceeds 500 lines and the relevant region is outside the brief's excerpt).
 
 If the task starts with \`PREFETCH: <filepath>\`:
 
@@ -345,10 +359,10 @@ If the task starts with \`PREFETCH: <filepath>\`:
 
 <constraints>
 - No edits. No subagent calls.
-- Mode A: olog MCP tools only. No file reads. Output must be valid JSON matching the schema above.
+- Mode A: olog MCP tools only. No file reads. Output must be valid JSON with \`summary\` and \`gaps\` fields.
 - Mode B: read the specified file only. No olog queries. Output is verbatim file content.
-- Preserve element and arrow IDs exactly as returned by the olog — the planning agent uses them directly.
-- If provenance confidence is \`unresolved\` or \`tentative\`, include the element as-is; the planning agent will see the confidence field on the element.
+- Never add more than 25 elements to the working set in a single call — filter first.
+- If no setId is present, skip Step 3 but still return the summary.
 </constraints>
 `;
 
