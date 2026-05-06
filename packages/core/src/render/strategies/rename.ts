@@ -2,6 +2,7 @@ import { OlogStore } from '../../db.js';
 import type { OlogElem } from '../../ontology.js';
 import type { SourceEdit } from '../edit.js';
 import { parseSpan } from '../../utils/parse-span.js';
+import { escapeRegex } from '../../utils/escape-regex.js';
 export { parseSpan };
 
 export interface RenameEdits {
@@ -140,7 +141,5 @@ function findCallReferences(store: OlogStore, elem: OlogElem, elementId: string)
   return [...new Map(results.map(e => [e.id, e])).values()];
 }
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+
 

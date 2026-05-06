@@ -1,14 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { OlogStore } from '@olog/core';
-import { evaluateConstraints, evaluatePathEquations } from '@olog/core';
+import { evaluateConstraints, evaluatePathEquations, escapeRegex } from '@olog/core';
 import type { Violation } from '@olog/core';
 import type { PlanOperation } from '@olog/core';
 import { loadPlan } from './olog-plan-store.js';
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 function fuzzyFindElement(
   store: OlogStore,

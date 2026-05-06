@@ -51,15 +51,3 @@ export function computeNewImportPath(
   const newPath = computeRelativeImportPath(fromFile, newModule);
   return newPath;
 }
-
-/**
- * Determine the import style used in a given import statement.
- * Returns 'named', 'default', 'namespace', or 'side-effect'.
- */
-export function importStyle(importText: string): 'named' | 'default' | 'namespace' | 'side-effect' {
-  const trimmed = importText.trim();
-  if (/^import\s+\*\s+as\s+/.test(trimmed)) return 'namespace';
-  if (/^import\s+\{/.test(trimmed)) return 'named';
-  if (/^import\s+[a-zA-Z_$]/.test(trimmed)) return 'default';
-  return 'side-effect';
-}

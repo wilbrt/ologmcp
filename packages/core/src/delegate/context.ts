@@ -7,6 +7,7 @@
  */
 import type { OlogStore } from '../db.js';
 import type { OlogElem } from '../ontology.js';
+import { escapeRegex } from '../utils/escape-regex.js';
 
 export interface MustCallEntry {
   id: string;
@@ -288,6 +289,3 @@ export interface DomainContext {
   }>;
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}

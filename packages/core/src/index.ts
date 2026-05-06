@@ -80,6 +80,7 @@ export {
   type AssembleBriefOptions,
 } from './delegate/index.js';
 export { SourceResolver, filePathFromSpan } from './delegate/resolve.js';
+export { escapeRegex } from './utils/escape-regex.js';
 export type { AnalogueCandidate } from './delegate/analogues.js';
 export type {
   MustCallEntry,
