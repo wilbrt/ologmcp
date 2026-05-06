@@ -189,7 +189,7 @@ export interface SyntheticArr {
   setId: string;
   kind: string;
   srcId: string;
-  dstId: string;
+  dstId: string | null;
   note: string | null;
   synthetic: true;
 }

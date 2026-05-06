@@ -128,6 +128,7 @@ description: >
   proposing arrows, and formalising structural invariants.
 mode: primary
 permission:
+  read: allow
   edit: deny
   bash:
     "*": deny
@@ -139,30 +140,19 @@ permission:
     olog: allow
     olog-mining: allow
 ---
-<role>
-You are the domain ingestion agent. Your sole purpose is to build and maintain
-the **domain layer** of the olog \u2014 the set of named domain objects, their
-inter-relationships, and the structural invariants that govern them.
-
-You work interactively with the user through three recurring activities:
-
-1. **Domain discovery** \u2014 \`olog_domain_discover\` sessions that surface domain
-   objects from interface/type/class elements, propose arrows (field-level and
-   structural), and commit accepted objects to the olog.
-
-2. **Equation mining** \u2014 \`olog_mine_equations\` runs that find path equations
-   holding in the olog graph, especially at the domain level, which you then
-   curate and propose as formal schema constraints.
-
-3. **Schema extension** \u2014 \`olog_propose_schema\` for any objects, arrows, or
-   equations the user wants to add manually.
-
-You do NOT read or edit source files. You do NOT plan refactors. You do NOT
-delegate to subagents. You are purely an ingestion and formalisation agent.
-</role>
-
 <domain_discovery_workflow>
 The standard session flow for \`olog_domain_discover\`:
+
+**Step 0 \u2014 Orient from docs (before first discovery session)**
+Read any available orientation material before touching the olog:
+- \`README.md\`, \`CLAUDE.md\`, \`docs/\`, \`.opencode/skills/\` \u2014 domain terminology,
+  architectural decisions, subsystem boundaries
+- Look for noun phrases that recur: these are domain concept candidates
+- Note any explicit layering rules or invariants described in prose \u2014 they often
+  become path equations
+
+Use what you read to pre-seed \`scopeRegex\` for the discovery session and to
+frame clarifying questions for the user.
 
 **Step 1 \u2014 Start**
 Call \`olog_domain_discover\` with \`action="start"\`. Optionally provide
@@ -249,11 +239,6 @@ When the user asks to mine invariants or explore structural patterns:
 
 5. **Cross-session continuity.** When starting a new session, the tool
    automatically links to already-committed domain objects from prior sessions.
-
-6. **No source reads.** Answer structural questions from the olog via
-   \`olog_query\` or \`olog_inspect\`. Do not read files. For reference tracing,
-   use \`arrows\` + \`direction: "in"\` to reverse an arrow (e.g. "who implements I?"
-   = \`arrows: ["implements"], direction: "in"\` on I).
 </rules>
 `;
     AGENT_PLANNING = `---
@@ -280,21 +265,11 @@ permission:
   mcp:
     olog: allow
 ---
-<role>
-You are the planning agent. You help the user plan structural changes to the
-codebase through an interactive conversation, track those plans as structured
-files in the \`.plans/\` directory, validate them against the olog, and
-orchestrate their execution by delegating implementation slices to the \`edit\`
-subagent.
-</role>
-
 <critical_rules>
 These rules override everything else. They apply on every turn.
 
-1. **Never use read, write, glob, or grep tools on source files.** You have
-   access to those tools but they are restricted to \`.plans/\`. Use \`git log\`,
-   \`git diff\`, or \`git show\` for historical context. Use \`@olog-explore\` via Task
-   for live structural questions.
+1. **Never read source files.** Use \`git log\`, \`git diff\`, or \`git show\` for
+   historical context. Use \`@olog-explore\` via Task for live structural questions.
 
 2. **Invoke subagents via the Task tool.** \`@olog-explore\` and \`@olog-edit\` are NOT
    tools in your tool list \u2014 they are subagents. You reach them by calling
@@ -316,8 +291,9 @@ These rules override everything else. They apply on every turn.
 <subagent_invocation>
 **\`olog-explore\`** \u2014 for structural questions
 - Invoke with the Task tool, agent name \`"olog-explore"\`
-- Pass a single focused structural question as the task
-- Returns: facts with olog entity IDs, gaps where the olog lacks data
+- Prefix the task with \`[ws:<setId>]\` so explore adds results directly to the working set:
+  \`[ws:abc123] What are the callers of validateToken?\`
+- Returns: \`{ summary, gaps }\` \u2014 plain-language description of what was found
 
 **\`olog-edit\`** \u2014 for source file changes
 - Invoke with the Task tool, agent name \`"olog-edit"\`
@@ -336,10 +312,25 @@ Use the \`question\` tool to gather requirements. Ask all clarifying questions
 in a single call: goal, scope, known constraints, olog domain concept relevance.
 Use \`git log --oneline -20\` to understand recent activity before asking.
 
+Open a working set immediately after understanding the goal:
+\`\`\`
+olog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })
+\`\`\`
+Record the returned \`setId\` \u2014 carry it through all subsequent phases.
+
 **Phase 2 \u2014 Explore**
-For each structural question, invoke \`@olog-explore\` via Task. For quick ID lookups
-you may call \`olog_query\` or \`olog_inspect\` directly. Synthesise results in
-plain language \u2014 do not paste raw output to the user.
+Before invoking \`@olog-explore\`, check whether the element is already known:
+\`\`\`
+olog_ws_query({ setId, nameRegex: "<name>" })
+\`\`\`
+If found, use those IDs directly \u2014 skip the explore call.
+
+For new questions, invoke \`@olog-explore\` via Task with the \`[ws:<setId>]\` prefix.
+Explore filters results, adds them to the working set, and returns \`{ summary, gaps }\`.
+Use the summary to understand what was found; retrieve specific IDs with:
+\`\`\`
+olog_ws_query({ setId, kind: "<kind>", nameRegex: "<name>" })
+\`\`\`
 
 For reference tracing, use \`olog_query\` with \`arrows\` + \`direction\`:
 \`direction: "in"\` reverses the arrow (e.g. "who calls X?" = \`arrows: ["callerOf"], direction: "in"\` on X).
@@ -402,19 +393,8 @@ If the plan contains \`rewrite_body\` operations:
    c. Mark the slice done in the plan file.
    d. Use \`question\` to ask whether to proceed to the next slice.
 3. Call \`olog_reindex\` after all body rewrites land.
+4. Drop the working set: \`olog_ws_drop({ setId })\`.
 </planning_workflow>
-
-<olog_tool_discipline>
-Direct olog MCP tools available:
-- \`olog_plan\` \u2014 create the structural plan
-- \`olog_validate\` \u2014 check it against projected post-plan state
-- \`olog_render\` \u2014 preview source edits a plan would produce (optional)
-- \`olog_apply render=true\` \u2014 render source edits and update olog DB in one step (mechanical ops)
-- \`olog_apply render=false\` \u2014 update olog DB only, no source edits (after manual source changes)
-- \`olog_delegate\` \u2014 assemble a DelegationBrief for \`@olog-edit\` (rewrite_body ops only)
-- \`olog_query\` / \`olog_inspect\` \u2014 quick structural lookups (no subagent needed)
-- \`olog_reindex\` \u2014 refresh the structural model after source changes
-</olog_tool_discipline>
 `;
     AGENT_EXPLORE = `---
 description: >
@@ -434,59 +414,52 @@ permission:
   mcp:
     olog: allow
 ---
-<role>
-You are the structural explorer. You answer a single focused structural question
-about the codebase by querying the olog. You do not plan, edit, or infer \u2014 you
-retrieve and report grounded facts.
-
-Your output is consumed by the planning agent. Be precise, terse, and grounded.
-Every fact you report must be backed by an olog entity or arrow ID.
-</role>
-
 <instructions>
 You operate in one of two modes depending on the task prefix:
 
----
-
 ### Mode A \u2014 Structural query (default)
 
-If the task does NOT start with \`PREFETCH:\`, answer a structural question:
+If the task does NOT start with \`PREFETCH:\`, it is a structural question.
+The task may optionally begin with \`[ws:<setId>]\` \u2014 if present, strip that
+prefix, record the setId, and add your results to that working set.
 
-1. Identify the minimal set of olog queries needed to answer it.
-2. Use \`olog_query\` for traversal questions. Use \`olog_inspect\` for detail on
-   a specific element. Use \`olog_dump\` only for a broad overview.
+**Step 1 \u2014 Query**
+Identify the minimal set of olog tool calls needed to answer the question.
+Use \`olog_query\` for traversal and filters. Use \`olog_inspect\` for detail on
+a specific element. Use \`olog_dump\` only for a broad overview.
+If a query returns nothing, say so \u2014 do not speculate.
 
-   **Reference tracing with \`arrows\` + \`direction\`:**
-   - "Who calls X?" \u2192 \`start: {id: X}, arrows: ["callerOf"], direction: "in"\`
-   - "What does X call?" \u2192 \`start: {id: X}, arrows: ["calls"], direction: "out"\`
-   - "Who implements interface I?" \u2192 \`start: {id: I}, arrows: ["implements"], direction: "in"\`
-   - "What extends class C?" \u2192 \`start: {id: C}, arrows: ["extends"], direction: "in"\`
-   - "What does X import from?" \u2192 \`start: {id: X}, arrows: ["importsFrom"], direction: "out"\`
-   - "Who imports from module M?" \u2192 \`start: {id: M}, arrows: ["importsFrom"], direction: "in"\`
-   - Multi-hop: \`arrows: ["calls", "calls"]\` follows two call hops outward.
+**Step 2 \u2014 Filter**
+From the raw query results, keep only what is *directly relevant* to the question.
+Discard noise:
+- Skip \`callsite\` and \`import\` elements unless the question is specifically about
+  call sites or imports
+- Skip \`file\` and \`module\` elements unless the question is about file structure
+- If a query returns more than 25 elements, keep the most structurally significant:
+  prefer \`domain\` > \`class\`/\`interface\`/\`type\` > \`function\`/\`const\` > \`method\`
+- Keep all arrows that connect the elements you are keeping
 
-3. Run your queries. If a query returns nothing, say so \u2014 do not speculate.
-4. Return your answer in this format:
-
+**Step 3 \u2014 Add to working set**
+If a setId was present in the task prefix, call:
 \`\`\`
-## Facts
+olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
+\`\`\`
+Use the filtered element and arrow IDs \u2014 not the full raw query results.
 
-- <fact 1> [ref: <entity-or-arrow-id>]
-- <fact 2> [ref: <entity-or-arrow-id>]
-
-## Gaps
-<Anything the olog does not contain. State "none" if fully answered.>
+**Step 4 \u2014 Return summary**
+Return a JSON object:
+\`\`\`json
+{
+  "summary": "Plain-language description of what was found and what was added to the working set.",
+  "gaps": "What the olog does not contain relevant to this question, or null."
+}
 \`\`\`
 
-5. Do not add interpretation, recommendations, or planning commentary.
-
----
+The summary should name the key elements found (name + module), note the count
+added, and surface any patterns. It should be readable by the planning agent
+without needing to re-query.
 
 ### Mode B \u2014 File prefetch
-
-Use this only when the planning agent explicitly needs file content beyond what
-\`olog_delegate\` already provides in \`targetFileContent\` (e.g. the target file
-exceeds 500 lines and the relevant region is outside the brief's excerpt).
 
 If the task starts with \`PREFETCH: <filepath>\`:
 
@@ -498,12 +471,10 @@ If the task starts with \`PREFETCH: <filepath>\`:
 
 <constraints>
 - No edits. No subagent calls.
-- Mode A: **never use the read tool**. If the question asks for source code of a function
-  or class, use \`olog_query\` to find the element by name, then \`olog_inspect\` on its ID \u2014
-  \`olog_inspect\` returns the source snippet directly from the stored span. Do not read files.
-- Mode B: read the specified file only. No olog queries.
-- If confidence is \`unresolved\` or \`tentative\`, flag it: \`[ref: <id>, confidence: unresolved]\`
-- Cite element IDs, not just names.
+- Mode A: olog MCP tools only. No file reads. Output must be valid JSON with \`summary\` and \`gaps\` fields.
+- Mode B: read the specified file only. No olog queries. Output is verbatim file content.
+- Never add more than 25 elements to the working set in a single call \u2014 filter first.
+- If no setId is present, skip Step 3 but still return the summary.
 </constraints>
 `;
     AGENT_EDIT = `---
@@ -535,8 +506,6 @@ permission:
 You receive a task containing a \`DelegationBrief\` JSON. Write or modify source
 code to satisfy the brief. All necessary context is in the brief itself.
 
----
-
 ## Reading the brief
 
 | Field | What it contains |
@@ -554,8 +523,6 @@ If \`targetFileContent\` covers the region you need to edit, use it directly and
 skip calling \`read\`. Only call \`read\` if you need lines beyond what the brief
 provides.
 
----
-
 ## Prime directive: reuse and simplicity
 
 Before writing a single line, scan \`targetFileContent\`, \`analogues\`, and
@@ -572,10 +539,8 @@ Before writing a single line, scan \`targetFileContent\`, \`analogues\`, and
 - **Do not import new dependencies** if the existing imports already provide
   what you need.
 
-When in doubt, ask: *does the simplest analogue-matching implementation satisfy
-all acceptance criteria?* If yes, ship that.
-
----
+When in doubt: does the simplest analogue-matching implementation satisfy all
+acceptance criteria? If yes, ship that.
 
 ## Brief rules
 
@@ -596,23 +561,15 @@ all acceptance criteria?* If yes, ship that.
 
 6. **Acceptance criteria are hard constraints.** Every item must be satisfied.
 
----
-
-## Verification
+## Verification and output
 
 After editing, verify based on the target language:
 - **TypeScript/JavaScript**: \`npx tsc --noEmit\`
 - **Clojure**: \`clj -M --main clojure.main -e "(compile 'ns.name)"\` or equivalent
 - If no verifier is available, state that explicitly
 
----
-
-## Output
-
-After editing, confirm:
-- Which files were changed and what was done in each
-- Verification result (pass / fail / not available)
-- Any acceptance criteria you could not fully satisfy, with explanation
+Confirm: which files were changed, verification result, and any acceptance
+criteria you could not fully satisfy with explanation.
 `;
   }
 });
@@ -620,7 +577,7 @@ After editing, confirm:
 // src/index.ts
 import { mkdirSync as mkdirSync3 } from "fs";
 import { join as join6 } from "path";
-import { McpServer as McpServer12 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer as McpServer13 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // ../core/dist/index.js
@@ -628,9 +585,10 @@ import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
+import { randomUUID as randomUUID3 } from "crypto";
 import { randomUUID } from "crypto";
 import { randomUUID as randomUUID2 } from "crypto";
-import { randomUUID as randomUUID3 } from "crypto";
+import { randomUUID as randomUUID4 } from "crypto";
 import { globSync } from "glob";
 import { readFileSync as readFileSync2, statSync } from "fs";
 import { relative, basename } from "path";
@@ -834,6 +792,11 @@ var OlogStore = class {
   hasArrowKindStmt;
   insertMotifTemplateStmt;
   insertMotifInstanceStmt;
+  insertWorkingSetStmt;
+  insertWorkingSetElemStmt;
+  insertWorkingSetArrStmt;
+  getWorkingSetStmt;
+  deleteWorkingSetStmt;
   constructor(path) {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
@@ -968,6 +931,21 @@ var OlogStore = class {
     );
     this.insertMotifInstanceStmt = this.db.prepare(
       `INSERT INTO olog_motif_instance (id, template_id, mappings_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?)`
+    );
+    this.insertWorkingSetStmt = this.db.prepare(
+      "INSERT INTO olog_working_set (id, name, plan_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+    );
+    this.insertWorkingSetElemStmt = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_working_set_elem (set_id, elem_id) VALUES (?, ?)"
+    );
+    this.insertWorkingSetArrStmt = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_working_set_arr (set_id, arr_id) VALUES (?, ?)"
+    );
+    this.getWorkingSetStmt = this.db.prepare(
+      "SELECT id, name, plan_hash, created_at, updated_at FROM olog_working_set WHERE id = ?"
+    );
+    this.deleteWorkingSetStmt = this.db.prepare(
+      "DELETE FROM olog_working_set WHERE id = ?"
     );
     this._sessions = new DomainSessionStore(this.db);
     this._motifSessions = new MotifSessionStore(this.db);
@@ -1578,6 +1556,66 @@ var OlogStore = class {
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => r.kind);
   }
+  createWorkingSet(name, planHash) {
+    const id = randomUUID3();
+    const now = Date.now();
+    this.insertWorkingSetStmt.run(id, name, planHash ?? null, now, now);
+    return id;
+  }
+  addToWorkingSet(setId, elemIds, arrIds) {
+    const now = Date.now();
+    let elementsAdded = 0;
+    let arrowsAdded = 0;
+    const tx = this.db.transaction(() => {
+      for (const elemId2 of elemIds) {
+        const result = this.insertWorkingSetElemStmt.run(setId, elemId2);
+        elementsAdded += result.changes;
+      }
+      for (const arrId of arrIds) {
+        const result = this.insertWorkingSetArrStmt.run(setId, arrId);
+        arrowsAdded += result.changes;
+      }
+      this.db.prepare("UPDATE olog_working_set SET updated_at = ? WHERE id = ?").run(now, setId);
+    });
+    tx();
+    return { elementsAdded, arrowsAdded };
+  }
+  getWorkingSet(setId) {
+    const row = this.getWorkingSetStmt.get(setId);
+    if (!row) return null;
+    const elemRows = this.db.prepare(
+      "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?"
+    ).all(setId);
+    const arrRows = this.db.prepare(
+      "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?"
+    ).all(setId);
+    return {
+      id: row.id,
+      name: row.name,
+      planHash: row.plan_hash,
+      elements: elemRows.map((r) => this.rowToElem(r)),
+      arrows: arrRows.map((r) => this.rowToArr(r))
+    };
+  }
+  listWorkingSets() {
+    const rows = this.db.prepare(
+      `SELECT ws.id, ws.name, ws.plan_hash, ws.updated_at,
+        (SELECT COUNT(*) FROM olog_working_set_elem WHERE set_id = ws.id) AS element_count,
+        (SELECT COUNT(*) FROM olog_working_set_arr WHERE set_id = ws.id) AS arrow_count
+       FROM olog_working_set ws ORDER BY ws.updated_at DESC`
+    ).all();
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      planHash: r.plan_hash,
+      elementCount: r.element_count,
+      arrowCount: r.arrow_count,
+      updatedAt: r.updated_at
+    }));
+  }
+  deleteWorkingSet(setId) {
+    this.deleteWorkingSetStmt.run(setId);
+  }
   close() {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
     this.db.close();
@@ -1622,12 +1660,56 @@ var OlogStore = class {
     };
   }
 };
+var ELEM_KINDS = [
+  "file",
+  "module",
+  "symbol",
+  "callsite",
+  "import",
+  "type",
+  "interface",
+  "class",
+  "enum",
+  "function",
+  "method",
+  "const",
+  "var",
+  "namespace",
+  "property",
+  "domain",
+  "other"
+];
+var ARROW_KINDS = [
+  "extends",
+  "implements",
+  "calls",
+  "imports",
+  "exports",
+  "references",
+  "contains",
+  "returns",
+  "param",
+  "typeof",
+  "instanceof",
+  "definedIn",
+  "inModule",
+  "memberOf",
+  "callerOf",
+  "calleeOf",
+  "importsFrom",
+  "locatedIn",
+  "hasProperty",
+  "hasType",
+  "implementedAs",
+  "throws",
+  "other"
+];
 var CONFIDENCE_RANK = {
   tentative: 0,
   unresolved: 1,
   resolved: 2
 };
-function evaluateConstraints(store2, _operations) {
+function evaluateConstraints(store2) {
   const violations = [];
   const constraints = store2.getConstraints();
   for (const constraint of constraints) {
@@ -1656,7 +1738,7 @@ function evaluateExistence(store2, constraint) {
   if (elements.length > 0) return [];
   return [
     {
-      id: randomUUID3(),
+      id: randomUUID4(),
       kind: "integrity",
       humanMessage: constraint.message ?? `Existence constraint "${constraint.name}" violated: no elements of kind "${kind}" exist`,
       involved: []
@@ -1691,7 +1773,7 @@ function evaluateLayering(store2, constraint) {
       if (dstLayer === null) continue;
       if (srcLayer < dstLayer) {
         violations.push({
-          id: randomUUID3(),
+          id: randomUUID4(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Layering constraint "${constraint.name}" violated: "${elem.name}" (layer ${srcLayer}) references "${dstElem.name}" (layer ${dstLayer})`,
           involved: [elem.id, dstElem.id]
@@ -1714,7 +1796,7 @@ function evaluateMonotonicity(store2, constraint) {
       if (CONFIDENCE_RANK[dstProv.confidence] > CONFIDENCE_RANK[srcProv.confidence]) {
         const dstElem = store2.getElem(arr.dstId);
         violations.push({
-          id: randomUUID3(),
+          id: randomUUID4(),
           kind: "integrity",
           humanMessage: constraint.message ?? `Monotonicity constraint "${constraint.name}" violated: "${elem.name}" (${srcProv.confidence}) \u2192 "${dstElem?.name ?? arr.dstId}" (${dstProv.confidence})`,
           involved: [elem.id, arr.dstId]
@@ -1735,14 +1817,14 @@ function evaluateTotality(store2, constraint) {
     const matching = outgoing.filter((a) => a.kind === arrowKind);
     if (matching.length === 0) {
       violations.push({
-        id: randomUUID3(),
+        id: randomUUID4(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has no outgoing "${arrowKind}" arrow`,
         involved: [elem.id]
       });
     } else if (matching.length > 1) {
       violations.push({
-        id: randomUUID3(),
+        id: randomUUID4(),
         kind: "integrity",
         humanMessage: constraint.message ?? `Totality constraint "${constraint.name}" violated: "${elem.name}" has ${matching.length} outgoing "${arrowKind}" arrows (expected exactly 1)`,
         involved: [elem.id, ...matching.map((a) => a.id)]
@@ -1751,14 +1833,14 @@ function evaluateTotality(store2, constraint) {
   }
   return violations;
 }
-function evaluatePathEquations(store2, _operations) {
+function evaluatePathEquations(store2) {
   const violations = [];
   const equations = store2.getEquations();
   for (const eq of equations) {
     const result = evaluateEquation(eq, store2);
     if (!result.valid) {
       violations.push({
-        id: randomUUID3(),
+        id: randomUUID4(),
         kind: "equation",
         humanMessage: result.message,
         involved: result.involved
@@ -3939,54 +4021,11 @@ import { z } from "zod";
 import { spawnSync } from "child_process";
 import { relative as relative3 } from "path";
 function registerOlogQuery(server2, store2, projectRoot2) {
-  const elemKindEnum = [
-    "file",
-    "module",
-    "symbol",
-    "callsite",
-    "import",
-    "type",
-    "interface",
-    "class",
-    "enum",
-    "function",
-    "method",
-    "const",
-    "var",
-    "namespace",
-    "property",
-    "domain",
-    "other"
-  ];
-  const arrowKindEnum = [
-    "extends",
-    "implements",
-    "calls",
-    "imports",
-    "exports",
-    "references",
-    "contains",
-    "returns",
-    "param",
-    "typeof",
-    "instanceof",
-    "definedIn",
-    "inModule",
-    "memberOf",
-    "callerOf",
-    "calleeOf",
-    "importsFrom",
-    "locatedIn",
-    "hasProperty",
-    "hasType",
-    "implementedAs",
-    "other"
-  ];
   const startByIdSchema = z.object({
     id: z.string().describe("Element ID to start from")
   });
   const startByFilterSchema = z.object({
-    kind: z.enum(elemKindEnum).optional().describe("Element kind to filter by. Omit to match all kinds."),
+    kind: z.enum(ELEM_KINDS).optional().describe("Element kind to filter by. Omit to match all kinds."),
     name: z.string().optional().describe(
       "Regex pattern matched against element name. Examples: '^handle', 'User', 'Button$'"
     ),
@@ -4002,32 +4041,14 @@ function registerOlogQuery(server2, store2, projectRoot2) {
         start: z.union([startByIdSchema, startByFilterSchema]).optional().describe(
           "Start element specification: either an exact element ID, or a filter (kind/name/module) to find starting element(s). When omitted, falls back to the top-level kind/name/module parameters."
         ),
-        kind: z.enum([
-          "file",
-          "module",
-          "symbol",
-          "callsite",
-          "import",
-          "type",
-          "interface",
-          "class",
-          "enum",
-          "function",
-          "method",
-          "const",
-          "var",
-          "namespace",
-          "property",
-          "domain",
-          "any"
-        ]).default("any").describe("Element kind to filter by. Use 'any' to match all kinds."),
+        kind: z.enum([...ELEM_KINDS, "any"]).default("any").describe("Element kind to filter by. Use 'any' to match all kinds."),
         name: z.string().optional().describe(
           "Regex pattern matched against element name. Examples: '^handle', 'User', 'Button$'"
         ),
         module: z.string().optional().describe(
           "Regex pattern matched against module (relative file path). Examples: 'src/components', 'utils/'"
         ),
-        arrows: z.array(z.enum(arrowKindEnum)).optional().describe(
+        arrows: z.array(z.enum(ARROW_KINDS)).optional().describe(
           "Ordered array of arrow kinds to traverse multi-hop. When provided, the tool performs graph traversal instead of a simple filter query."
         ),
         direction: z.enum(["out", "in"]).default("out").describe(
@@ -5054,9 +5075,9 @@ function registerOlogValidate(server2, store2, projectRoot2) {
             }
           }
         }
-        const equationResult = evaluatePathEquations(store2, ops);
+        const equationResult = evaluatePathEquations(store2);
         violations.push(...equationResult.violations);
-        const constraintResult = evaluateConstraints(store2, ops);
+        const constraintResult = evaluateConstraints(store2);
         violations.push(...constraintResult.violations);
         if (violations.length === 0) {
           return {
@@ -5090,7 +5111,7 @@ function registerOlogValidate(server2, store2, projectRoot2) {
 // src/tools/olog-propose-schema.ts
 import "@modelcontextprotocol/sdk/server/mcp.js";
 import { z as z8 } from "zod";
-import { randomUUID as randomUUID4 } from "crypto";
+import { randomUUID as randomUUID5 } from "crypto";
 var objectSchema = z8.object({
   kind: z8.string().describe("Element kind"),
   name: z8.string().describe("Element name (noun phrase)"),
@@ -5205,7 +5226,7 @@ function registerOlogProposeSchema(server2, store2) {
         }
         const createdElemIds = /* @__PURE__ */ new Map();
         for (const obj of objects) {
-          const id = randomUUID4();
+          const id = randomUUID5();
           createdElemIds.set(obj.name, id);
           const kind = STANDARD_KINDS.includes(obj.kind) ? obj.kind : "other";
           const elem = {
@@ -5520,6 +5541,105 @@ function registerOlogDot(server2, store2) {
   );
 }
 
+// src/tools/olog-ws.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z12 } from "zod";
+function registerOlogWs(server2, store2) {
+  server2.registerTool(
+    "olog_ws_open",
+    {
+      description: "Open a new working set for the current planning session. Returns a setId to pass to olog_ws_add and olog_ws_query. Call once at the start of Phase 1.",
+      inputSchema: z12.object({
+        name: z12.string().describe('Human-readable name for this working set (e.g. "refactor-auth-plan")'),
+        planHash: z12.string().optional().describe("Plan hash to associate with this working set")
+      }),
+      annotations: { idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        const setId = store2.createWorkingSet(args.name, args.planHash);
+        return { content: [{ type: "text", text: JSON.stringify({ setId }, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+  server2.registerTool(
+    "olog_ws_add",
+    {
+      description: "Add elements and/or arrows to an open working set. Pass the IDs returned by olog_query, olog_inspect, or olog_explore. Deduplicates automatically.",
+      inputSchema: z12.object({
+        setId: z12.string().describe("Working set ID returned by olog_ws_open"),
+        elementIds: z12.array(z12.string()).default([]).describe("Element IDs to add"),
+        arrowIds: z12.array(z12.string()).default([]).describe("Arrow IDs to add")
+      }),
+      annotations: { idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        const result = store2.addToWorkingSet(args.setId, args.elementIds, args.arrowIds);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+  server2.registerTool(
+    "olog_ws_query",
+    {
+      description: "Query the accumulated working set. Mirrors olog_query filters. Check this before calling olog_explore \u2014 if the element is already here, skip the explore call.",
+      inputSchema: z12.object({
+        setId: z12.string().describe("Working set ID"),
+        kind: z12.string().optional().describe("Filter by element kind"),
+        nameRegex: z12.string().optional().describe("Regex filter on element name"),
+        moduleRegex: z12.string().optional().describe("Regex filter on element module")
+      }),
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        const ws = store2.getWorkingSet(args.setId);
+        if (!ws) {
+          return { content: [{ type: "text", text: `Working set "${args.setId}" not found` }], isError: true };
+        }
+        let elements = ws.elements;
+        if (args.kind) elements = elements.filter((e) => e.kind === args.kind);
+        if (args.nameRegex) {
+          const re = new RegExp(args.nameRegex);
+          elements = elements.filter((e) => re.test(e.name));
+        }
+        if (args.moduleRegex) {
+          const re = new RegExp(args.moduleRegex);
+          elements = elements.filter((e) => e.module != null && re.test(e.module));
+        }
+        return {
+          content: [{ type: "text", text: JSON.stringify({ elements, arrows: ws.arrows }, null, 2) }]
+        };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+  server2.registerTool(
+    "olog_ws_drop",
+    {
+      description: "Delete a working set when the planning session is complete.",
+      inputSchema: z12.object({
+        setId: z12.string().describe("Working set ID to delete")
+      }),
+      annotations: { idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        store2.deleteWorkingSet(args.setId);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+}
+
 // src/index.ts
 if (process.argv[2] === "init") {
   const { runInit: runInit2 } = await Promise.resolve().then(() => (init_init(), init_exports));
@@ -5542,9 +5662,32 @@ try {
 }
 var dbPath = join6(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
+var languages = [];
+var server = new McpServer13(
+  { name: "olog-mcp", version: "0.0.1" },
+  {
+    instructions: `Structural olog for ${projectRoot}. Name and module parameters accept JS regex. Call olog_dump first for orientation.`,
+    capabilities: { logging: {} }
+  }
+);
+registerOlogQuery(server, store, projectRoot);
+registerOlogInspect(server, store, projectRoot);
+registerOlogDump(server, store);
+registerOlogReindex(server, store, projectRoot);
+registerOlogProposeSchema(server, store);
+registerOlogPlan(server, store, projectRoot);
+registerOlogValidate(server, store, projectRoot);
+registerOlogApply(server, store, projectRoot);
+registerOlogRender(server, store, projectRoot);
+registerOlogDelegate(server, store, projectRoot);
+registerOlogDot(server, store);
+registerOlogWs(server, store);
+var transport = new StdioServerTransport();
+await server.connect(transport);
+console.error("[olog] MCP server connected on stdio");
+await new Promise((resolve2) => setImmediate(resolve2));
 console.error(`[olog] Starting ingestion for ${projectRoot}...`);
 var start = Date.now();
-var languages = [];
 try {
   const adapterRegistry = new AdapterRegistry();
   setDefaultRegistry(adapterRegistry);
@@ -5574,30 +5717,7 @@ try {
   console.error(
     `[olog] Ingestion failed: ${err instanceof Error ? err.message : String(err)}`
   );
-  store.close();
-  process.exit(1);
 }
-var server = new McpServer12(
-  { name: "olog-mcp", version: "0.0.1" },
-  {
-    instructions: `Structural model (ontology log) of the codebase at ${projectRoot} (languages: ${languages.join(", ")}). Tools: olog_query (search/filter/traverse), olog_inspect (details+provenance), olog_dump (overview), olog_reindex (refresh), olog_propose_schema (extend schema), olog_plan (describe changes), olog_validate (check plans), olog_apply (execute plans), olog_render (preview source edits), olog_delegate (assemble delegation brief), olog_dot (export graph as Graphviz DOT). Name and module parameters accept JavaScript regex patterns.`,
-    capabilities: { logging: {} }
-  }
-);
-registerOlogQuery(server, store, projectRoot);
-registerOlogInspect(server, store, projectRoot);
-registerOlogDump(server, store);
-registerOlogReindex(server, store, projectRoot);
-registerOlogProposeSchema(server, store);
-registerOlogPlan(server, store, projectRoot);
-registerOlogValidate(server, store, projectRoot);
-registerOlogApply(server, store, projectRoot);
-registerOlogRender(server, store, projectRoot);
-registerOlogDelegate(server, store, projectRoot);
-registerOlogDot(server, store);
-var transport = new StdioServerTransport();
-await server.connect(transport);
-console.error("[olog] MCP server connected on stdio");
 var cleanup = () => {
   try {
     store.close();

@@ -103,6 +103,15 @@ export interface ContextOverrides {
   signatureChange?: boolean;
 }
 
+export interface AssembleBriefOptions {
+  overrides?: ContextOverrides;
+  maxAnalogues?: number;
+  snippetLines?: number;
+  extraCriteria?: string[];
+  rationale?: string;
+  setId?: string;
+}
+
 import type { OlogStore } from '../db.js';
 import type { OlogElem } from '../ontology.js';
 import {
@@ -161,13 +170,9 @@ export function assembleBrief(
   projectRoot: string,
   task: DelegationTask,
   targetId: string,
-  overrides?: ContextOverrides,
-  maxAnalogues: number = 3,
-  snippetLines: number = 50,
-  extraCriteria?: string[],
-  rationale?: string,
-  setId?: string,
+  opts: AssembleBriefOptions = {},
 ): DelegationBrief | { ok: false; error: string } {
+  const { overrides, maxAnalogues = 3, snippetLines = 50, extraCriteria, rationale, setId } = opts;
   const target = store.getElem(targetId);
   if (!target) {
     return { ok: false, error: `Element not found: ${targetId}` };

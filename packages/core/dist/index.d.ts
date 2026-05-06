@@ -1,20 +1,15 @@
 import Database from 'better-sqlite3';
 
-/**
- * Ontology type definitions for the olog (ontology log).
- * These types define the data model for elements and arrows in the ontology.
- */
-/**
- * Union of all element kinds in the ontology.
- */
-type OlogKind = 'file' | 'module' | 'symbol' | 'callsite' | 'import' | 'type' | 'interface' | 'class' | 'enum' | 'function' | 'method' | 'const' | 'var' | 'namespace' | 'property' | 'domain' | 'other';
-/**
- * Union of all arrow kinds in the ontology.
- */
-type ArrowKind = 'extends' | 'implements' | 'calls' | 'imports' | 'exports' | 'references' | 'contains' | 'returns' | 'param' | 'typeof' | 'instanceof' | 'definedIn' | 'inModule' | 'memberOf' | 'callerOf' | 'calleeOf' | 'importsFrom' | 'locatedIn' | 'hasProperty' | 'hasType' | 'implementedAs' | 'throws' | 'other';
-/**
- * Represents an element in the ontology.
- */
+interface WorkingSetNote {
+    setId: string;
+    targetId: string;
+    note: string;
+    updatedAt: number;
+}
+declare const ELEM_KINDS: readonly ["file", "module", "symbol", "callsite", "import", "type", "interface", "class", "enum", "function", "method", "const", "var", "namespace", "property", "domain", "other"];
+declare const ARROW_KINDS: readonly ["extends", "implements", "calls", "imports", "exports", "references", "contains", "returns", "param", "typeof", "instanceof", "definedIn", "inModule", "memberOf", "callerOf", "calleeOf", "importsFrom", "locatedIn", "hasProperty", "hasType", "implementedAs", "throws", "other"];
+type OlogKind = typeof ELEM_KINDS[number];
+type ArrowKind = typeof ARROW_KINDS[number];
 interface OlogElem {
     id: string;
     kind: OlogKind;
@@ -23,9 +18,6 @@ interface OlogElem {
     span: string | null;
     attrs: Record<string, unknown>;
 }
-/**
- * Represents an arrow (relationship) in the ontology.
- */
 interface OlogArr {
     id: string;
     kind: ArrowKind;
@@ -33,38 +25,23 @@ interface OlogArr {
     dstId: string;
     attrs: Record<string, unknown>;
 }
-/**
- * Represents an attribute of an element.
- */
 interface OlogAttr {
     elemId: string;
     key: string;
     value: string | null;
 }
-/**
- * Result of an ingest operation.
- */
 interface IngestResult {
     filesProcessed: number;
     elementsCreated: number;
     arrowsCreated: number;
     durationMs: number;
 }
-/**
- * Result of a query operation - returns elements.
- */
 type QueryResult = OlogElem[];
-/**
- * Result of inspecting a single element with its arrows.
- */
 interface InspectResult {
     element: OlogElem;
     outgoing: OlogArr[];
     incoming: OlogArr[];
 }
-/**
- * Result of a full dump operation.
- */
 interface DumpResult {
     commitSha: string;
     elementCounts: Record<string, number>;
@@ -72,9 +49,6 @@ interface DumpResult {
     totalElements: number;
     totalArrows: number;
 }
-/**
- * Raw element during extraction (before ID generation).
- */
 interface RawElement {
     kind: OlogKind;
     name: string;
@@ -82,9 +56,6 @@ interface RawElement {
     span: string;
     attrs: Record<string, unknown>;
 }
-/**
- * Raw arrow during extraction (before ID generation).
- */
 interface RawArrow {
     kind: ArrowKind;
     srcModule: string;
@@ -94,17 +65,11 @@ interface RawArrow {
     attrs: Record<string, unknown>;
 }
 type ConfidenceLevel = 'resolved' | 'unresolved' | 'tentative';
-/**
- * A path through the olog graph: a sequence of arrows from src to tgt.
- */
 interface Path {
     src: string;
     tgt: string;
     arrows: string[];
 }
-/**
- * A path equation asserting that two paths are equivalent.
- */
 interface PathEquation {
     id: string;
     name: string;
@@ -114,9 +79,6 @@ interface PathEquation {
     provenance: Provenance | null;
 }
 type ConstraintKind = 'existence' | 'layering' | 'monotonicity' | 'totality';
-/**
- * An integrity constraint on the olog graph.
- */
 interface IntegrityConstraint {
     id: string;
     name: string;
@@ -125,25 +87,16 @@ interface IntegrityConstraint {
     config: Record<string, unknown>;
     provenance: Provenance | null;
 }
-/**
- * Provenance information for an element, arrow, equation, or constraint.
- */
 interface Provenance {
     source: string;
     commitSha: string;
     ingestedAt: number;
     confidence: ConfidenceLevel;
 }
-/**
- * A proposed change to the olog schema.
- */
 interface SchemaProposal {
     description: string;
     operations: PlanOperation[];
 }
-/**
- * A single operation within a plan — rename, move, addSymbol, removeSymbol, addArrow, removeArrow, rewrite_body, addReexport, or amendType.
- */
 type PlanOperation = {
     kind: 'rename';
     target: string;
@@ -198,9 +151,6 @@ interface ValidationResult {
     errors: string[];
     warnings: string[];
 }
-/**
- * File edit instruction with position and replacement text.
- */
 interface ChangeInstruction {
     path: string;
     line: number;
@@ -213,6 +163,36 @@ interface ApplyResult$1 {
     skipped: number;
     errors: string[];
     changes: ChangeInstruction[];
+}
+interface WorkingSetMeta {
+    id: string;
+    name: string;
+    planHash: string | null;
+    elementCount: number;
+    arrowCount: number;
+    updatedAt: number;
+}
+interface WorkingSet {
+    id: string;
+    name: string;
+    planHash: string | null;
+    elements: OlogElem[];
+    arrows: OlogArr[];
+    notes?: WorkingSetNote[];
+}
+interface SyntheticArr {
+    id: string;
+    setId: string;
+    kind: string;
+    srcId: string;
+    dstId: string | null;
+    note: string | null;
+    synthetic: true;
+}
+interface WorkingSetGraph {
+    elements: OlogElem[];
+    arrows: OlogArr[];
+    syntheticArrows: SyntheticArr[];
 }
 
 interface DomainCandidate {
@@ -641,6 +621,17 @@ declare class OlogStore {
     private readonly hasArrowKindStmt;
     private readonly insertMotifTemplateStmt;
     private readonly insertMotifInstanceStmt;
+    private readonly insertWorkingSetStmt;
+    private readonly insertWorkingSetElemStmt;
+    private readonly insertWorkingSetArrStmt;
+    private readonly getWorkingSetStmt;
+    private readonly deleteWorkingSetStmt;
+    private readonly insertWorkingSetNoteStmt;
+    private readonly getWorkingSetNoteStmt;
+    private readonly getWorkingSetNotesStmt;
+    private readonly deleteWorkingSetNoteStmt;
+    private readonly insertSyntheticArrStmt;
+    private readonly getSyntheticArrsStmt;
     constructor(path: string);
     get sessions(): DomainSessionStore;
     get motifSessions(): MotifSessionStore;
@@ -785,6 +776,28 @@ declare class OlogStore {
      * @returns Sorted array of distinct ArrowKind values
      */
     getArrowKindsForElementKinds(elementKinds: string[]): ArrowKind[];
+    createWorkingSet(name: string, planHash?: string): string;
+    addToWorkingSet(setId: string, elemIds: string[], arrIds: string[]): {
+        elementsAdded: number;
+        arrowsAdded: number;
+    };
+    getWorkingSet(setId: string, includeAnnotations?: boolean): WorkingSet | null;
+    listWorkingSets(): WorkingSetMeta[];
+    deleteWorkingSet(setId: string): void;
+    annotateWorkingSet(setId: string, targetId: string, note: string): WorkingSetNote;
+    getAnnotations(setId: string, targetIds?: string[]): WorkingSetNote[];
+    deleteAnnotation(setId: string, targetId: string): void;
+    getWorkingSetElementIds(setId: string): Set<string>;
+    assertSyntheticArrow(setId: string, srcId: string, dstId: string | undefined, kind: string, note?: string): string;
+    queryWorkingSetGraph(setId: string, opts: {
+        kind?: string;
+        nameRegex?: string;
+        moduleRegex?: string;
+        arrows?: string[];
+        direction?: 'in' | 'out';
+        includeAnnotations?: boolean;
+    }): WorkingSetGraph;
+    private _attachAnnotations;
     close(): void;
     private rowToElem;
     private rowToArr;
@@ -798,11 +811,11 @@ interface Violation {
     humanMessage: string;
     involved: string[];
 }
-declare function evaluateConstraints(store: OlogStore, _operations: PlanOperation[]): {
+declare function evaluateConstraints(store: OlogStore): {
     valid: boolean;
     violations: Violation[];
 };
-declare function evaluatePathEquations(store: OlogStore, _operations: PlanOperation[]): {
+declare function evaluatePathEquations(store: OlogStore): {
     valid: boolean;
     violations: Violation[];
 };
@@ -1147,6 +1160,12 @@ interface DelegationBrief {
         confidence: 'resolved' | 'unresolved' | 'mixed';
         generatedAt: string;
     };
+    /**
+     * Working set ID for this delegation session. Present when olog_delegate was
+     * called with a setId. The edit agent uses this to assert discoveredDependency
+     * arrows back to the working set after editing.
+     */
+    setId?: string;
 }
 interface ContextOverrides {
     mustCall?: string[];
@@ -1159,8 +1178,16 @@ interface ContextOverrides {
     skipAnalogues?: boolean;
     signatureChange?: boolean;
 }
+interface AssembleBriefOptions {
+    overrides?: ContextOverrides;
+    maxAnalogues?: number;
+    snippetLines?: number;
+    extraCriteria?: string[];
+    rationale?: string;
+    setId?: string;
+}
 
-declare function assembleBrief(store: OlogStore, projectRoot: string, task: DelegationTask, targetId: string, overrides?: ContextOverrides, maxAnalogues?: number, snippetLines?: number, extraCriteria?: string[], rationale?: string): DelegationBrief | {
+declare function assembleBrief(store: OlogStore, projectRoot: string, task: DelegationTask, targetId: string, opts?: AssembleBriefOptions): DelegationBrief | {
     ok: false;
     error: string;
 };
@@ -1380,4 +1407,4 @@ declare function verifyInternalEquations(store: OlogStore, group: ShapeGroup, op
     coverage: number;
 }>;
 
-export { AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type LanguageAdapterConfig, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, SessionStore, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, minePullbacks, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };
+export { ARROW_KINDS, AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type AssembleBriefOptions, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, ELEM_KINDS, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type LanguageAdapterConfig, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, SessionStore, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type SyntheticArr, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, type WorkingSet, type WorkingSetGraph, type WorkingSetMeta, type WorkingSetNote, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, minePullbacks, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };

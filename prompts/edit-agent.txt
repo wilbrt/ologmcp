@@ -145,6 +145,11 @@ Instead, use refs from the read output.
 
 ## Discoveries
 
+**ONLY CALL `olog_ws_assert`.** Although the `olog` MCP server is accessible,
+you must not call any other olog tool (`olog_query`, `olog_inspect`, `olog_dump`,
+`olog_plan`, `olog_apply`, etc.). All context you need is in the brief. The
+`olog` MCP permission exists solely to allow `olog_ws_assert` callbacks.
+
 If the brief contains a `setId`, after editing call `olog_ws_assert` for each
 dependency you needed that was **not** listed in `mustCall` or present in
 `importsInTargetFile`. These are structural surprises the planning agent should

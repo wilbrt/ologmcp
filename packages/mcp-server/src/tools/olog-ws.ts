@@ -104,7 +104,7 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
       inputSchema: z.object({
         setId: z.string().describe('Working set ID'),
         srcId: z.string().describe('Source element ID (must exist in olog_elem)'),
-        dstId: z.string().describe('Destination element ID (must exist in olog_elem)'),
+        dstId: z.string().optional().describe('Destination element ID (must exist in olog_elem). Omit when the dependency was discovered but its olog element ID is unknown.'),
         kind: z.string().describe('Arrow kind — free-text, e.g. "structurallyDependsOn", "gatekeepedBy", "coordinatesWith", or a standard ArrowKind you verified empirically'),
         note: z.string().optional().describe('Explanation of why this relationship holds — what evidence supports this inference'),
       }),
@@ -113,7 +113,7 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
     async (args) => {
       try {
         const id = store.assertSyntheticArrow(args.setId, args.srcId, args.dstId, args.kind, args.note);
-        const result: SyntheticArr = { id, setId: args.setId, kind: args.kind, srcId: args.srcId, dstId: args.dstId, note: args.note ?? null, synthetic: true };
+        const result: SyntheticArr = { id, setId: args.setId, kind: args.kind, srcId: args.srcId, dstId: args.dstId ?? null, note: args.note ?? null, synthetic: true };
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };

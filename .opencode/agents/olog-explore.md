@@ -3,7 +3,8 @@ description: >
   Structural explorer. Answers a focused structural question by querying the
   olog, filters results to what is directly relevant, adds them to the caller's
   working set, asserts synthetic arrows for inferred relationships, and returns
-  gaps. The caller queries the working set graph — not this agent's text output.
+  { summary, gaps, asserted }. The summary gives the caller a quick orientation;
+  the working set graph provides the precise queryable data.
   Invoke with a single focused question; do not use for planning or editing.
 mode: subagent
 hidden: true
@@ -64,19 +65,18 @@ olog_ws_add({ setId, elementIds: [...], arrowIds: [...] })
 Use the filtered element and arrow IDs — not the full raw query results.
 
 **Step 5 — Return**
-Return a JSON object:
+Return a JSON object regardless of whether a setId was present:
 ```json
 {
+  "summary": "One paragraph: what was found and the key structural relationships.",
   "gaps": "What the olog does not contain relevant to this question, or null.",
   "asserted": <number of synthetic arrows asserted, or 0>
 }
 ```
 
-`gaps` is the only natural language in your output. Everything findable is now
-in the working set graph — the caller will query it with `olog_ws_query`.
-
-If no setId was present: skip Steps 3–4 and return a `## Facts` / `## Gaps`
-block instead so callers without working set support still get a useful response.
+`summary` lets the caller orient quickly without an extra olog_ws_query round trip.
+`gaps` describes structural absence that cannot be expressed as an olog arrow.
+`asserted` is 0 when no setId was present (Steps 3–4 are skipped).
 
 ### Mode B — File prefetch
 

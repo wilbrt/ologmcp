@@ -1123,9 +1123,11 @@ case 'removeArrow': {
     return new Set(rows.map(r => r.elem_id));
   }
 
-  assertSyntheticArrow(setId: string, srcId: string, dstId: string, kind: string, note?: string): string {
+  assertSyntheticArrow(setId: string, srcId: string, dstId: string | undefined, kind: string, note?: string): string {
+    const srcExists = this.db.prepare('SELECT 1 FROM olog_elem WHERE id = ? LIMIT 1').get(srcId);
+    if (!srcExists) throw new Error(`assertSyntheticArrow: srcId '${srcId}' not found in olog_elem`);
     const id = `syn:${randomUUID()}`;
-    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId, note ?? null);
+    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId ?? '', note ?? null);
     this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(Date.now(), setId);
     return id;
   }
@@ -1149,7 +1151,7 @@ case 'removeArrow': {
     if (moduleRegex) { const re = new RegExp(moduleRegex); seedElems = seedElems.filter(e => e.module != null && re.test(e.module)); }
 
     const syntheticRows = this.getSyntheticArrsStmt.all(setId) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null }>;
-    const allSyntheticArrows: SyntheticArr[] = syntheticRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id, note: r.note, synthetic: true as const }));
+    const allSyntheticArrows: SyntheticArr[] = syntheticRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, synthetic: true as const }));
 
     if (!arrows || arrows.length === 0) {
       const realArrows = (this.db.prepare(
@@ -1176,7 +1178,7 @@ case 'removeArrow': {
     const synRows = this.db.prepare(
       `SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
     ).all(setId, ...seedIds, ...arrows) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null }>;
-    const syntheticArrows: SyntheticArr[] = synRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id, note: r.note, synthetic: true as const }));
+    const syntheticArrows: SyntheticArr[] = synRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, synthetic: true as const }));
 
     const neighborIds = [
       ...realRows.map(r => r[neighborCol as 'src_id' | 'dst_id'] as string),

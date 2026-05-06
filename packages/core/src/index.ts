@@ -77,6 +77,7 @@ export {
   type DelegationBrief,
   type DelegationTask,
   type ContextOverrides,
+  type AssembleBriefOptions,
 } from './delegate/index.js';
 export { SourceResolver, filePathFromSpan } from './delegate/resolve.js';
 export type { AnalogueCandidate } from './delegate/analogues.js';

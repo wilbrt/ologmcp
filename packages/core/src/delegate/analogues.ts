@@ -38,8 +38,9 @@ export function findAnalogues(
     // Same-name function in another module is always a useful analogue (predecessor or variant)
     const nameSimilarity = candidate.name === target.name ? 0.5 : 0;
 
-    // Elements already explored in the planning working set are likely more relevant
-    const wsBonus = workingSetIds?.has(candidate.id) ? 0.3 : 0;
+    // Calibrated to lift a WS element with weak similarity (~0.2) above an unrelated element with strong callee overlap (~0.5)
+    const WS_RELEVANCE_BONUS = 0.3;
+    const wsBonus = workingSetIds?.has(candidate.id) ? WS_RELEVANCE_BONUS : 0;
 
     const similarity = Math.min(1, Math.max(calleeSimilarity, nameSimilarity) + wsBonus);
 

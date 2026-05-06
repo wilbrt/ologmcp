@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { OlogStore } from '@olog/core';
-import { assembleBrief, type DelegationTask, type ContextOverrides } from '@olog/core';
+import { assembleBrief, type AssembleBriefOptions, type DelegationTask, type ContextOverrides } from '@olog/core';
 
 const TASK_TYPES = [
   'write_function_body',
@@ -80,7 +80,7 @@ export function registerOlogDelegate(
           'Working set ID from the current planning session. When provided: (1) elements already in the working set get a relevance bonus in analogue selection, (2) the brief\'s shouldCall/shouldImplement/analogueOf relationships are written as synthetic arrows into the working set so the planning agent can inspect them, (3) the edit agent can assert discoveredDependency arrows back to the working set.',
         ),
       }),
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { readOnlyHint: false, idempotentHint: false },
     },
     async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines, lineRange, skipAnalogues, signatureChange, rationale, setId }) => {
       try {
@@ -96,18 +96,15 @@ export function registerOlogDelegate(
                 ...(signatureChange !== undefined ? { signatureChange } : {}),
               }
             : undefined;
-        const result = assembleBrief(
-          store,
-          projectRoot,
-          task as DelegationTask,
-          target,
-          overrides,
-          effectiveMaxAnalogues,
-          snippetLines,
-          acceptanceCriteria,
-          rationale,
-          setId,
-        );
+        const briefOpts: AssembleBriefOptions = {
+          ...(overrides !== undefined ? { overrides } : {}),
+          ...(effectiveMaxAnalogues !== undefined ? { maxAnalogues: effectiveMaxAnalogues } : {}),
+          ...(snippetLines !== undefined ? { snippetLines } : {}),
+          ...(acceptanceCriteria !== undefined ? { extraCriteria: acceptanceCriteria } : {}),
+          ...(rationale !== undefined ? { rationale } : {}),
+          ...(setId !== undefined ? { setId } : {}),
+        };
+        const result = assembleBrief(store, projectRoot, task as DelegationTask, target, briefOpts);
 
         if ('ok' in result && result.ok === false) {
           return {

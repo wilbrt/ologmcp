@@ -85,15 +85,23 @@ acceptance criteria? If yes, ship that.
 
 ## Discoveries
 
+**ONLY CALL `olog_ws_assert`.** Although the `olog` MCP server is accessible,
+you must not call any other olog tool (`olog_query`, `olog_inspect`, `olog_dump`,
+`olog_plan`, `olog_apply`, etc.). All context you need is in the brief. The
+`olog` MCP permission exists solely to allow `olog_ws_assert` callbacks.
+
+Known limitation: the opencode permission model cannot restrict to a single
+tool within an MCP server. This constraint is enforced by prompt only.
+
 If the brief contains a `setId`, after editing call `olog_ws_assert` for each
 dependency you needed that was **not** listed in `mustCall` or present in
-`importsInTargetFile`. Only call `olog_ws_assert` — no other olog tools.
+`importsInTargetFile`.
 
 ```
 olog_ws_assert({
   setId: "<from brief.setId>",
   srcId: "<brief.target.id>",
-  dstId: "<ID of the element if known from brief>",
+  dstId: "<ID of the element if known — omit if the element isn't in the olog>",
   kind: "discoveredDependency",
   note: "<why it was needed>"
 })
