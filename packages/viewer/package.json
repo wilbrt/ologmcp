@@ -1,0 +1,32 @@
+{
+  "name": "@olog/viewer",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "olog-viewer": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@olog/core": "*",
+    "express": "^4.21.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.1",
+    "@types/express": "^5.0.0",
+    "@types/cors": "^2.8.17",
+    "tsup": "^8.3.5"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  }
+}

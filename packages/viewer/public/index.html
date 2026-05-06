@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>olog — Working Set Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/cytoscape@3.31.0/dist/cytoscape.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>olog — Working Set Viewer</h1>
+    <select id="set-selector">
+      <option value="">Loading…</option>
+    </select>
+    <select id="layout-selector">
+      <option value="cose">Force-directed (cose)</option>
+      <option value="dagre">Hierarchical (dagre)</option>
+      <option value="breadthfirst">BFS (breadthfirst)</option>
+      <option value="circle">Circle</option>
+    </select>
+    <button id="refresh-btn">Refresh</button>
+    <span id="connection-status" class="disconnected">Not connected</span>
+  </header>
+
+  <div id="main">
+    <div id="cy"></div>
+    <div id="sidebar">
+      <h2>Details</h2>
+      <p class="empty">Click a node or edge to inspect</p>
+    </div>
+  </div>
+
+  <div id="loading" style="display:none;">Loading graph…</div>
+
+  <div id="legend">
+    <h3>Legend</h3>
+    <div id="node-legend"></div>
+    <div class="edge-legend">
+      <div class="legend-item"><span class="edge-solid"></span> Real arrow</div>
+      <div class="legend-item"><span class="edge-dashed"></span> Synthetic arrow</div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    // Build the node kind legend from KIND_COLORS
+    (() => {
+      const container = document.getElementById('node-legend');
+      const colors = {
+        domain: '#FFD700', function: '#4A90D9', 'class': '#70AD47',
+        interface: '#9B59B6', type: '#1ABC9C', property: '#E67E22',
+      };
+      for (const [kind, color] of Object.entries(colors)) {
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+        item.innerHTML = `<span class="legend-swatch" style="background:${color}"></span>${kind}`;
+        container.appendChild(item);
+      }
+    })();
+  </script>
+</body>
+</html>

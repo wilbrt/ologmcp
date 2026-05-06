@@ -13,6 +13,8 @@
     "test": "npm run test --workspaces",
     "clean": "npm run clean --workspaces",
     "dot": "OLOG_ROOT=$PWD npm run dot --workspace=packages/mcp-server",
-    "dot:svg": "OLOG_ROOT=$PWD npm run dot:svg --workspace=packages/mcp-server"
+    "dot:svg": "OLOG_ROOT=$PWD npm run dot:svg --workspace=packages/mcp-server",
+    "viewer": "OLOG_ROOT=$PWD npm run start --workspace=packages/viewer",
+    "viewer:dev": "OLOG_ROOT=$PWD npm run dev --workspace=packages/viewer"
   }
 }
