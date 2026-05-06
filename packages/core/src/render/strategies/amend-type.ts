@@ -1,16 +1,6 @@
 import { OlogStore } from '../../db.js';
 import type { SourceEdit } from '../edit.js';
-
-function parseSpan(span: string): { startLine: number; startCol: number; endLine: number; endCol: number } | null {
-  const m = span.match(/^([^:]+):(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[2]!, 10),
-    startCol: parseInt(m[3]!, 10),
-    endLine: parseInt(m[4]!, 10),
-    endCol: parseInt(m[5]!, 10),
-  };
-}
+import { parseSpan } from '../../utils/parse-span.js';
 
 export function computeAmendTypeEdits(
   store: OlogStore,

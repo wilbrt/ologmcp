@@ -38,7 +38,7 @@ export function fileElemId(relativePath: string): string {
  * Formats a source span as a location string.
  * Format: relativePath:startLine:startCol-endLine:endCol (all 1-based)
  */
-export function formatSpan(
+export function formatSpanId(
   relativePath: string,
   startLine: number,
   startCol: number,

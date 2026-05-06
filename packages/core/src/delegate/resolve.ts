@@ -8,6 +8,10 @@ import { findEnclosingDeclaration, findImportStatement } from '../render/declara
 import { parseImports } from '../render/imports.js';
 import { computeRelativeImportPath, moduleToFilePath } from '../render/paths.js';
 import { getDefaultRegistry } from '../ingest/adapter.js';
+import { parseSpan } from '../utils/parse-span.js';
+
+export { parseSpan, filePathFromSpan } from '../utils/parse-span.js';
+export type { ParsedSpan } from '../utils/parse-span.js';
 
 export class SourceResolver {
   private fileCache = new Map<string, string | null>();
@@ -141,20 +145,3 @@ export class SourceResolver {
   }
 }
 
-function parseSpan(span: string): { startLine: number; startCol: number; endLine: number; endCol: number } | null {
-  // Span format: "optional/file/path.ext:startLine:startCol-endLine:endCol"
-  const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[1]!, 10),
-    startCol: parseInt(m[2]!, 10),
-    endLine: parseInt(m[3]!, 10),
-    endCol: parseInt(m[4]!, 10),
-  };
-}
-
-/** Extract the relative file path prefix from a full span string. */
-export function filePathFromSpan(span: string): string | null {
-  const m = span.match(/^(.+):\d+:\d+-\d+:\d+$/);
-  return m ? m[1]! : null;
-}

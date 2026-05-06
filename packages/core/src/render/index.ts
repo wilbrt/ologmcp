@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OlogStore } from '../db.js';
 import type { PlanOperation } from '../ontology.js';
-import type { SourceEdit, ApplyResult } from './edit.js';
+import type { SourceEdit, SourceEditResult } from './edit.js';
 import { applySourceEdits, rollback } from './edit.js';
 import { expandAllOperations } from './expand.js';
 import { orderAndDetectConflicts } from './order.js';
@@ -19,7 +19,7 @@ export interface RenderResult {
 }
 
 export interface RenderAndApplyResult extends RenderResult {
-  applyResult: ApplyResult | null;
+  applyResult: SourceEditResult | null;
   verificationDiscrepancies: string[];
 }
 
@@ -79,7 +79,7 @@ export async function renderAndApplyPlan(
     };
   }
 
-  let applyResult: ApplyResult;
+  let applyResult: SourceEditResult;
   try {
     applyResult = await applySourceEdits(renderResult.edits, projectRoot);
   } catch (err) {

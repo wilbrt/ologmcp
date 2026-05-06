@@ -27,29 +27,26 @@ export function evaluateConstraints(
   const constraints = store.getConstraints();
 
   for (const constraint of constraints) {
-    violations.push(...evaluateConstraint(store, constraint));
+    switch (constraint.kind) {
+      case 'existence':
+        violations.push(...evaluateExistence(store, constraint));
+        break;
+      case 'layering':
+        violations.push(...evaluateLayering(store, constraint));
+        break;
+      case 'monotonicity':
+        violations.push(...evaluateMonotonicity(store, constraint));
+        break;
+      case 'totality':
+        violations.push(...evaluateTotality(store, constraint));
+        break;
+    }
   }
 
   return { valid: violations.length === 0, violations };
 }
 
-function evaluateConstraint(
-  store: OlogStore,
-  constraint: IntegrityConstraint,
-): Violation[] {
-  switch (constraint.kind) {
-    case 'existence':
-      return evaluateExistence(store, constraint);
-    case 'layering':
-      return evaluateLayering(store, constraint);
-    case 'monotonicity':
-      return evaluateMonotonicity(store, constraint);
-    case 'totality':
-      return evaluateTotality(store, constraint);
-    default:
-      return [];
-  }
-}
+
 
 // existence: at least one element of the configured kind must exist
 function evaluateExistence(

@@ -127,6 +127,7 @@ import {
 } from './context.js';
 import { SourceResolver } from './resolve.js';
 import { findAnalogues, type AnalogueCandidate } from './analogues.js';
+import { parseSpan } from '../utils/parse-span.js';
 
 const TASK_CRITERIA: Record<DelegationTask, string[]> = {
   write_function_body: [
@@ -442,8 +443,7 @@ function localModuleToFilePath(modulePath: string): string {
 }
 
 function parseSpanSimple(span: string): { start: number; end: number } | null {
-  // Span format: "optional/file/path.ext:startLine:startCol-endLine:endCol"
-  const m = span.match(/(\d+):\d+-(\d+):\d+$/);
-  if (!m) return null;
-  return { start: parseInt(m[1]!, 10), end: parseInt(m[2]!, 10) };
+  const parsed = parseSpan(span);
+  if (!parsed) return null;
+  return { start: parsed.startLine, end: parsed.endLine };
 }

@@ -23,7 +23,7 @@ export interface FileSnapshot {
   originalContent: string;
 }
 
-export interface ApplyResult {
+export interface SourceEditResult {
   applied: number;
   skipped: number;
   errors: string[];
@@ -82,7 +82,7 @@ export async function applySourceEdits(
   projectRoot: string,
   readFile?: (path: string) => Promise<string>,
   writeFile?: (path: string, content: string) => Promise<void>,
-): Promise<ApplyResult> {
+): Promise<SourceEditResult> {
   const { readFile: fsReadFile, writeFile: fsWriteFile } = await import('node:fs/promises');
   const { join } = await import('node:path');
 

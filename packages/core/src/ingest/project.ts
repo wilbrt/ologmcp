@@ -3,7 +3,8 @@ import { readFileSync, statSync } from 'node:fs';
 import { relative, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { OlogStore } from '../db.js';
-import { elemId, arrowId, fileElemId, formatSpan } from './ids.js';
+import { elemId, arrowId, fileElemId, formatSpanId } from './ids.js';
+import { parseSpan } from '../utils/parse-span.js';
 import type { IngestResult, RawElement, RawArrow } from '../ontology.js';
 import { setDefaultRegistry, getDefaultRegistry } from './adapter.js';
 import type { AdapterRegistry, LanguageAdapter } from './adapter.js';
@@ -129,10 +130,10 @@ export function ingestChangedFiles(projectRoot: string, store: OlogStore, regist
     const seenArrowIds = new Set<string>();
 
     for (const rawElem of extracted.elements) {
-      const coords = parseTreeSitterSpan(rawElem.span);
+      const coords = parseSpan(rawElem.span);
       const line = coords?.startLine ?? 1;
       const col = coords?.startCol ?? 1;
-      const fullSpan = coords ? formatSpan(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
+      const fullSpan = coords ? formatSpanId(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
       const id = elemId(rel, line, col, rawElem.kind, rawElem.name);
 
       const fileExisting = fileNameToId.get(rawElem.name) ?? [];
@@ -365,11 +366,11 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
     const elementIds: Array<{ id: string; kind: string }> = [];
 
     for (const rawElem of extracted.elements) {
-      const coords = parseTreeSitterSpan(rawElem.span);
+      const coords = parseSpan(rawElem.span);
       const line = coords?.startLine ?? 1;
       const col = coords?.startCol ?? 1;
       const fullSpan = coords
-        ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol)
+        ? formatSpanId(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol)
         : rawElem.span;
 
       const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
@@ -469,7 +470,7 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
 
     for (const rawElem of extracted.elements) {
       if (rawElem.kind === 'import') {
-        const coords = parseTreeSitterSpan(rawElem.span);
+        const coords = parseSpan(rawElem.span);
         const line = coords?.startLine ?? 1;
         const col = coords?.startCol ?? 1;
         const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
@@ -542,13 +543,13 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
       if (!parentId) continue;
 
       // Parse span to get line/col
-      const coords = parseTreeSitterSpan(prop.span);
+      const coords = parseSpan(prop.span);
       const line = coords?.startLine ?? 1;
       const col = coords?.startCol ?? 1;
 
       const propId = elemId(relativePath, line, col, 'property', `${prop.parentName}.${prop.name}`);
       const fullSpan = coords
-        ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol)
+        ? formatSpanId(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol)
         : prop.span;
 
       elems.push({
@@ -620,13 +621,3 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
   };
 }
 
-function parseTreeSitterSpan(span: string): { startLine: number; startCol: number; endLine: number; endCol: number } | null {
-  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[1]!, 10),
-    startCol: parseInt(m[2]!, 10),
-    endLine: parseInt(m[3]!, 10),
-    endCol: parseInt(m[4]!, 10),
-  };
-}
