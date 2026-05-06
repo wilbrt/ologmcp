@@ -568,6 +568,13 @@ function runIngestion(projectRoot: string, store: OlogStore, head: string, regis
         arrs.push({ id: hpId, kind: 'hasProperty', src_id: parentId, dst_id: propId, attrs: '{}' });
       }
 
+      // memberOf arrow: property → parent (reverse of hasProperty)
+      const moId = arrowId(propId, 'memberOf', parentId);
+      if (!seenPropArrowIds.has(moId)) {
+        seenPropArrowIds.add(moId);
+        arrs.push({ id: moId, kind: 'memberOf', src_id: propId, dst_id: parentId, attrs: '{}' });
+      }
+
       // hasType arrows: property → referenced type element
       for (const typeRef of prop.typeRefs) {
         // Prefer same-file resolution

@@ -93,6 +93,52 @@ export function extractPropertiesFromFile(
           if (prop) result.push(prop);
         }
       }
+      // Extract constructor parameter properties (e.g. private db: Database)
+      for (const child of body.children) {
+        if (child.type !== 'method_definition') continue;
+        const methodName = child.childForFieldName('name');
+        if (!methodName || methodName.text !== 'constructor') continue;
+        const params = child.childForFieldName('parameters');
+        if (!params) continue;
+        for (const param of params.children) {
+          if (param.type !== 'required_parameter' && param.type !== 'optional_parameter') continue;
+          const hasAccessMod = param.children.some(c => c.type === 'accessibility_modifier');
+          const isParamReadonly = param.children.some(c => c.type === 'readonly');
+          if (!hasAccessMod && !isParamReadonly) continue;
+
+          const patternNode = param.childForFieldName('pattern');
+          if (!patternNode) continue;
+          const paramNameNode = patternNode.type === 'identifier_pattern'
+            ? (patternNode.childForFieldName('name') ?? patternNode)
+            : patternNode;
+          const name = paramNameNode.text;
+          const optional = param.type === 'optional_parameter';
+
+          // Build typeText including access modifier and readonly per acceptance criteria
+          const typeParts: string[] = [];
+          const accessMod = param.children.find(c => c.type === 'accessibility_modifier');
+          if (accessMod) typeParts.push(accessMod.text);
+          if (isParamReadonly) typeParts.push('readonly');
+          const typeAnnotation = param.childForFieldName('type');
+          if (typeAnnotation) {
+            let typeStr = typeAnnotation.text;
+            if (typeStr.startsWith(':')) typeStr = typeStr.slice(1).trim();
+            typeParts.push(typeStr);
+          }
+
+          result.push({
+            name,
+            span: formatSpan(paramNameNode),
+            typeText: typeParts.join(' '),
+            optional,
+            readonly: isParamReadonly,
+            typeRefs: typeAnnotation ? collectTypeIdentifiers(typeAnnotation) : [],
+            parentName,
+            parentKind: 'class',
+          });
+        }
+        break; // Only one constructor per class
+      }
     }
   });
 

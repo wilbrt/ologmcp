@@ -89,6 +89,11 @@
   constructor: (_) @new.ctor
   arguments: (arguments)? @new.args) @new
 
+;; --- this.property access (references) ------------------------------------
+(member_expression
+  object: (this) @ref.this
+  property: (property_identifier) @ref.property) @ref.self
+
 ;; --- require("x") detection (CJS) ----------------------------------------
 ((call_expression
   function: (identifier) @_id

@@ -15,8 +15,27 @@ export function asKind(kind: string): ArrowKind {
 }
 
 /**
+ * Walk up the tree to find the nearest class_declaration ancestor
+ * and return its name (or null if none found).
+ */
+export function findContainingClassName(
+  node: Parser.SyntaxNode,
+): string | null {
+  let cur: Parser.SyntaxNode | null = node.parent;
+  while (cur !== null) {
+    if (cur.type === 'class_declaration') {
+      const nameNode = cur.childForFieldName('name');
+      if (nameNode) return nameNode.text;
+    }
+    cur = cur.parent;
+  }
+  return null;
+}
+
+/**
  * Walk up the tree to find the nearest function-like ancestor
  * and return its name (or null if at the top level).
+ * For method_definitions inside a class_declaration, returns 'ClassName.methodName'.
  */
 export function findContainingFunctionName(
   node: Parser.SyntaxNode,
@@ -25,10 +44,18 @@ export function findContainingFunctionName(
   while (cur !== null) {
     switch (cur.type) {
       case 'function_declaration':
-      case 'generator_function_declaration':
-      case 'method_definition': {
+      case 'generator_function_declaration': {
         const nameNode = cur.childForFieldName('name');
         if (nameNode) return nameNode.text;
+        break;
+      }
+      case 'method_definition': {
+        const nameNode = cur.childForFieldName('name');
+        if (nameNode) {
+          const className = findContainingClassName(cur);
+          if (className) return `${className}.${nameNode.text}`;
+          return nameNode.text;
+        }
         break;
       }
       case 'arrow_function': {
@@ -134,6 +161,37 @@ export function extractFromFile(
       elements.push({ kind: 'class', name: cap.node.text, module: '', span: formatSpan(cap.node), attrs: {} });
     }
 
+    // Handle class heritage (extends / implements)
+    const heritageNode = _first('class.heritage')?.node;
+    if (heritageNode) {
+      const className = _first('class.name')?.node.text;
+      if (className) {
+        for (const child of heritageNode.children) {
+          if (child.type === 'extends_clause') {
+            const typeNode = child.namedChildren[0];
+            if (typeNode) {
+              const parentName = typeNode.type === 'type_identifier'
+                ? typeNode.text
+                : typeNode.childForFieldName('name')?.text;
+              if (parentName) {
+                arrows.push({ kind: asKind('extends'), srcModule: '', srcName: className, dstModule: '', dstName: parentName, attrs: {} });
+              }
+            }
+          }
+          if (child.type === 'implements_clause') {
+            for (const typeNode of child.namedChildren) {
+              const ifaceName = typeNode.type === 'type_identifier'
+                ? typeNode.text
+                : typeNode.childForFieldName('name')?.text;
+              if (ifaceName) {
+                arrows.push({ kind: asKind('implements'), srcModule: '', srcName: className, dstModule: '', dstName: ifaceName, attrs: {} });
+              }
+            }
+          }
+        }
+      }
+    }
+
     for (const cap of byName.get('interface.name') ?? []) {
       elements.push({ kind: 'interface', name: cap.node.text, module: '', span: formatSpan(cap.node), attrs: {} });
     }
@@ -206,11 +264,32 @@ export function extractFromFile(
       const methodName = methodNode.text;
       const callNode = _first('call.member')?.node ?? _first('call')?.node;
       const fnName = callNode ? findContainingFunctionName(callNode) : null;
+      const receiverNode = _first('call.receiver')?.node;
+      const isThisReceiver = receiverNode?.text === 'this';
+      // When receiver is 'this', compose ClassName.methodName so the resolver can find the method element
+      const className = isThisReceiver ? findContainingClassName(callNode ?? methodNode) : null;
+      const dstName = className ? `${className}.${methodName}` : methodName;
       // Methods are invoked on a receiver — don't resolve module from imports (it's on an object, not a bare name)
-      arrows.push({ kind: 'calls', srcModule: '', srcName: fnName ?? '', dstModule: '', dstName: methodName, attrs: {} });
+      // When receiver is 'this', dstModule stays '' — the method is in the same file and will be resolved by element ID
+      arrows.push({ kind: 'calls', srcModule: '', srcName: fnName ?? '', dstModule: '', dstName, attrs: {} });
       if (fnName) {
-        arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: fnName, dstModule: '', dstName: methodName, attrs: {} });
-        arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: methodName, dstModule: '', dstName: fnName, attrs: {} });
+        arrows.push({ kind: asKind('callerOf'), srcModule: '', srcName: fnName, dstModule: '', dstName, attrs: {} });
+        arrows.push({ kind: asKind('calleeOf'), srcModule: '', srcName: dstName, dstModule: '', dstName: fnName, attrs: {} });
+      }
+    }
+
+    if (_first('ref.self')) {
+      const refSelfNode = _first('ref.self')!.node;
+      // Skip if this member_expression is the function part of a call_expression
+      // (those are handled by the call.member handler — this.prop() vs this.prop)
+      const parentNode = refSelfNode.parent;
+      if (!(parentNode?.type === 'call_expression' && parentNode.childForFieldName('function') === refSelfNode)) {
+        const className = findContainingClassName(refSelfNode);
+        if (className) {
+          const propertyName = _first('ref.property')!.node.text;
+          const fnName = findContainingFunctionName(refSelfNode);
+          arrows.push({ kind: asKind('references'), srcModule: '', srcName: fnName ?? '', dstModule: '', dstName: `${className}.${propertyName}`, attrs: {} });
+        }
       }
     }
 
