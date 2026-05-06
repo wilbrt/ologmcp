@@ -76,10 +76,13 @@ export function registerOlogDelegate(
         rationale: z.string().optional().describe(
           'Why this body rewrite is needed. Passed through to the delegation brief so the edit agent understands the intent. Populate from pendingDelegations[].rationale returned by olog_apply.',
         ),
+        setId: z.string().optional().describe(
+          'Working set ID from the current planning session. When provided: (1) elements already in the working set get a relevance bonus in analogue selection, (2) the brief\'s shouldCall/shouldImplement/analogueOf relationships are written as synthetic arrows into the working set so the planning agent can inspect them, (3) the edit agent can assert discoveredDependency arrows back to the working set.',
+        ),
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines, lineRange, skipAnalogues, signatureChange, rationale }) => {
+    async ({ task, target, contextOverrides, acceptanceCriteria, maxAnalogues, snippetLines, lineRange, skipAnalogues, signatureChange, rationale, setId }) => {
       try {
         const effectiveMaxAnalogues = skipAnalogues ? 0 : maxAnalogues;
         const overrides: ContextOverrides | undefined =
@@ -103,6 +106,7 @@ export function registerOlogDelegate(
           snippetLines,
           acceptanceCriteria,
           rationale,
+          setId,
         );
 
         if ('ok' in result && result.ok === false) {

@@ -95,7 +95,7 @@
       "mode": "subagent",
       "model": "opencode-go/minimax-m2.7",
       "prompt": "{file:./prompts/edit-agent.txt}",
-      "description": "Source editor. Receives a fully-resolved DelegationBrief JSON from olog_delegate and writes the corresponding source changes. All context is in the brief — no olog access needed. Verifies changes with tsc after editing.",
+      "description": "Source editor. Receives a fully-resolved DelegationBrief JSON from olog_delegate and writes the corresponding source changes. All context is in the brief. After editing, asserts discoveredDependency synthetic arrows back to the working set via olog_ws_assert. Verifies changes with tsc after editing.",
       "steps": 20,
       "permission": {
         "edit": "allow",
@@ -111,7 +111,7 @@
           "*": "deny"
         },
         "mcp": {
-          "*": "deny"
+          "olog": "allow"
         }
       }
     }

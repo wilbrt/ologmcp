@@ -85,6 +85,13 @@ export interface DelegationBrief {
     confidence: 'resolved' | 'unresolved' | 'mixed';
     generatedAt: string;
   };
+
+  /**
+   * Working set ID for this delegation session. Present when olog_delegate was
+   * called with a setId. The edit agent uses this to assert discoveredDependency
+   * arrows back to the working set after editing.
+   */
+  setId?: string;
 }
 
 export interface ContextOverrides {
@@ -159,6 +166,7 @@ export function assembleBrief(
   snippetLines: number = 50,
   extraCriteria?: string[],
   rationale?: string,
+  setId?: string,
 ): DelegationBrief | { ok: false; error: string } {
   const target = store.getElem(targetId);
   if (!target) {
@@ -191,11 +199,12 @@ export function assembleBrief(
   const importEntries = gatherImports(store, targetModule);
 
   const shouldSkipAnalogues = overrides?.skipAnalogues === true || maxAnalogues === 0;
+  const workingSetIds = setId ? store.getWorkingSetElementIds(setId) : undefined;
   const analogueCandidates = shouldSkipAnalogues
     ? []
     : overrides?.analogues
     ? resolveAnalogueList(store, overrides.analogues)
-    : findAnalogues(store, target, maxAnalogues);
+    : findAnalogues(store, target, maxAnalogues, workingSetIds);
 
   const resolvedMustCall = mustCallEntries.map(entry => {
     const entryFilePath = getModuleFilePath(store, entry.module ?? '') ?? localModuleToFilePath(entry.module ?? '');
@@ -290,9 +299,30 @@ export function assembleBrief(
   const commitSha = store.commitSha();
   const provenanceConfidence = determineConfidence(store, targetId);
 
+  // Write brief structure into working set so planning agent can inspect decisions
+  if (setId) {
+    const elemIds = [
+      targetId,
+      ...mustCallEntries.map(e => e.id),
+      ...mustImplementEntries.map(e => e.id),
+      ...analogueCandidates.map(a => a.id),
+    ];
+    store.addToWorkingSet(setId, elemIds, []);
+    for (const mc of mustCallEntries) {
+      store.assertSyntheticArrow(setId, targetId, mc.id, 'shouldCall', `Required by ${task} brief`);
+    }
+    for (const mi of mustImplementEntries) {
+      store.assertSyntheticArrow(setId, targetId, mi.id, 'shouldImplement');
+    }
+    for (const a of analogueCandidates) {
+      store.assertSyntheticArrow(setId, targetId, a.id, 'analogueOf', `similarity=${a.similarity.toFixed(2)}`);
+    }
+  }
+
   return {
     task,
     ...(rationale !== undefined ? { rationale } : {}),
+    ...(setId !== undefined ? { setId } : {}),
     target: {
       id: target.id,
       name: target.name,

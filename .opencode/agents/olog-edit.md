@@ -2,8 +2,9 @@
 description: >
   Source editor. Receives a fully-resolved DelegationBrief JSON from
   olog_delegate and writes the corresponding source changes. All context is in
-  the brief — no olog access needed. Verifies changes with tsc or a build
-  command after editing.
+  the brief. After editing, asserts discoveredDependency synthetic arrows back
+  to the working set via olog_ws_assert (only olog tool this agent may call).
+  Verifies changes with tsc or a build command after editing.
 mode: subagent
 hidden: true
 steps: 20
@@ -20,7 +21,7 @@ permission:
   task:
     "*": deny
   mcp:
-    "*": deny
+    olog: allow
 ---
 # Edit Agent
 
@@ -82,6 +83,22 @@ acceptance criteria? If yes, ship that.
 
 6. **Acceptance criteria are hard constraints.** Every item must be satisfied.
 
+## Discoveries
+
+If the brief contains a `setId`, after editing call `olog_ws_assert` for each
+dependency you needed that was **not** listed in `mustCall` or present in
+`importsInTargetFile`. Only call `olog_ws_assert` — no other olog tools.
+
+```
+olog_ws_assert({
+  setId: "<from brief.setId>",
+  srcId: "<brief.target.id>",
+  dstId: "<ID of the element if known from brief>",
+  kind: "discoveredDependency",
+  note: "<why it was needed>"
+})
+```
+
 ## Verification and output
 
 After editing, verify based on the target language:
@@ -89,5 +106,15 @@ After editing, verify based on the target language:
 - **Clojure**: `clj -M --main clojure.main -e "(compile 'ns.name)"` or equivalent
 - If no verifier is available, state that explicitly
 
-Confirm: which files were changed, verification result, and any acceptance
-criteria you could not fully satisfy with explanation.
+Your final message must be valid JSON:
+```json
+{
+  "filesChanged": ["relative/path/to/changed.ts"],
+  "typecheckPassed": true,
+  "criteriaResults": [
+    { "criterion": "...", "satisfied": true },
+    { "criterion": "...", "satisfied": false, "reason": "..." }
+  ],
+  "discovered": 0
+}
+```

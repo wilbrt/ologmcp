@@ -1116,6 +1116,13 @@ case 'removeArrow': {
     this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(Date.now(), setId);
   }
 
+  getWorkingSetElementIds(setId: string): Set<string> {
+    const rows = this.db.prepare(
+      'SELECT elem_id FROM olog_working_set_elem WHERE set_id = ?'
+    ).all(setId) as Array<{ elem_id: string }>;
+    return new Set(rows.map(r => r.elem_id));
+  }
+
   assertSyntheticArrow(setId: string, srcId: string, dstId: string, kind: string, note?: string): string {
     const id = `syn:${randomUUID()}`;
     this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId, note ?? null);

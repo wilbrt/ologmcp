@@ -164,11 +164,18 @@ addArrow, removeArrow):
 If the plan contains `rewrite_body` operations:
 1. Call `olog_apply render=true` first — applies any mechanical operations in the same plan.
 2. For each `rewrite_body` slice:
-   a. Call `olog_delegate` with the target element ID.
+   a. Call `olog_delegate` with the target element ID **and the session setId**:
+      `olog_delegate({ task: "rewrite_body", target: "<id>", setId })`
+      This boosts analogues already in the working set and writes shouldCall/
+      analogueOf/shouldImplement arrows into the working set for inspection.
    b. Invoke `@olog-edit` via Task. The task body must be **only** the raw JSON from
       `olog_delegate` — no preamble, no code, no extra instructions.
-   c. Mark the slice done in the plan file.
-   d. Use `question` to ask whether to proceed to the next slice.
+   c. After `@olog-edit` completes, check for structural discoveries:
+      `olog_ws_query({ setId, arrows: ["discoveredDependency"], direction: "out" })`
+      If the edit agent found unexpected dependencies, factor them into remaining
+      slices before proceeding.
+   d. Mark the slice done in the plan file.
+   e. Use `question` to ask whether to proceed to the next slice.
 3. Call `olog_reindex` after all body rewrites land.
 4. Drop the working set: `olog_ws_drop({ setId })`.
 </planning_workflow>

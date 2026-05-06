@@ -14,6 +14,7 @@ export function findAnalogues(
   store: OlogStore,
   target: OlogElem,
   limit: number = 3,
+  workingSetIds?: Set<string>,
 ): AnalogueCandidate[] {
   const targetCallees = getCalleeSet(store, target);
 
@@ -37,7 +38,10 @@ export function findAnalogues(
     // Same-name function in another module is always a useful analogue (predecessor or variant)
     const nameSimilarity = candidate.name === target.name ? 0.5 : 0;
 
-    const similarity = Math.max(calleeSimilarity, nameSimilarity);
+    // Elements already explored in the planning working set are likely more relevant
+    const wsBonus = workingSetIds?.has(candidate.id) ? 0.3 : 0;
+
+    const similarity = Math.min(1, Math.max(calleeSimilarity, nameSimilarity) + wsBonus);
 
     if (similarity > 0) {
       scored.push({

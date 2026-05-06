@@ -143,9 +143,49 @@ Instead, use refs from the read output.
 
 ---
 
+## Discoveries
+
+If the brief contains a `setId`, after editing call `olog_ws_assert` for each
+dependency you needed that was **not** listed in `mustCall` or present in
+`importsInTargetFile`. These are structural surprises the planning agent should
+know about before deciding on the next slice.
+
+```
+olog_ws_assert({
+  setId: "<from brief.setId>",
+  srcId: "<brief.target.id>",
+  dstId: "<ID of the element, if known from the brief>",
+  kind: "discoveredDependency",
+  note: "<why it was needed — what problem it solved>"
+})
+```
+
+Only assert things you actually needed that the brief did not list. Do not
+re-assert `mustCall` entries — those are already in the working set.
+
+If you don't know the olog element ID for a discovered dependency (because it
+isn't mentioned in the brief), omit `dstId` and put the name in the `note`
+instead. The planning agent can look it up.
+
+---
+
 ## Output
 
-After editing, confirm:
-- Which files were changed and what was done in each
-- Whether `tsc --noEmit` passed
-- Any acceptance criteria you could not fully satisfy, with explanation
+Your final message must be valid JSON:
+
+```json
+{
+  "filesChanged": ["relative/path/to/changed.ts"],
+  "typecheckPassed": true,
+  "criteriaResults": [
+    { "criterion": "Must call every function in mustCall.", "satisfied": true },
+    { "criterion": "Must compile without type errors.", "satisfied": false, "reason": "..." }
+  ],
+  "discovered": 2
+}
+```
+
+- `filesChanged`: relative paths of every file you edited
+- `typecheckPassed`: boolean result of `tsc --noEmit`
+- `criteriaResults`: one entry per item in `acceptanceCriteria`
+- `discovered`: count of `olog_ws_assert` calls you made (0 if no setId or no discoveries)
