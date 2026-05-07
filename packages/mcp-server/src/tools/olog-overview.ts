@@ -2,9 +2,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { OlogStore } from '@olog/core';
 
-export function registerOlogDump(server: McpServer, store: OlogStore): void {
+export function registerOlogOverview(server: McpServer, store: OlogStore): void {
   server.registerTool(
-    'olog_dump',
+    'olog_overview',
     {
       description:
         'Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, and total counts. Useful for understanding what the olog knows about the codebase.',

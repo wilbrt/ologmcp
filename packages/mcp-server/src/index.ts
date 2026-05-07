@@ -17,7 +17,7 @@ const ADAPTER_CLASS: Record<string, string> = {
 };
 import { registerOlogQuery } from './tools/olog-query.js';
 import { registerOlogInspect } from './tools/olog-inspect.js';
-import { registerOlogDump } from './tools/olog-dump.js';
+import { registerOlogOverview } from './tools/olog-overview.js';
 import { registerOlogReindex } from './tools/olog-reindex.js';
 import { registerOlogApply } from './tools/olog-apply.js';
 import { registerOlogPlan } from './tools/olog-plan.js';
@@ -48,14 +48,14 @@ let languages: string[] = [];
 const server = new McpServer(
   { name: 'olog-mcp', version: '0.0.1' },
   {
-    instructions: `Structural olog for ${projectRoot}. Name and module parameters accept JS regex. Call olog_dump first for orientation.`,
+    instructions: `Structural olog for ${projectRoot}. Name and module parameters accept JS regex. Call olog_overview first for orientation.`,
     capabilities: { logging: {} },
   }
 );
 
 registerOlogQuery(server, store, projectRoot);
 registerOlogInspect(server, store, projectRoot);
-registerOlogDump(server, store);
+registerOlogOverview(server, store);
 registerOlogReindex(server, store, projectRoot);
 registerOlogProposeSchema(server, store);
 registerOlogPlan(server, store, projectRoot);

@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { detectLanguages } from './detect.js';
 import AGENT_INGESTION from './prompts/olog-ingestion.txt';
-import AGENT_PLANNING from './prompts/olog-planning.txt';
-import AGENT_EXPLORE from './prompts/olog-explore.txt';
-import AGENT_EDIT from './prompts/olog-edit.txt';
+import AGENT_ORCHESTRATE from './prompts/olog-orchestrate.txt';
+import AGENT_ORIENT from './prompts/olog-orient.txt';
+import AGENT_IMPLEMENT from './prompts/olog-implement.txt';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,9 +42,9 @@ export async function runInit(): Promise<void> {
 
   const agents: Array<{ file: string; content: string }> = [
     { file: 'olog-ingestion.md', content: AGENT_INGESTION },
-    { file: 'olog-planning.md', content: AGENT_PLANNING },
-    { file: 'olog-explore.md', content: AGENT_EXPLORE },
-    { file: 'olog-edit.md', content: AGENT_EDIT },
+    { file: 'olog-orchestrate.md', content: AGENT_ORCHESTRATE },
+    { file: 'olog-orient.md', content: AGENT_ORIENT },
+    { file: 'olog-implement.md', content: AGENT_IMPLEMENT },
   ];
 
   for (const agent of agents) {

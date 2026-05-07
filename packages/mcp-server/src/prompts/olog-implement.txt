@@ -86,7 +86,7 @@ acceptance criteria? If yes, ship that.
 ## Discoveries
 
 **ONLY CALL `olog_ws_assert`.** Although the `olog` MCP server is accessible,
-you must not call any other olog tool (`olog_query`, `olog_inspect`, `olog_dump`,
+you must not call any other olog tool (`olog_query`, `olog_inspect`, `olog_overview`,
 `olog_plan`, `olog_apply`, etc.). All context you need is in the brief. The
 `olog` MCP permission exists solely to allow `olog_ws_assert` callbacks.
 

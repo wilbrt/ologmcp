@@ -9,9 +9,9 @@ A structural model server for software codebases, exposed as an MCP server for u
 | Agent | Purpose |
 |---|---|
 | `@olog-ingestion` | Interactive domain modeling — discover objects, propose arrows, mine structural invariants |
-| `@olog-planning` | Plan structural changes, validate them against the olog, delegate implementation to the edit agent |
-| `@olog-explore` | Read-only structural queries — answers focused questions about the codebase from olog facts |
-| `@olog-edit` | Source editor — receives a fully-resolved brief and writes code, verified with `tsc` |
+| `@olog-orchestrate` | Plan structural changes, validate them against the olog, delegate implementation to the edit agent |
+| `@olog-orient` | Read-only structural queries — answers focused questions about the codebase from olog facts |
+| `@olog-implement` | Source editor — receives a fully-resolved brief and writes code, verified with `tsc` |
 
 **Two MCP servers** with different tool sets:
 
@@ -21,7 +21,7 @@ A structural model server for software codebases, exposed as an MCP server for u
 |---|---|
 | `olog_query` | Search and traverse the graph by kind, name regex, module regex, or multi-hop arrow following |
 | `olog_inspect` | Full detail on a single element — provenance, span, incoming/outgoing arrows |
-| `olog_dump` | High-level overview: element counts by kind, arrow counts, recent provenance |
+| `olog_overview` | High-level overview: element counts by kind, arrow counts, recent provenance |
 | `olog_reindex` | Re-ingest the codebase after source changes |
 | `olog_propose_schema` | Add domain objects, arrows, and path equations to the olog |
 | `olog_plan` | Describe a set of structural operations (rename, move, add, remove) as a plan |
@@ -100,13 +100,13 @@ Use `@olog-ingestion` to:
 
 ### Planning and editing
 
-The `@olog-planning` agent helps you plan structural changes (renames, moves, extractions, new abstractions). It:
-1. Gathers structural context by delegating queries to `@olog-explore`
+The `@olog-orchestrate` agent helps you plan structural changes (renames, moves, extractions, new abstractions). It:
+1. Gathers structural context by delegating queries to `@olog-orient`
 2. Writes a plan file to `.plans/`
 3. Validates the plan against olog constraints before touching any code
-4. Delegates each implementation slice to `@olog-edit` with a fully-resolved brief
+4. Delegates each implementation slice to `@olog-implement` with a fully-resolved brief
 
-The `@olog-edit` agent receives a `DelegationBrief` — a self-contained JSON with the target file, analogous implementations, required interfaces, and acceptance criteria. It writes the code and verifies with `tsc`.
+The `@olog-implement` agent receives a `DelegationBrief` — a self-contained JSON with the target file, analogous implementations, required interfaces, and acceptance criteria. It writes the code and verifies with `tsc`.
 
 ### Visualisation
 

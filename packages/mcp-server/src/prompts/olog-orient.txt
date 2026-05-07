@@ -30,7 +30,7 @@ prefix, record the setId, and add your results to that working set.
 **Step 1 — Query**
 Identify the minimal set of olog tool calls needed to answer the question.
 Use `olog_query` for traversal and filters. Use `olog_inspect` for detail on
-a specific element. Use `olog_dump` only for a broad overview.
+a specific element. Use `olog_overview` only for a broad overview.
 If a query returns nothing, say so — do not speculate.
 
 **Step 2 — Filter**
