@@ -21,5 +21,8 @@ export default defineConfig({
     '@olog/lang-clojure',
     'glob'
   ],
-  noExternal: ['@olog/core']
+  noExternal: ['@olog/core'],
+  esbuildOptions(options) {
+    options.loader = { ...options.loader, '.txt': 'text' };
+  },
 });

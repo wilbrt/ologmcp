@@ -30,6 +30,8 @@
     "build": "tsup && cp ../core/src/schema.sql dist/ && rm -rf dist/queries && cp -r ../core/src/ingest/queries dist/queries",
     "typecheck": "tsc --noEmit",
     "test": "echo \"No tests yet\"",
+    "gen-agents": "tsx src/scripts/gen-agent-md.ts",
+    "check-agents": "tsx src/scripts/gen-agent-md.ts --check",
     "dot": "tsx src/scripts/dot.ts",
     "dot:svg": "tsx src/scripts/dot.ts | dot -Tsvg -o olog.svg && open olog.svg"
   }
