@@ -7,7 +7,7 @@ interface WorkingSetNote {
     updatedAt: number;
 }
 declare const ELEM_KINDS: readonly ["file", "module", "symbol", "callsite", "import", "type", "interface", "class", "enum", "function", "method", "const", "var", "namespace", "property", "domain", "other"];
-declare const ARROW_KINDS: readonly ["extends", "implements", "calls", "imports", "exports", "references", "contains", "returns", "param", "typeof", "instanceof", "definedIn", "inModule", "memberOf", "callerOf", "calleeOf", "importsFrom", "locatedIn", "hasProperty", "hasType", "implementedAs", "throws", "other"];
+declare const ARROW_KINDS: readonly ["extends", "implements", "calls", "imports", "exports", "references", "contains", "returns", "param", "typeof", "instanceof", "definedIn", "inModule", "memberOf", "callerOf", "calleeOf", "importsFrom", "locatedIn", "hasProperty", "hasType", "implementedAs", "proposedImplementation", "throws", "other"];
 type OlogKind = typeof ELEM_KINDS[number];
 type ArrowKind = typeof ARROW_KINDS[number];
 interface OlogElem {
@@ -158,7 +158,7 @@ interface ChangeInstruction {
     oldText: string;
     newText: string;
 }
-interface ApplyResult$1 {
+interface ApplyResult {
     applied: number;
     skipped: number;
     errors: string[];
@@ -187,6 +187,7 @@ interface SyntheticArr {
     srcId: string;
     dstId: string | null;
     note: string | null;
+    source: string;
     synthetic: true;
 }
 interface WorkingSetGraph {
@@ -742,7 +743,7 @@ declare class OlogStore {
         limit: number;
     }): OlogElem[];
     getProvenance(elemId: string): Provenance | null;
-    applyPlan(operations: PlanOperation[]): ApplyResult$1;
+    applyPlan(operations: PlanOperation[]): ApplyResult;
     addElement(elem: OlogElem): void;
     addArrow(arr: OlogArr): void;
     addProvenance(elemId: string, prov: Provenance): void;
@@ -788,7 +789,7 @@ declare class OlogStore {
     getAnnotations(setId: string, targetIds?: string[]): WorkingSetNote[];
     deleteAnnotation(setId: string, targetId: string): void;
     getWorkingSetElementIds(setId: string): Set<string>;
-    assertSyntheticArrow(setId: string, srcId: string, dstId: string | undefined, kind: string, note?: string): string;
+    assertSyntheticArrow(setId: string, srcId: string, dstId: string | undefined, kind: string, source: string, note?: string): string;
     queryWorkingSetGraph(setId: string, opts: {
         kind?: string;
         nameRegex?: string;
@@ -796,6 +797,7 @@ declare class OlogStore {
         arrows?: string[];
         direction?: 'in' | 'out';
         includeAnnotations?: boolean;
+        source?: string;
     }): WorkingSetGraph;
     private _attachAnnotations;
     close(): void;
@@ -1039,7 +1041,7 @@ interface FileSnapshot {
     filePath: string;
     originalContent: string;
 }
-interface ApplyResult {
+interface SourceEditResult {
     applied: number;
     skipped: number;
     errors: string[];
@@ -1051,9 +1053,12 @@ declare function offsetAt(source: string, line: number, col: number): number;
 /** Apply an ordered list of SourceEdits to a single source string. Sorts in reverse position order first. */
 declare function applyEditsToString(source: string, edits: SourceEdit[]): string;
 /** Apply an array of SourceEdits to disk files. Groups by file, sorts within each file, applies atomically. */
-declare function applySourceEdits(edits: SourceEdit[], projectRoot: string, readFile?: (path: string) => Promise<string>, writeFile?: (path: string, content: string) => Promise<void>): Promise<ApplyResult>;
+declare function applySourceEdits(edits: SourceEdit[], projectRoot: string, readFile?: (path: string) => Promise<string>, writeFile?: (path: string, content: string) => Promise<void>): Promise<SourceEditResult>;
 /** Roll back files to their original content using snapshots. Best-effort — does not throw. */
 declare function rollback(snapshots: FileSnapshot[], projectRoot: string): Promise<void>;
+
+/** Extract the file path prefix from a full span string. */
+declare function filePathFromSpan(span: string): string | null;
 
 interface RenderResult {
     edits: SourceEdit[];
@@ -1066,7 +1071,7 @@ interface RenderResult {
     affectedFiles: string[];
 }
 interface RenderAndApplyResult extends RenderResult {
-    applyResult: ApplyResult | null;
+    applyResult: SourceEditResult | null;
     verificationDiscrepancies: string[];
 }
 declare function renderPlan(store: OlogStore, operations: PlanOperation[], projectRoot: string): RenderResult;
@@ -1212,8 +1217,12 @@ declare class SourceResolver {
     readFocused(filePath: string, span: string, contextBefore?: number, contextAfter?: number): string | null;
     private readFile;
 }
-/** Extract the relative file path prefix from a full span string. */
-declare function filePathFromSpan(span: string): string | null;
+
+/**
+ * Shared regex-escaping utility.
+ * Escapes special regex characters in a string so it can be used in a RegExp constructor.
+ */
+declare function escapeRegex(s: string): string;
 
 interface AnalogueCandidate {
     id: string;
@@ -1407,4 +1416,4 @@ declare function verifyInternalEquations(store: OlogStore, group: ShapeGroup, op
     coverage: number;
 }>;
 
-export { ARROW_KINDS, AdapterRegistry, type AnalogueCandidate, type ApplyResult$1 as ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type AssembleBriefOptions, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, ELEM_KINDS, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type LanguageAdapterConfig, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, SessionStore, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type SyntheticArr, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, type WorkingSet, type WorkingSetGraph, type WorkingSetMeta, type WorkingSetNote, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, minePullbacks, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };
+export { ARROW_KINDS, AdapterRegistry, type AnalogueCandidate, type ApplyResult, type ArrowKind, type ArrowPath, type ArrowProposal, type AssembleBriefOptions, type CandidatePair, type ChangeInstruction, type ConfidenceLevel, type ConstraintKind, type ContextOverrides, type Counterexample, type DelegationBrief, type DelegationTask, type DiscoveryOptions, type DomainCandidate, type DomainContext, type DomainSessionData, DomainSessionStore, type DumpResult, ELEM_KINDS, type EgoGraph, type EquationCandidate, type FileSnapshot, type ImportEntry, type IngestResult, type InspectResult, type IntegrityConstraint, type LanguageAdapter, type LanguageAdapterConfig, type MiningOptions, type MotifCandidate, type MotifDiscoveryOptions, type MotifInstance, type MotifSessionData, MotifSessionStore, type MotifShape, type MustCallEntry, type MustImplementEntry, type OlogArr, type OlogAttr, type OlogElem, type OlogKind, OlogStore, type Path, type PathEquation, type Plan, type PlanOperation, type PropertyExtract, type ProposedEquation, type Provenance, type QueryResult, type RawArrow, type RawElement, type RenderAndApplyResult, type RenderResult, type SchemaProposal, SessionStore, type ShapeGroup, type SourceEdit, SourceResolver, type StructuralContext, type SyntheticArr, type TraverseOptions, type TreeSitterNode, type TreeSitterParser, type TreeSitterQuery, type TreeSitterQueryCapture, type TreeSitterQueryMatch, type UsedByEntry, type ValidationResult, type Violation, type WorkingSet, type WorkingSetGraph, type WorkingSetMeta, type WorkingSetNote, abstractToShape, annotatePathKinds, applyEditsToString, applySourceEdits, arrowId, assembleBrief, discoverDomainCandidates, discoverMotifs, enumeratePaths, escapeRegex, evaluateConstraints, evaluateEquation, evaluateEquationCandidate, evaluatePathEquations, extendDomainByKan, extractEgoGraph, filePathFromSpan, generateCandidatePairs, getArrowKindsInUse, getDefaultRegistry, getExistingDomainElementsByCodeId, groupEgoGraphs, ingestChangedFiles, ingestProject, isExternalModule, isNounPhrase, mineEquations, minePullbacks, offsetAt, reindexProject, renderAndApplyPlan, renderPlan, rollback, setDefaultRegistry, shapeHash, toNounPhrase, toNounPhraseFromName, traverse, validateEquation, verifyInternalEquations };

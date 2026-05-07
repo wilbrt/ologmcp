@@ -49,11 +49,11 @@ you discovered that is NOT already modeled in the main olog as an `olog_arr`,
 but that you can state with confidence from your query results. Common cases:
 
 - A module's exported functions are only reachable through one gateway
-  → `olog_ws_assert({ setId, srcId: <module-elem>, dstId: <gateway-fn>, kind: "gatekeepedBy", note: "..." })`
+  → `olog_ws_assert({ setId, srcId: <module-elem>, dstId: <gateway-fn>, kind: "gatekeepedBy", source: "orient", note: "..." })`
 - Two elements always appear together in the same callerOf chains
-  → `olog_ws_assert({ setId, srcId: <A>, dstId: <B>, kind: "coordinatesWith", note: "..." })`
+  → `olog_ws_assert({ setId, srcId: <A>, dstId: <B>, kind: "coordinatesWith", source: "orient", note: "..." })`
 - A domain object has a code-level analog not modeled with `implementedAs`
-  → `olog_ws_assert({ setId, srcId: <domain-elem>, dstId: <code-elem>, kind: "implementedAs", note: "..." })`
+  → `olog_ws_assert({ setId, srcId: <domain-elem>, dstId: <code-elem>, kind: "implementedAs", source: "orient", note: "..." })`
 
 Only assert when you have direct evidence — do not speculate.
 

@@ -56,6 +56,7 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
         arrows: z.array(z.string()).optional().describe('Arrow kinds to follow for traversal (e.g. ["callerOf", "calls", "structurallyDependsOn"])'),
         direction: z.enum(['in', 'out']).optional().describe('Traversal direction: "out" follows arrows where seed is source, "in" follows arrows where seed is destination'),
         includeAnnotations: z.boolean().optional().describe('Include annotations on elements and arrows'),
+        source: z.string().optional().describe('Filter synthetic arrows by source (e.g. "orient", "orchestrate", "implement", "elicit", "propose_functor", "legacy")'),
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -68,6 +69,7 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
         if (args.arrows !== undefined) graphOpts.arrows = args.arrows;
         if (args.direction !== undefined) graphOpts.direction = args.direction;
         if (args.includeAnnotations !== undefined) graphOpts.includeAnnotations = args.includeAnnotations;
+        if (args.source !== undefined) graphOpts.source = args.source;
         const graph = store.queryWorkingSetGraph(args.setId, graphOpts);
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(graph, null, 2) }],
@@ -106,14 +108,15 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
         srcId: z.string().describe('Source element ID (must exist in olog_elem)'),
         dstId: z.string().optional().describe('Destination element ID (must exist in olog_elem). Omit when the dependency was discovered but its olog element ID is unknown.'),
         kind: z.string().describe('Arrow kind — free-text, e.g. "structurallyDependsOn", "gatekeepedBy", "coordinatesWith", or a standard ArrowKind you verified empirically'),
+        source: z.enum(['elicit', 'orient', 'orchestrate', 'implement', 'propose_functor', 'legacy']).describe('Which agent role asserted this arrow'),
         note: z.string().optional().describe('Explanation of why this relationship holds — what evidence supports this inference'),
       }),
       annotations: { idempotentHint: false },
     },
     async (args) => {
       try {
-        const id = store.assertSyntheticArrow(args.setId, args.srcId, args.dstId, args.kind, args.note);
-        const result: SyntheticArr = { id, setId: args.setId, kind: args.kind, srcId: args.srcId, dstId: args.dstId ?? null, note: args.note ?? null, synthetic: true };
+        const id = store.assertSyntheticArrow(args.setId, args.srcId, args.dstId, args.kind, args.source, args.note);
+        const result: SyntheticArr = { id, setId: args.setId, kind: args.kind, srcId: args.srcId, dstId: args.dstId ?? null, note: args.note ?? null, source: args.source, synthetic: true };
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };

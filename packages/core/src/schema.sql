@@ -137,5 +137,6 @@ CREATE TABLE IF NOT EXISTS olog_ws_synthetic_arr (
   src_id TEXT NOT NULL,
   dst_id TEXT NOT NULL,
   note   TEXT,
+  source TEXT NOT NULL DEFAULT 'legacy',
   PRIMARY KEY (set_id, id)
 ) STRICT, WITHOUT ROWID;

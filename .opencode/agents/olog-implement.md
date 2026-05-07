@@ -103,6 +103,7 @@ olog_ws_assert({
   srcId: "<brief.target.id>",
   dstId: "<ID of the element if known — omit if the element isn't in the olog>",
   kind: "discoveredDependency",
+  source: "implement",
   note: "<why it was needed>"
 })
 ```

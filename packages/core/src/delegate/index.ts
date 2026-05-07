@@ -315,13 +315,13 @@ export function assembleBrief(
     ];
     store.addToWorkingSet(setId, elemIds, []);
     for (const mc of mustCallEntries) {
-      store.assertSyntheticArrow(setId, targetId, mc.id, 'shouldCall', `Required by ${task} brief`);
+      store.assertSyntheticArrow(setId, targetId, mc.id, 'shouldCall', 'orchestrate', `Required by ${task} brief`);
     }
     for (const mi of mustImplementEntries) {
-      store.assertSyntheticArrow(setId, targetId, mi.id, 'shouldImplement');
+      store.assertSyntheticArrow(setId, targetId, mi.id, 'shouldImplement', 'orchestrate');
     }
     for (const a of analogueCandidates) {
-      store.assertSyntheticArrow(setId, targetId, a.id, 'analogueOf', `similarity=${a.similarity.toFixed(2)}`);
+      store.assertSyntheticArrow(setId, targetId, a.id, 'analogueOf', 'orchestrate', `similarity=${a.similarity.toFixed(2)}`);
     }
   }
 

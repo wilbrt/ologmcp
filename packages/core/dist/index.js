@@ -270,6 +270,10 @@ var OlogStore = class {
       this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
     }
+    const synArrCols = this.db.prepare("PRAGMA table_info(olog_ws_synthetic_arr)").all();
+    if (!synArrCols.some((c) => c.name === "source")) {
+      this.db.exec("ALTER TABLE olog_ws_synthetic_arr ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'");
+    }
     const redundantKinds = ["inModule", "locatedIn", "contains", "imports"];
     for (const kind of redundantKinds) {
       this.db.prepare("DELETE FROM olog_arr WHERE kind = ?").run(kind);
@@ -386,10 +390,10 @@ var OlogStore = class {
       "DELETE FROM olog_working_set_note WHERE set_id = ? AND target_id = ?"
     );
     this.insertSyntheticArrStmt = this.db.prepare(
-      "INSERT OR IGNORE INTO olog_ws_synthetic_arr (set_id, id, kind, src_id, dst_id, note) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT OR IGNORE INTO olog_ws_synthetic_arr (set_id, id, kind, src_id, dst_id, note, source) VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
     this.getSyntheticArrsStmt = this.db.prepare(
-      "SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ?"
+      "SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ?"
     );
     this._sessions = new DomainSessionStore(this.db);
     this._motifSessions = new MotifSessionStore(this.db);
@@ -1088,16 +1092,16 @@ var OlogStore = class {
     ).all(setId);
     return new Set(rows.map((r) => r.elem_id));
   }
-  assertSyntheticArrow(setId, srcId, dstId, kind, note) {
+  assertSyntheticArrow(setId, srcId, dstId, kind, source, note) {
     const srcExists = this.db.prepare("SELECT 1 FROM olog_elem WHERE id = ? LIMIT 1").get(srcId);
     if (!srcExists) throw new Error(`assertSyntheticArrow: srcId '${srcId}' not found in olog_elem`);
     const id = `syn:${randomUUID3()}`;
-    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId ?? "", note ?? null);
+    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId ?? "", note ?? null, source);
     this.db.prepare("UPDATE olog_working_set SET updated_at = ? WHERE id = ?").run(Date.now(), setId);
     return id;
   }
   queryWorkingSetGraph(setId, opts) {
-    const { kind, nameRegex, moduleRegex, arrows, direction = "out", includeAnnotations } = opts;
+    const { kind, nameRegex, moduleRegex, arrows, direction = "out", includeAnnotations, source } = opts;
     let seedElems = this.db.prepare(
       "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?"
     ).all(setId).map((r) => this.rowToElem(r));
@@ -1111,12 +1115,13 @@ var OlogStore = class {
       seedElems = seedElems.filter((e) => e.module != null && re.test(e.module));
     }
     const syntheticRows = this.getSyntheticArrsStmt.all(setId);
-    const allSyntheticArrows = syntheticRows.map((r) => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, synthetic: true }));
+    const allSyntheticArrows = syntheticRows.map((r) => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, source: r.source, synthetic: true }));
+    const filteredSyntheticArrows = source ? allSyntheticArrows.filter((a) => a.source === source) : allSyntheticArrows;
     if (!arrows || arrows.length === 0) {
       const realArrows2 = this.db.prepare(
         "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?"
       ).all(setId).map((r) => this.rowToArr(r));
-      const result2 = { elements: seedElems, arrows: realArrows2, syntheticArrows: allSyntheticArrows };
+      const result2 = { elements: seedElems, arrows: realArrows2, syntheticArrows: filteredSyntheticArrows };
       if (includeAnnotations) this._attachAnnotations(setId, result2);
       return result2;
     }
@@ -1131,9 +1136,9 @@ var OlogStore = class {
     ).all(...seedIds, ...arrows);
     const realArrows = realRows.map((r) => this.rowToArr(r));
     const synRows = this.db.prepare(
-      `SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
+      `SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
     ).all(setId, ...seedIds, ...arrows);
-    const syntheticArrows = synRows.map((r) => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, synthetic: true }));
+    const syntheticArrows = synRows.filter((r) => !source || r.source === source).map((r) => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, source: r.source, synthetic: true }));
     const neighborIds = [
       ...realRows.map((r) => r[neighborCol]),
       ...synRows.map((r) => r[neighborCol])
@@ -1241,6 +1246,7 @@ var ARROW_KINDS = [
   "hasProperty",
   "hasType",
   "implementedAs",
+  "proposedImplementation",
   "throws",
   "other"
 ];
@@ -1256,23 +1262,22 @@ function evaluateConstraints(store) {
   const violations = [];
   const constraints = store.getConstraints();
   for (const constraint of constraints) {
-    violations.push(...evaluateConstraint(store, constraint));
+    switch (constraint.kind) {
+      case "existence":
+        violations.push(...evaluateExistence(store, constraint));
+        break;
+      case "layering":
+        violations.push(...evaluateLayering(store, constraint));
+        break;
+      case "monotonicity":
+        violations.push(...evaluateMonotonicity(store, constraint));
+        break;
+      case "totality":
+        violations.push(...evaluateTotality(store, constraint));
+        break;
+    }
   }
   return { valid: violations.length === 0, violations };
-}
-function evaluateConstraint(store, constraint) {
-  switch (constraint.kind) {
-    case "existence":
-      return evaluateExistence(store, constraint);
-    case "layering":
-      return evaluateLayering(store, constraint);
-    case "monotonicity":
-      return evaluateMonotonicity(store, constraint);
-    case "totality":
-      return evaluateTotality(store, constraint);
-    default:
-      return [];
-  }
 }
 function evaluateExistence(store, constraint) {
   const kind = constraint.config.kind;
@@ -1552,7 +1557,7 @@ function arrowId(srcId, kind, dstId) {
 function fileElemId(relativePath) {
   return `file:${relativePath}`;
 }
-function formatSpan(relativePath, startLine, startCol, endLine, endCol) {
+function formatSpanId(relativePath, startLine, startCol, endLine, endCol) {
   return `${relativePath}:${startLine}:${startCol}-${endLine}:${endCol}`;
 }
 
@@ -1561,6 +1566,34 @@ import { globSync } from "glob";
 import { readFileSync as readFileSync2, statSync } from "fs";
 import { relative, basename } from "path";
 import { execSync } from "child_process";
+
+// src/utils/parse-span.ts
+function parseSpan(span) {
+  let m = span.match(/^(.+):(\d+):(\d+)-(\d+):(\d+)$/);
+  if (m) {
+    return {
+      filePath: m[1],
+      startLine: parseInt(m[2], 10),
+      startCol: parseInt(m[3], 10),
+      endLine: parseInt(m[4], 10),
+      endCol: parseInt(m[5], 10)
+    };
+  }
+  m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
+  if (m) {
+    return {
+      startLine: parseInt(m[1], 10),
+      startCol: parseInt(m[2], 10),
+      endLine: parseInt(m[3], 10),
+      endCol: parseInt(m[4], 10)
+    };
+  }
+  return null;
+}
+function filePathFromSpan(span) {
+  const parsed = parseSpan(span);
+  return parsed?.filePath ?? null;
+}
 
 // src/ingest/adapter.ts
 var AdapterRegistry = class {
@@ -1699,10 +1732,10 @@ function ingestChangedFiles(projectRoot, store, registry) {
     const fileNameToId = /* @__PURE__ */ new Map();
     const seenArrowIds = /* @__PURE__ */ new Set();
     for (const rawElem of extracted.elements) {
-      const coords = parseTreeSitterSpan(rawElem.span);
+      const coords = parseSpan(rawElem.span);
       const line = coords?.startLine ?? 1;
       const col = coords?.startCol ?? 1;
-      const fullSpan = coords ? formatSpan(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
+      const fullSpan = coords ? formatSpanId(rel, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
       const id = elemId(rel, line, col, rawElem.kind, rawElem.name);
       const fileExisting = fileNameToId.get(rawElem.name) ?? [];
       fileExisting.push(id);
@@ -1871,10 +1904,10 @@ function runIngestion(projectRoot, store, head, registry) {
     const seenArrowIds = /* @__PURE__ */ new Set();
     const elementIds = [];
     for (const rawElem of extracted.elements) {
-      const coords = parseTreeSitterSpan(rawElem.span);
+      const coords = parseSpan(rawElem.span);
       const line = coords?.startLine ?? 1;
       const col = coords?.startCol ?? 1;
-      const fullSpan = coords ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
+      const fullSpan = coords ? formatSpanId(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : rawElem.span;
       const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
       const existing = nameToId.get(rawElem.name) ?? [];
       existing.push(id);
@@ -1958,7 +1991,7 @@ function runIngestion(projectRoot, store, head, registry) {
     }
     for (const rawElem of extracted.elements) {
       if (rawElem.kind === "import") {
-        const coords = parseTreeSitterSpan(rawElem.span);
+        const coords = parseSpan(rawElem.span);
         const line = coords?.startLine ?? 1;
         const col = coords?.startCol ?? 1;
         const id = elemId(relativePath, line, col, rawElem.kind, rawElem.name);
@@ -2016,11 +2049,11 @@ function runIngestion(projectRoot, store, head, registry) {
       const parentIds = fileNameToId.get(prop.parentName);
       const parentId = parentIds?.[0];
       if (!parentId) continue;
-      const coords = parseTreeSitterSpan(prop.span);
+      const coords = parseSpan(prop.span);
       const line = coords?.startLine ?? 1;
       const col = coords?.startCol ?? 1;
       const propId = elemId(relativePath, line, col, "property", `${prop.parentName}.${prop.name}`);
-      const fullSpan = coords ? formatSpan(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : prop.span;
+      const fullSpan = coords ? formatSpanId(relativePath, coords.startLine, coords.startCol, coords.endLine, coords.endCol) : prop.span;
       elems.push({
         id: propId,
         kind: "property",
@@ -2033,6 +2066,11 @@ function runIngestion(projectRoot, store, head, registry) {
       if (!seenPropArrowIds.has(hpId)) {
         seenPropArrowIds.add(hpId);
         arrs.push({ id: hpId, kind: "hasProperty", src_id: parentId, dst_id: propId, attrs: "{}" });
+      }
+      const moId = arrowId(propId, "memberOf", parentId);
+      if (!seenPropArrowIds.has(moId)) {
+        seenPropArrowIds.add(moId);
+        arrs.push({ id: moId, kind: "memberOf", src_id: propId, dst_id: parentId, attrs: "{}" });
       }
       for (const typeRef of prop.typeRefs) {
         const typeId = (fileNameToId.get(typeRef) ?? [])[0] ?? globalNameToId.get(typeRef);
@@ -2074,16 +2112,6 @@ function runIngestion(projectRoot, store, head, registry) {
     filesProcessed,
     elementsCreated: elems.length,
     arrowsCreated: arrs.length
-  };
-}
-function parseTreeSitterSpan(span) {
-  const m = span.match(/^(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[1], 10),
-    startCol: parseInt(m[2], 10),
-    endLine: parseInt(m[3], 10),
-    endCol: parseInt(m[4], 10)
   };
 }
 
@@ -2186,6 +2214,11 @@ async function rollback(snapshots, projectRoot) {
   }
 }
 
+// src/utils/escape-regex.ts
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // src/render/strategies/rename.ts
 function computeRenameEdits(store, elementId, newName, readFile) {
   let edits = [];
@@ -2282,19 +2315,6 @@ function findCallReferences(store, elem, elementId) {
     }
   }
   return [...new Map(results.map((e) => [e.id, e])).values()];
-}
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function parseSpan(span) {
-  const m = span.match(/^([^:]+):(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[2], 10),
-    startCol: parseInt(m[3], 10),
-    endLine: parseInt(m[4], 10),
-    endCol: parseInt(m[5], 10)
-  };
 }
 
 // src/render/declaration.ts
@@ -2836,16 +2856,6 @@ function computeAddReexportEdits(store, module, name, fromModule, readFile) {
 }
 
 // src/render/strategies/amend-type.ts
-function parseSpan2(span) {
-  const m = span.match(/^([^:]+):(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[2], 10),
-    startCol: parseInt(m[3], 10),
-    endLine: parseInt(m[4], 10),
-    endCol: parseInt(m[5], 10)
-  };
-}
 function computeAmendTypeEdits(store, target, field, action, value, readFile) {
   const edits = [];
   const warnings = [];
@@ -2858,7 +2868,7 @@ function computeAmendTypeEdits(store, target, field, action, value, readFile) {
     warnings.push(`Element has no span: ${target}`);
     return { edits, warnings };
   }
-  const parsedSpan = parseSpan2(elem.span);
+  const parsedSpan = parseSpan(elem.span);
   if (!parsedSpan) {
     warnings.push(`Failed to parse span: ${elem.span}`);
     return { edits, warnings };
@@ -3212,7 +3222,7 @@ function gatherImports(store, targetModule) {
   const imports = [];
   const moduleElems = store.queryElements({
     kind: "import",
-    moduleRegex: `^${escapeRegex2(targetModule)}$`,
+    moduleRegex: `^${escapeRegex(targetModule)}$`,
     limit: 200
   });
   for (const imp of moduleElems) {
@@ -3230,7 +3240,7 @@ function gatherImports(store, targetModule) {
 function getModuleElement(store, modulePath) {
   const results = store.queryElements({
     kind: "module",
-    nameRegex: `^${escapeRegex2(modulePath)}$`,
+    nameRegex: `^${escapeRegex(modulePath)}$`,
     limit: 1
   });
   return results[0] ?? null;
@@ -3286,9 +3296,6 @@ function gatherDomainContext(store, targetId) {
   if (ownConcepts.length === 0 && neighborConcepts.length === 0) return null;
   return { ownConcepts, neighborConcepts };
 }
-function escapeRegex2(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 // src/delegate/resolve.ts
 import { readFileSync as readFileSync5 } from "fs";
@@ -3300,7 +3307,7 @@ var SourceResolver = class {
   projectRoot;
   fileCache = /* @__PURE__ */ new Map();
   readSpan(filePath, span) {
-    const parsed = parseSpan3(span);
+    const parsed = parseSpan(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3310,7 +3317,7 @@ var SourceResolver = class {
     return lines.slice(start, end).join("\n");
   }
   readContext(filePath, span, contextLines = 2) {
-    const parsed = parseSpan3(span);
+    const parsed = parseSpan(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3320,7 +3327,7 @@ var SourceResolver = class {
     return lines.slice(start, end).join("\n");
   }
   readDeclaration(filePath, span, kind) {
-    const parsed = parseSpan3(span);
+    const parsed = parseSpan(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3391,7 +3398,7 @@ var SourceResolver = class {
    * comment if the file has content before the window.
    */
   readFocused(filePath, span, contextBefore = 25, contextAfter = 10) {
-    const parsed = parseSpan3(span);
+    const parsed = parseSpan(span);
     if (!parsed) return null;
     const source = this.readFile(filePath);
     if (source === null) return null;
@@ -3415,20 +3422,6 @@ var SourceResolver = class {
     }
   }
 };
-function parseSpan3(span) {
-  const m = span.match(/(\d+):(\d+)-(\d+):(\d+)$/);
-  if (!m) return null;
-  return {
-    startLine: parseInt(m[1], 10),
-    startCol: parseInt(m[2], 10),
-    endLine: parseInt(m[3], 10),
-    endCol: parseInt(m[4], 10)
-  };
-}
-function filePathFromSpan(span) {
-  const m = span.match(/^(.+):\d+:\d+-\d+:\d+$/);
-  return m ? m[1] : null;
-}
 
 // src/delegate/analogues.ts
 function findAnalogues(store, target, limit = 3, workingSetIds) {
@@ -3624,13 +3617,13 @@ function assembleBrief(store, projectRoot, task, targetId, opts = {}) {
     ];
     store.addToWorkingSet(setId, elemIds, []);
     for (const mc of mustCallEntries) {
-      store.assertSyntheticArrow(setId, targetId, mc.id, "shouldCall", `Required by ${task} brief`);
+      store.assertSyntheticArrow(setId, targetId, mc.id, "shouldCall", "orchestrate", `Required by ${task} brief`);
     }
     for (const mi of mustImplementEntries) {
-      store.assertSyntheticArrow(setId, targetId, mi.id, "shouldImplement");
+      store.assertSyntheticArrow(setId, targetId, mi.id, "shouldImplement", "orchestrate");
     }
     for (const a of analogueCandidates) {
-      store.assertSyntheticArrow(setId, targetId, a.id, "analogueOf", `similarity=${a.similarity.toFixed(2)}`);
+      store.assertSyntheticArrow(setId, targetId, a.id, "analogueOf", "orchestrate", `similarity=${a.similarity.toFixed(2)}`);
     }
   }
   return {
@@ -3744,9 +3737,9 @@ function localModuleToFilePath(modulePath) {
   return modulePath + ".ts";
 }
 function parseSpanSimple(span) {
-  const m = span.match(/(\d+):\d+-(\d+):\d+$/);
-  if (!m) return null;
-  return { start: parseInt(m[1], 10), end: parseInt(m[2], 10) };
+  const parsed = parseSpan(span);
+  if (!parsed) return null;
+  return { start: parsed.startLine, end: parsed.endLine };
 }
 
 // src/mining/paths.ts
@@ -4830,6 +4823,7 @@ export {
   discoverDomainCandidates,
   discoverMotifs,
   enumeratePaths,
+  escapeRegex,
   evaluateConstraints,
   evaluateEquation,
   evaluateEquationCandidate,

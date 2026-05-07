@@ -179,6 +179,12 @@ export class OlogStore {
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)');
     }
 
+    // Migrate: add source column to olog_ws_synthetic_arr if missing
+    const synArrCols = this.db.prepare("PRAGMA table_info(olog_ws_synthetic_arr)").all() as Array<{ name: string }>;
+    if (!synArrCols.some(c => c.name === 'source')) {
+      this.db.exec("ALTER TABLE olog_ws_synthetic_arr ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'");
+    }
+
     // Migrate: remove stored arrows that are now derived on-the-fly
     const redundantKinds = ['inModule', 'locatedIn', 'contains', 'imports'];
     for (const kind of redundantKinds) {
@@ -302,10 +308,10 @@ export class OlogStore {
       'DELETE FROM olog_working_set_note WHERE set_id = ? AND target_id = ?'
     );
     this.insertSyntheticArrStmt = this.db.prepare(
-      'INSERT OR IGNORE INTO olog_ws_synthetic_arr (set_id, id, kind, src_id, dst_id, note) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT OR IGNORE INTO olog_ws_synthetic_arr (set_id, id, kind, src_id, dst_id, note, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     this.getSyntheticArrsStmt = this.db.prepare(
-      'SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ?'
+      'SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ?'
     );
 
     this._sessions = new DomainSessionStore(this.db);
@@ -1123,11 +1129,11 @@ case 'removeArrow': {
     return new Set(rows.map(r => r.elem_id));
   }
 
-  assertSyntheticArrow(setId: string, srcId: string, dstId: string | undefined, kind: string, note?: string): string {
+  assertSyntheticArrow(setId: string, srcId: string, dstId: string | undefined, kind: string, source: string, note?: string): string {
     const srcExists = this.db.prepare('SELECT 1 FROM olog_elem WHERE id = ? LIMIT 1').get(srcId);
     if (!srcExists) throw new Error(`assertSyntheticArrow: srcId '${srcId}' not found in olog_elem`);
     const id = `syn:${randomUUID()}`;
-    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId ?? '', note ?? null);
+    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId ?? '', note ?? null, source);
     this.db.prepare('UPDATE olog_working_set SET updated_at = ? WHERE id = ?').run(Date.now(), setId);
     return id;
   }
@@ -1139,8 +1145,9 @@ case 'removeArrow': {
     arrows?: string[];
     direction?: 'in' | 'out';
     includeAnnotations?: boolean;
+    source?: string;
   }): WorkingSetGraph {
-    const { kind, nameRegex, moduleRegex, arrows, direction = 'out', includeAnnotations } = opts;
+    const { kind, nameRegex, moduleRegex, arrows, direction = 'out', includeAnnotations, source } = opts;
 
     let seedElems = (this.db.prepare(
       'SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?'
@@ -1150,14 +1157,16 @@ case 'removeArrow': {
     if (nameRegex) { const re = new RegExp(nameRegex); seedElems = seedElems.filter(e => re.test(e.name)); }
     if (moduleRegex) { const re = new RegExp(moduleRegex); seedElems = seedElems.filter(e => e.module != null && re.test(e.module)); }
 
-    const syntheticRows = this.getSyntheticArrsStmt.all(setId) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null }>;
-    const allSyntheticArrows: SyntheticArr[] = syntheticRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, synthetic: true as const }));
+    const syntheticRows = this.getSyntheticArrsStmt.all(setId) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null; source: string }>;
+    const allSyntheticArrows: SyntheticArr[] = syntheticRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, source: r.source, synthetic: true as const }));
+
+    const filteredSyntheticArrows = source ? allSyntheticArrows.filter(a => a.source === source) : allSyntheticArrows;
 
     if (!arrows || arrows.length === 0) {
       const realArrows = (this.db.prepare(
         'SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?'
       ).all(setId) as ArrRow[]).map(r => this.rowToArr(r));
-      const result: WorkingSetGraph = { elements: seedElems, arrows: realArrows, syntheticArrows: allSyntheticArrows };
+      const result: WorkingSetGraph = { elements: seedElems, arrows: realArrows, syntheticArrows: filteredSyntheticArrows };
       if (includeAnnotations) this._attachAnnotations(setId, result);
       return result;
     }
@@ -1176,9 +1185,11 @@ case 'removeArrow': {
     const realArrows = realRows.map(r => this.rowToArr(r));
 
     const synRows = this.db.prepare(
-      `SELECT id, kind, src_id, dst_id, note FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
-    ).all(setId, ...seedIds, ...arrows) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null }>;
-    const syntheticArrows: SyntheticArr[] = synRows.map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, synthetic: true as const }));
+      `SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
+    ).all(setId, ...seedIds, ...arrows) as Array<{ id: string; kind: string; src_id: string; dst_id: string; note: string | null; source: string }>;
+    const syntheticArrows: SyntheticArr[] = synRows
+      .filter(r => !source || r.source === source)
+      .map(r => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, source: r.source, synthetic: true as const }));
 
     const neighborIds = [
       ...realRows.map(r => r[neighborCol as 'src_id' | 'dst_id'] as string),
@@ -1190,7 +1201,7 @@ case 'removeArrow': {
       `SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id IN (${elemPh})`
     ).all(...allElemIds) as ElemRow[]).map(r => this.rowToElem(r));
 
-    const result: WorkingSetGraph = { elements: allElems, arrows: realArrows, syntheticArrows };
+    const result: WorkingSetGraph = { elements: allElems, arrows: realArrows, syntheticArrows: syntheticArrows };
     if (includeAnnotations) this._attachAnnotations(setId, result);
     return result;
   }
