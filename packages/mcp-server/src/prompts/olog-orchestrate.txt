@@ -196,23 +196,35 @@ If the plan contains `rewrite_body` operations:
       analogueOf/shouldImplement arrows into the working set for inspection.
    b. Invoke `@olog-implement` via Task. The task body must be **only** the raw JSON from
       `olog_delegate` — no preamble, no code, no extra instructions.
-   c. After `@olog-implement` completes, check for structural discoveries:
-      `olog_ws_query({ setId, arrows: ["discoveredDependency"], direction: "out" })`
-      If the edit agent found unexpected dependencies, factor them into remaining
-      slices before proceeding.
+   c. After `@olog-implement` completes, check for discoveries:
+      ```
+      olog_ws_query({ setId, arrows: ["discoveredDependency", "discoveredAmbiguity"], direction: "out" })
+      ```
+      - `discoveredDependency`: unexpected structural dependency — factor into remaining slices.
+      - `discoveredAmbiguity`: a question only the PM can answer. **Pause execution
+        immediately.** Enter the Revise phase with the question from the arrow's `note`.
    d. Mark the slice done in the plan file.
    e. Use `question` to ask whether to proceed to the next slice.
 3. Call `olog_reindex` after all body rewrites land.
 4. Drop the working set: `olog_ws_drop({ setId })`.
 
-**Working set lifecycle during revisions**
+**Phase 6 — Revise (entered from Execute on ambiguity or PM brief change)**
 
-If a plan revision arrives mid-execution (briefDelta from PM), do NOT drop the set.
-Instead:
-1. `olog_ws_pause({ setId })` — preserves the set and marks it mid-revision.
-2. Surface the revision through the PM conversation (Revise phase, Slice 9).
-3. On confirmation: `olog_ws_resume({ setId })` — set returns to active.
-4. Continue execution against the updated plan.
+Enter this phase when:
+- A `discoveredAmbiguity` arrow appears after an implement call, OR
+- The PM sends a brief change mid-execution.
+
+Steps:
+1. `olog_ws_pause({ setId })` — preserve the working set across the revision.
+2. Present the ambiguity or brief change to the PM via `question`. Capture the answer.
+3. Call `olog_plan_revise({ planHash, setId, briefDelta })` to classify each
+   operation as `keep | rollback | redirect`. Show the proposal to the PM.
+4. On PM confirmation: update the plan file to reflect verdicts. For `rollback`
+   operations, remove them. For `redirect` operations, amend targets or rationale.
+   For new operations from `newOpsNeeded`, call `olog_plan` to extend the plan,
+   then `olog_validate` before resuming.
+5. `olog_ws_resume({ setId })` — return to active.
+6. Continue execution from the next pending slice.
 
 If a synthetic arrow was asserted with an unknown destination (`dstId` omitted),
 resolve it once the target element is identified:

@@ -29,6 +29,7 @@ import { registerOlogDotDomain } from './tools/olog-dot-domain.js';
 import { registerOlogWs } from './tools/olog-ws.js';
 import { registerOlogProposeFunctor } from './tools/olog-propose-functor.js';
 import { registerOlogDomainDryrun } from './tools/olog-domain-dryrun.js';
+import { registerOlogPlanRevise } from './tools/olog-plan-revise.js';
 
 const projectRoot = process.env.OLOG_ROOT || process.cwd();
 
@@ -69,6 +70,7 @@ registerOlogDotDomain(server, store);
 registerOlogWs(server, store);
 registerOlogProposeFunctor(server, store);
 registerOlogDomainDryrun(server, store);
+registerOlogPlanRevise(server, store, projectRoot);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
