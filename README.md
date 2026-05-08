@@ -4,16 +4,17 @@ A structural model server for software codebases, exposed as an MCP server for u
 
 ## What you get
 
-**Four agents** pre-configured in opencode:
+**Five agents** pre-configured in opencode:
 
 | Agent | Purpose |
 |---|---|
-| `@olog-ingestion` | Interactive domain modeling — discover objects, propose arrows, mine structural invariants |
-| `@olog-orchestrate` | Plan structural changes, validate them against the olog, delegate implementation to the edit agent |
+| `@olog-elicit` | PM interlocutor — elicits domain concepts through conversation and writes a confirmed DomainBrief to `.plans/briefs/` |
+| `@olog-ingestion` | Domain ingestion — runs interactive discovery sessions to surface domain objects from types and classes, and mines structural invariants |
+| `@olog-orchestrate` | Plans structural changes, validates them against the olog, and delegates implementation slices to `@olog-implement` |
 | `@olog-orient` | Read-only structural queries — answers focused questions about the codebase from olog facts |
-| `@olog-implement` | Source editor — receives a fully-resolved brief and writes code, verified with `tsc` |
+| `@olog-implement` | Source editor — receives a fully-resolved DelegationBrief and writes code, verified with `tsc` |
 
-**Two MCP servers** with different tool sets:
+**Three MCP servers** with different tool sets:
 
 ### Core server (`olog`) — available to all agents
 
@@ -21,15 +22,27 @@ A structural model server for software codebases, exposed as an MCP server for u
 |---|---|
 | `olog_query` | Search and traverse the graph by kind, name regex, module regex, or multi-hop arrow following |
 | `olog_inspect` | Full detail on a single element — provenance, span, incoming/outgoing arrows |
-| `olog_overview` | High-level overview: element counts by kind, arrow counts, recent provenance |
+| `olog_overview` | High-level overview: element counts by kind, arrow counts, and all domain elements by name |
 | `olog_reindex` | Re-ingest the codebase after source changes |
 | `olog_propose_schema` | Add domain objects, arrows, and path equations to the olog |
-| `olog_plan` | Describe a set of structural operations (rename, move, add, remove) as a plan |
+| `olog_domain_dryrun` | Validate proposed objects/arrows/equations without writing to the DB |
+| `olog_plan` | Describe a set of structural operations (rename, move, add, remove) as a validated plan |
 | `olog_validate` | Check a plan against uniqueness, referential integrity, and path equation constraints |
-| `olog_apply` | Execute a validated plan — writes source edits and updates the olog |
+| `olog_apply` | Execute a validated plan by hash — writes source edits and updates the olog |
 | `olog_render` | Preview the source edits a plan would produce without applying them |
 | `olog_delegate` | Assemble a DelegationBrief — all context an edit agent needs to implement one slice |
-| `olog_dot` | Export the domain graph as Graphviz DOT for visualisation |
+| `olog_propose_functor` | Map DomainBrief elements to olog elements; asserts `proposedImplementation` arrows into the working set |
+| `olog_plan_revise` | Classify each plan operation as keep/rollback/redirect when a DomainBrief changes mid-execution |
+| `olog_dot_domain` | Export the domain graph as Graphviz DOT, with optional working-set overlay |
+| `olog_ws_open` | Open a named working set to accumulate structural knowledge across a session |
+| `olog_ws_add` | Add olog elements to a working set |
+| `olog_ws_query` | Query the working set graph with arrow traversal |
+| `olog_ws_assert` | Assert a synthetic arrow into a working set (dependency, ambiguity, proposed implementation) |
+| `olog_ws_annotate` | Attach a plain-English note to a working set element or arrow |
+| `olog_ws_pause` | Pause a working set to preserve it across a revision or handoff |
+| `olog_ws_resume` | Resume a paused working set |
+| `olog_ws_resolve_synthetic` | Resolve a synthetic arrow's unknown destination once the target element is identified |
+| `olog_ws_drop` | Drop a working set when the session is complete |
 
 ### Mining server (`olog-mining`) — `@olog-ingestion` only
 
@@ -40,6 +53,10 @@ A structural model server for software codebases, exposed as an MCP server for u
 | `olog_discover_motifs` | Find recurring structural patterns across the codebase |
 
 The mining server opens the existing DB without re-ingesting — the core server owns ingestion on startup.
+
+### WS-assert server (`olog-ws-assert`) — `@olog-implement` only
+
+Exposes only `olog_ws_assert`. The implement agent writes to working sets through this minimal server so it cannot access any other olog tools.
 
 ## Prerequisites
 
@@ -56,8 +73,8 @@ npx -p @olog/mcp-server olog-mcp-init
 
 This will:
 1. Detect which languages your project uses
-2. Write four agent files into `.opencode/agents/`
-3. Add both MCP server configurations to `opencode.json`
+2. Write five agent files into `.opencode/agents/`
+3. Add all three MCP server configurations to `opencode.json`
 
 Commit both — teammates get the agents automatically when they open the project in opencode.
 
@@ -89,24 +106,25 @@ When opencode starts, the core MCP server automatically ingests your codebase us
 
 The olog is stored in `.olog/olog.sqlite` in your project root. Add it to `.gitignore` — it is regenerated on each start.
 
-### Domain modeling
+### Domain specification (PM workflow)
 
-The olog starts with code-level elements. The `@olog-ingestion` agent helps you lift those into a *domain layer* — named concepts like "Order", "Customer", "Shipment" — with typed arrows between them and structural invariants (path equations) that must hold.
+The PM never sees JSON or code. The full flow:
 
-Use `@olog-ingestion` to:
-- Run a discovery session: surfaces candidate domain objects from your types and interfaces
-- Accept, reject, rename, and refine candidates interactively
-- Mine path equations from the graph to formalise architectural constraints
+**1. Elicitation** — open `@olog-elicit` and describe what the system should do. The agent asks focused questions about domain concepts, relationships, and invariants. All tool output is translated to plain English before anything is shown to you. When the conversation is complete and you confirm, the agent writes a `DomainBrief` to `.plans/briefs/` and gives you a file path.
 
-### Planning and editing
+**2. Planning** — pass that file path to `@olog-orchestrate`. The orchestrate agent maps each brief concept to an existing olog element or plans to create a new one, drafts a plan in `.plans/`, validates it against structural constraints, and presents the plan to you in plain English. No IDs, no JSON.
 
-The `@olog-orchestrate` agent helps you plan structural changes (renames, moves, extractions, new abstractions). It:
-1. Gathers structural context by delegating queries to `@olog-orient`
-2. Writes a plan file to `.plans/`
-3. Validates the plan against olog constraints before touching any code
-4. Delegates each implementation slice to `@olog-implement` with a fully-resolved brief
+**3. Execution** — on your approval, orchestrate runs the mechanical operations (`rename`, `move`, `addSymbol`, etc.) via `olog_apply`, then delegates each source-edit slice to `@olog-implement` with a fully-resolved DelegationBrief. Between slices it tells you in plain English what changed and asks whether to continue.
 
-The `@olog-implement` agent receives a `DelegationBrief` — a self-contained JSON with the target file, analogous implementations, required interfaces, and acceptance criteria. It writes the code and verifies with `tsc`.
+**4. Revision** — if implement discovers an ambiguity that only the PM can resolve, orchestrate pauses, presents the question in plain English, and waits for your answer before resuming.
+
+### Domain ingestion (bottom-up)
+
+Use `@olog-ingestion` to build the domain layer from the bottom up — surfacing domain objects from existing types and interfaces and mining structural invariants. This is the alternative to elicitation for teams that want to model what they already have rather than specify what they want to build.
+
+### Planning without a DomainBrief
+
+`@olog-orchestrate` can also be invoked directly with a plain-English goal. It queries the olog via `@olog-orient`, drafts a plan, validates, and executes — the same flow minus the elicitation and mapping steps.
 
 ### Visualisation
 
@@ -117,7 +135,7 @@ npm run dot:svg   # render and open as SVG (requires graphviz)
 npm run dot       # print DOT to stdout
 ```
 
-Or call `olog_dot` directly from any agent.
+Or call `olog_dot_domain` directly from any agent.
 
 ## Configuration
 
@@ -136,6 +154,11 @@ The generated `opencode.json` section:
       "type": "local",
       "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp-mining"],
       "environment": { "OLOG_LANGUAGES": "typescript" },
+      "enabled": true
+    },
+    "olog-ws-assert": {
+      "type": "local",
+      "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp-ws-assert"],
       "enabled": true
     }
   }
