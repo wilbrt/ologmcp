@@ -60,7 +60,7 @@ export function registerOlogProposeFunctor(server: McpServer, store: OlogStore):
             continue;
           }
 
-          const found = matches[0];
+          const found = matches[0]!;
           const implementedByArrows = store.outgoing(found.id).filter(a => a.kind === 'implementedAs');
           const implementedByIds = implementedByArrows.map(a => a.dstId);
 
