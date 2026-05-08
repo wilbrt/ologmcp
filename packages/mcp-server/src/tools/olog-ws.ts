@@ -149,6 +149,64 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
       }
     }
   );
+
+  server.registerTool(
+    'olog_ws_pause',
+    {
+      description: 'Pause a working set to preserve it across a plan revision. A paused set is still queryable but signals that the orchestrator is mid-revision. Use instead of olog_ws_drop when a briefDelta arrives during execution.',
+      inputSchema: z.object({
+        setId: z.string().describe('Working set ID to pause'),
+      }),
+      annotations: { idempotentHint: true },
+    },
+    async (args) => {
+      try {
+        store.pauseWorkingSet(args.setId);
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, status: 'paused' }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'olog_ws_resume',
+    {
+      description: 'Resume a paused working set after a plan revision is confirmed. The set returns to active status and execution can continue.',
+      inputSchema: z.object({
+        setId: z.string().describe('Working set ID to resume'),
+      }),
+      annotations: { idempotentHint: true },
+    },
+    async (args) => {
+      try {
+        store.resumeWorkingSet(args.setId);
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, status: 'active' }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+
+  server.registerTool(
+    'olog_ws_resolve_synthetic',
+    {
+      description: 'Resolve a synthetic arrow whose dstId was unknown at assert time. Promotes the arrow from pending (dstId: null) to fully resolved by setting the destination element ID.',
+      inputSchema: z.object({
+        arrowId: z.string().describe('Synthetic arrow ID (returned by olog_ws_assert)'),
+        dstId: z.string().describe('Destination element ID — must exist in olog_elem'),
+      }),
+      annotations: { idempotentHint: false },
+    },
+    async (args) => {
+      try {
+        store.resolveSyntheticArrow(args.arrowId, args.dstId);
+        return { content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, arrowId: args.arrowId, dstId: args.dstId }) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
 }
 
 export function registerOlogWsAssertOnly(server: McpServer, store: OlogStore): void {

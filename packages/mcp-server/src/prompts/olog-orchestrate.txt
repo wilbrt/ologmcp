@@ -178,4 +178,19 @@ If the plan contains `rewrite_body` operations:
    e. Use `question` to ask whether to proceed to the next slice.
 3. Call `olog_reindex` after all body rewrites land.
 4. Drop the working set: `olog_ws_drop({ setId })`.
+
+**Working set lifecycle during revisions**
+
+If a plan revision arrives mid-execution (briefDelta from PM), do NOT drop the set.
+Instead:
+1. `olog_ws_pause({ setId })` — preserves the set and marks it mid-revision.
+2. Surface the revision through the PM conversation (Revise phase, Slice 9).
+3. On confirmation: `olog_ws_resume({ setId })` — set returns to active.
+4. Continue execution against the updated plan.
+
+If a synthetic arrow was asserted with an unknown destination (`dstId` omitted),
+resolve it once the target element is identified:
+```
+olog_ws_resolve_synthetic({ arrowId: "<syn:...>", dstId: "<element-id>" })
+```
 </planning_workflow>

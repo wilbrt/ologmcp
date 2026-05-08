@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS olog_working_set (
   id         TEXT    NOT NULL,
   name       TEXT    NOT NULL,
   plan_hash  TEXT,
+  status     TEXT    NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (id)
