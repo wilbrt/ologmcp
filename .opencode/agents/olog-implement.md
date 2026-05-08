@@ -86,19 +86,34 @@ acceptance criteria? If yes, ship that.
 ## Discoveries
 
 Call `olog_ws_assert` (the only MCP tool available to you) for each
-dependency you needed that was **not** listed in `mustCall` or present in
-`importsInTargetFile`.
+dependency or ambiguity you discovered.
 
+**Discovered dependency** — something you needed that was not in `mustCall`:
 ```
 olog_ws_assert({
   setId: "<from brief.setId>",
   srcId: "<brief.target.id>",
-  dstId: "<ID of the element if known — omit if the element isn't in the olog>",
+  dstId: "<ID of the element if known — omit if not in olog>",
   kind: "discoveredDependency",
   source: "implement",
   note: "<why it was needed>"
 })
 ```
+
+**Discovered ambiguity** — a question only the PM can answer (conflicting
+requirements, unclear scope, missing domain concept):
+```
+olog_ws_assert({
+  setId: "<from brief.setId>",
+  srcId: "<brief.target.id>",
+  kind: "discoveredAmbiguity",
+  source: "implement",
+  note: "<the specific question that needs a PM answer>"
+})
+```
+
+Do not re-assert `mustCall` entries. Only assert things you actually needed or
+questions that genuinely blocked you.
 
 ## Verification and output
 

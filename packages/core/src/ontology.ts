@@ -15,7 +15,8 @@ export const ARROW_KINDS = [
   'extends', 'implements', 'calls', 'imports', 'exports', 'references',
   'contains', 'returns', 'param', 'typeof', 'instanceof', 'definedIn',
   'inModule', 'memberOf', 'callerOf', 'calleeOf', 'importsFrom', 'locatedIn',
-  'hasProperty', 'hasType', 'implementedAs', 'proposedImplementation', 'throws', 'other',
+  'hasProperty', 'hasType', 'implementedAs', 'proposedImplementation',
+  'discoveredDependency', 'discoveredAmbiguity', 'throws', 'other',
 ] as const;
 
 export type OlogKind = typeof ELEM_KINDS[number];
