@@ -11,12 +11,13 @@ import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
+import { randomUUID as randomUUID3 } from "crypto";
 import { randomUUID } from "crypto";
 import { randomUUID as randomUUID2 } from "crypto";
 import { globSync } from "glob";
-import { randomUUID as randomUUID4 } from "crypto";
-import { createHash } from "crypto";
 import { randomUUID as randomUUID5 } from "crypto";
+import { createHash } from "crypto";
+import { randomUUID as randomUUID6 } from "crypto";
 var SessionStore = class {
   constructor(db, insertSQL, selectColumns, tableName, updateSQL) {
     this.db = db;
@@ -211,6 +212,17 @@ var OlogStore = class {
   hasArrowKindStmt;
   insertMotifTemplateStmt;
   insertMotifInstanceStmt;
+  insertWorkingSetStmt;
+  insertWorkingSetElemStmt;
+  insertWorkingSetArrStmt;
+  getWorkingSetStmt;
+  deleteWorkingSetStmt;
+  insertWorkingSetNoteStmt;
+  getWorkingSetNoteStmt;
+  getWorkingSetNotesStmt;
+  deleteWorkingSetNoteStmt;
+  insertSyntheticArrStmt;
+  getSyntheticArrsStmt;
   constructor(path) {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
@@ -257,6 +269,10 @@ var OlogStore = class {
       this.db.exec("DROP TABLE olog_prov");
       this.db.exec("ALTER TABLE olog_prov_new RENAME TO olog_prov");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_prov_elem_id ON olog_prov(elem_id)");
+    }
+    const synArrCols = this.db.prepare("PRAGMA table_info(olog_ws_synthetic_arr)").all();
+    if (!synArrCols.some((c) => c.name === "source")) {
+      this.db.exec("ALTER TABLE olog_ws_synthetic_arr ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'");
     }
     const redundantKinds = ["inModule", "locatedIn", "contains", "imports"];
     for (const kind of redundantKinds) {
@@ -345,6 +361,39 @@ var OlogStore = class {
     );
     this.insertMotifInstanceStmt = this.db.prepare(
       `INSERT INTO olog_motif_instance (id, template_id, mappings_json, provenance_json, created_at) VALUES (?, ?, ?, ?, ?)`
+    );
+    this.insertWorkingSetStmt = this.db.prepare(
+      "INSERT INTO olog_working_set (id, name, plan_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+    );
+    this.insertWorkingSetElemStmt = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_working_set_elem (set_id, elem_id) VALUES (?, ?)"
+    );
+    this.insertWorkingSetArrStmt = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_working_set_arr (set_id, arr_id) VALUES (?, ?)"
+    );
+    this.getWorkingSetStmt = this.db.prepare(
+      "SELECT id, name, plan_hash, created_at, updated_at FROM olog_working_set WHERE id = ?"
+    );
+    this.deleteWorkingSetStmt = this.db.prepare(
+      "DELETE FROM olog_working_set WHERE id = ?"
+    );
+    this.insertWorkingSetNoteStmt = this.db.prepare(
+      "INSERT OR REPLACE INTO olog_working_set_note (set_id, target_id, note, updated_at) VALUES (?, ?, ?, ?)"
+    );
+    this.getWorkingSetNoteStmt = this.db.prepare(
+      "SELECT set_id, target_id, note, updated_at FROM olog_working_set_note WHERE set_id = ? AND target_id = ?"
+    );
+    this.getWorkingSetNotesStmt = this.db.prepare(
+      "SELECT set_id, target_id, note, updated_at FROM olog_working_set_note WHERE set_id = ?"
+    );
+    this.deleteWorkingSetNoteStmt = this.db.prepare(
+      "DELETE FROM olog_working_set_note WHERE set_id = ? AND target_id = ?"
+    );
+    this.insertSyntheticArrStmt = this.db.prepare(
+      "INSERT OR IGNORE INTO olog_ws_synthetic_arr (set_id, id, kind, src_id, dst_id, note, source) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    );
+    this.getSyntheticArrsStmt = this.db.prepare(
+      "SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ?"
     );
     this._sessions = new DomainSessionStore(this.db);
     this._motifSessions = new MotifSessionStore(this.db);
@@ -955,6 +1004,161 @@ var OlogStore = class {
     const rows = this.db.prepare(sql).all(...params);
     return rows.map((r) => r.kind);
   }
+  createWorkingSet(name, planHash) {
+    const id = randomUUID3();
+    const now = Date.now();
+    this.insertWorkingSetStmt.run(id, name, planHash ?? null, now, now);
+    return id;
+  }
+  addToWorkingSet(setId, elemIds, arrIds) {
+    const now = Date.now();
+    let elementsAdded = 0;
+    let arrowsAdded = 0;
+    const tx = this.db.transaction(() => {
+      for (const elemId2 of elemIds) {
+        const result = this.insertWorkingSetElemStmt.run(setId, elemId2);
+        elementsAdded += result.changes;
+      }
+      for (const arrId of arrIds) {
+        const result = this.insertWorkingSetArrStmt.run(setId, arrId);
+        arrowsAdded += result.changes;
+      }
+      this.db.prepare("UPDATE olog_working_set SET updated_at = ? WHERE id = ?").run(now, setId);
+    });
+    tx();
+    return { elementsAdded, arrowsAdded };
+  }
+  getWorkingSet(setId, includeAnnotations) {
+    const row = this.getWorkingSetStmt.get(setId);
+    if (!row) return null;
+    const elemRows = this.db.prepare(
+      "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?"
+    ).all(setId);
+    const arrRows = this.db.prepare(
+      "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?"
+    ).all(setId);
+    const notes = includeAnnotations !== false ? this.getAnnotations(setId) : [];
+    return {
+      id: row.id,
+      name: row.name,
+      planHash: row.plan_hash,
+      elements: elemRows.map((r) => this.rowToElem(r)),
+      arrows: arrRows.map((r) => this.rowToArr(r)),
+      notes
+    };
+  }
+  listWorkingSets() {
+    const rows = this.db.prepare(
+      `SELECT ws.id, ws.name, ws.plan_hash, ws.updated_at,
+        (SELECT COUNT(*) FROM olog_working_set_elem WHERE set_id = ws.id) AS element_count,
+        (SELECT COUNT(*) FROM olog_working_set_arr WHERE set_id = ws.id) AS arrow_count
+       FROM olog_working_set ws ORDER BY ws.updated_at DESC`
+    ).all();
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      planHash: r.plan_hash,
+      elementCount: r.element_count,
+      arrowCount: r.arrow_count,
+      updatedAt: r.updated_at
+    }));
+  }
+  deleteWorkingSet(setId) {
+    this.deleteWorkingSetStmt.run(setId);
+  }
+  annotateWorkingSet(setId, targetId, note) {
+    const now = Date.now();
+    this.insertWorkingSetNoteStmt.run(setId, targetId, note, now);
+    this.db.prepare("UPDATE olog_working_set SET updated_at = ? WHERE id = ?").run(now, setId);
+    return { setId, targetId, note, updatedAt: now };
+  }
+  getAnnotations(setId, targetIds) {
+    if (targetIds && targetIds.length > 0) {
+      return targetIds.flatMap((tid) => {
+        const row = this.getWorkingSetNoteStmt.get(setId, tid);
+        return row ? [{ setId: row.set_id, targetId: row.target_id, note: row.note, updatedAt: row.updated_at }] : [];
+      });
+    }
+    const rows = this.getWorkingSetNotesStmt.all(setId);
+    return rows.map((r) => ({ setId: r.set_id, targetId: r.target_id, note: r.note, updatedAt: r.updated_at }));
+  }
+  deleteAnnotation(setId, targetId) {
+    this.deleteWorkingSetNoteStmt.run(setId, targetId);
+    this.db.prepare("UPDATE olog_working_set SET updated_at = ? WHERE id = ?").run(Date.now(), setId);
+  }
+  getWorkingSetElementIds(setId) {
+    const rows = this.db.prepare(
+      "SELECT elem_id FROM olog_working_set_elem WHERE set_id = ?"
+    ).all(setId);
+    return new Set(rows.map((r) => r.elem_id));
+  }
+  assertSyntheticArrow(setId, srcId, dstId, kind, source, note) {
+    const srcExists = this.db.prepare("SELECT 1 FROM olog_elem WHERE id = ? LIMIT 1").get(srcId);
+    if (!srcExists) throw new Error(`assertSyntheticArrow: srcId '${srcId}' not found in olog_elem`);
+    const id = `syn:${randomUUID3()}`;
+    this.insertSyntheticArrStmt.run(setId, id, kind, srcId, dstId ?? "", note ?? null, source);
+    this.db.prepare("UPDATE olog_working_set SET updated_at = ? WHERE id = ?").run(Date.now(), setId);
+    return id;
+  }
+  queryWorkingSetGraph(setId, opts) {
+    const { kind, nameRegex, moduleRegex, arrows, direction = "out", includeAnnotations, source } = opts;
+    let seedElems = this.db.prepare(
+      "SELECT e.id, e.kind, e.name, e.module, e.span, e.attrs FROM olog_working_set_elem ws JOIN olog_elem e ON e.id = ws.elem_id WHERE ws.set_id = ?"
+    ).all(setId).map((r) => this.rowToElem(r));
+    if (kind) seedElems = seedElems.filter((e) => e.kind === kind);
+    if (nameRegex) {
+      const re = new RegExp(nameRegex);
+      seedElems = seedElems.filter((e) => re.test(e.name));
+    }
+    if (moduleRegex) {
+      const re = new RegExp(moduleRegex);
+      seedElems = seedElems.filter((e) => e.module != null && re.test(e.module));
+    }
+    const syntheticRows = this.getSyntheticArrsStmt.all(setId);
+    const allSyntheticArrows = syntheticRows.map((r) => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, source: r.source, synthetic: true }));
+    const filteredSyntheticArrows = source ? allSyntheticArrows.filter((a) => a.source === source) : allSyntheticArrows;
+    if (!arrows || arrows.length === 0) {
+      const realArrows2 = this.db.prepare(
+        "SELECT a.id, a.kind, a.src_id, a.dst_id, a.attrs FROM olog_working_set_arr ws JOIN olog_arr a ON a.id = ws.arr_id WHERE ws.set_id = ?"
+      ).all(setId).map((r) => this.rowToArr(r));
+      const result2 = { elements: seedElems, arrows: realArrows2, syntheticArrows: filteredSyntheticArrows };
+      if (includeAnnotations) this._attachAnnotations(setId, result2);
+      return result2;
+    }
+    const seedIds = seedElems.map((e) => e.id);
+    if (seedIds.length === 0) return { elements: [], arrows: [], syntheticArrows: [] };
+    const col = direction === "out" ? "src_id" : "dst_id";
+    const neighborCol = direction === "out" ? "dst_id" : "src_id";
+    const idPh = seedIds.map(() => "?").join(", ");
+    const kindPh = arrows.map(() => "?").join(", ");
+    const realRows = this.db.prepare(
+      `SELECT id, kind, src_id, dst_id, attrs FROM olog_arr WHERE ${col} IN (${idPh}) AND kind IN (${kindPh})`
+    ).all(...seedIds, ...arrows);
+    const realArrows = realRows.map((r) => this.rowToArr(r));
+    const synRows = this.db.prepare(
+      `SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ? AND ${col} IN (${idPh}) AND kind IN (${kindPh})`
+    ).all(setId, ...seedIds, ...arrows);
+    const syntheticArrows = synRows.filter((r) => !source || r.source === source).map((r) => ({ id: r.id, setId, kind: r.kind, srcId: r.src_id, dstId: r.dst_id || null, note: r.note, source: r.source, synthetic: true }));
+    const neighborIds = [
+      ...realRows.map((r) => r[neighborCol]),
+      ...synRows.map((r) => r[neighborCol])
+    ];
+    const allElemIds = [.../* @__PURE__ */ new Set([...seedIds, ...neighborIds])];
+    const elemPh = allElemIds.map(() => "?").join(", ");
+    const allElems = this.db.prepare(
+      `SELECT id, kind, name, module, span, attrs FROM olog_elem WHERE id IN (${elemPh})`
+    ).all(...allElemIds).map((r) => this.rowToElem(r));
+    const result = { elements: allElems, arrows: realArrows, syntheticArrows };
+    if (includeAnnotations) this._attachAnnotations(setId, result);
+    return result;
+  }
+  _attachAnnotations(setId, graph) {
+    const notes = this.getAnnotations(setId);
+    const notesMap = new Map(notes.map((n) => [n.targetId, n.note]));
+    graph.elements = graph.elements.map((e) => ({ ...e, annotation: notesMap.get(e.id) ?? null }));
+    graph.arrows = graph.arrows.map((a) => ({ ...a, annotation: notesMap.get(a.id) ?? null }));
+    graph.syntheticArrows = graph.syntheticArrows.map((s) => ({ ...s, annotation: notesMap.get(s.id) ?? null }));
+  }
   close() {
     this.db.pragma("wal_checkpoint(TRUNCATE)");
     this.db.close();
@@ -1334,7 +1538,7 @@ function discoverMotifs(store2, options = {}) {
       `This motif has ${group.support} instances with ${group.shape.arrows.length} arrow kinds. Consider naming them.`
     ];
     candidates.push({
-      id: randomUUID4(),
+      id: randomUUID5(),
       shape: group.shape,
       proposedName,
       description,
@@ -1559,10 +1763,10 @@ function minePullbacks(store2, options = {}) {
       } catch {
       }
     }
-    const candidateId = randomUUID5();
+    const candidateId = randomUUID6();
     const proposedName = toNounPhraseFromName(codeElem.name);
     const proposedArrows = domains.map((domain) => ({
-      id: randomUUID5(),
+      id: randomUUID6(),
       name: `projects to ${domain.name}`,
       domainCandidateId: candidateId,
       codomainName: domain.name,
@@ -1574,7 +1778,7 @@ function minePullbacks(store2, options = {}) {
       status: "proposed"
     }));
     const bridgeArrow = {
-      id: randomUUID5(),
+      id: randomUUID6(),
       name: "implemented as",
       domainCandidateId: candidateId,
       codomainName: codeElem.name,
@@ -1684,9 +1888,9 @@ function discoverDomainCandidates(store2, options = {}) {
     return true;
   });
   const candidates = filtered.map((elem) => {
-    const candidateId = randomUUID5();
+    const candidateId = randomUUID6();
     const bridgeArrow = {
-      id: randomUUID5(),
+      id: randomUUID6(),
       name: "implemented as",
       domainCandidateId: candidateId,
       codomainName: elem.name,
@@ -1740,7 +1944,7 @@ function discoverDomainCandidates(store2, options = {}) {
         const existingDomain = targetCandidate ? null : existingDomainByCodeId.get(typeArrow.dstId) ?? null;
         const total = !optional && !isArray;
         const proposal = {
-          id: randomUUID5(),
+          id: randomUUID6(),
           name: `has ${propName}`,
           domainCandidateId: candidate.id,
           codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? typeElem.name,
@@ -1773,7 +1977,7 @@ function discoverDomainCandidates(store2, options = {}) {
       if (!targetElem) continue;
       const arrowName = structArrow.kind === "extends" ? "extends" : "implements";
       const proposal = {
-        id: randomUUID5(),
+        id: randomUUID6(),
         name: arrowName,
         domainCandidateId: candidate.id,
         codomainName: targetCandidate?.proposedName ?? existingDomain?.name ?? targetElem.name,
@@ -1813,14 +2017,14 @@ function extendDomainByKan(store2, options = {}) {
   function getShell(domainId, domainName, codeId) {
     let shell = shellsByDomainId.get(domainId);
     if (!shell) {
-      const cid = randomUUID5();
+      const cid = randomUUID6();
       shell = {
         id: cid,
         codeElementId: codeId,
         proposedName: domainName,
         proposedArrows: [],
         bridgeArrow: {
-          id: randomUUID5(),
+          id: randomUUID6(),
           name: "implemented as",
           domainCandidateId: cid,
           codomainName: domainName,
@@ -1842,14 +2046,14 @@ function extendDomainByKan(store2, options = {}) {
   function getOrCreateNewCand(id, name, kind) {
     let cand = newCandsByCodeId.get(id);
     if (!cand) {
-      const cid = randomUUID5();
+      const cid = randomUUID6();
       cand = {
         id: cid,
         codeElementId: id,
         proposedName: toNounPhraseFromName(name),
         proposedArrows: [],
         bridgeArrow: {
-          id: randomUUID5(),
+          id: randomUUID6(),
           name: "implemented as",
           domainCandidateId: cid,
           codomainName: name,
@@ -1872,7 +2076,7 @@ function extendDomainByKan(store2, options = {}) {
     if (seenArrows.has(key)) return;
     seenArrows.add(key);
     src.proposedArrows.push({
-      id: randomUUID5(),
+      id: randomUUID6(),
       name: "calls",
       domainCandidateId: src.id,
       codomainName: dstName,
@@ -2788,7 +2992,7 @@ var store = new OlogStore(dbPath);
 var server = new McpServer4(
   { name: "olog-mining", version: "0.0.1" },
   {
-    instructions: `Heavy analysis tools for the olog at ${projectRoot}. Reads the DB ingested by the core olog server. Tools: olog_mine_equations (discover path equations; use touchingElementKinds=["domain"] to focus on domain-level structure), olog_domain_discover (iterative domain modeling: start/refine/commit), olog_discover_motifs (structural motif discovery: start/refine/commit).`,
+    instructions: `Mining tools for the olog at ${projectRoot}. Reads the DB owned by the core olog server. Use domain=["domain"] in mine_equations to focus on domain elements.`,
     capabilities: { logging: {} }
   }
 );

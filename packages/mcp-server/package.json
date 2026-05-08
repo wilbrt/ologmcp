@@ -11,7 +11,8 @@
   "bin": {
     "olog-mcp": "./dist/index.js",
     "olog-mcp-mining": "./dist/index-mining.js",
-    "olog-mcp-init": "./dist/index-init.js"
+    "olog-mcp-init": "./dist/index-init.js",
+    "olog-mcp-ws-assert": "./dist/index-ws-assert.js"
   },
   "dependencies": {
     "@olog/core": "*",

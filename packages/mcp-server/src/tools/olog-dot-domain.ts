@@ -6,17 +6,17 @@ function dotId(name: string): string {
   return `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
-export function registerOlogDot(server: McpServer, store: OlogStore): void {
+export function registerOlogDotDomain(server: McpServer, store: OlogStore): void {
   server.registerTool(
-    'olog_dot',
+    'olog_dot_domain',
     {
       description:
-        'Export domain objects and arrows as a Graphviz DOT graph. Returns a DOT string you can render with `dot -Tsvg` or paste into an online Graphviz renderer. By default includes only elements of kind "domain"; pass additionalKinds to widen the scope.',
+        'Export the domain subgraph as Graphviz DOT for debugging the spec. Returns a DOT string renderable with `dot -Tsvg`. Scoped to "domain" elements only; pass setId to overlay the working-set synthetic arrows on top.',
       inputSchema: z.object({
-        additionalKinds: z
-          .array(z.string())
-          .default([])
-          .describe('Extra element kinds to include alongside "domain" elements (e.g. ["type", "interface"])'),
+        setId: z
+          .string()
+          .optional()
+          .describe('Working set ID — when provided, synthetic arrows from that set are included in the graph'),
         nameRegex: z
           .string()
           .optional()
@@ -28,20 +28,16 @@ export function registerOlogDot(server: McpServer, store: OlogStore): void {
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    async ({ additionalKinds, nameRegex, moduleRegex }) => {
+    async ({ setId, nameRegex, moduleRegex }) => {
       try {
-        const kinds = ['domain', ...additionalKinds];
-        const allElems = kinds.flatMap((kind) =>
-          store.queryElements({
-            kind,
-            ...(nameRegex !== undefined ? { nameRegex } : {}),
-            ...(moduleRegex !== undefined ? { moduleRegex } : {}),
-            limit: 10000,
-          })
-        );
+        const allElems = store.queryElements({
+          kind: 'domain',
+          ...(nameRegex !== undefined ? { nameRegex } : {}),
+          ...(moduleRegex !== undefined ? { moduleRegex } : {}),
+          limit: 10000,
+        });
 
         const elemIds = new Set(allElems.map((e) => e.id));
-        const elemById = new Map(allElems.map((e) => [e.id, e]));
 
         const lines: string[] = ['digraph olog {', '  rankdir=LR;', '  node [shape=box];', ''];
 
@@ -59,6 +55,17 @@ export function registerOlogDot(server: McpServer, store: OlogStore): void {
             if (seenArrows.has(arr.id)) continue;
             seenArrows.add(arr.id);
             lines.push(`  ${dotId(elem.id)} -> ${dotId(arr.dstId)} [label=${dotId(arr.kind)}];`);
+          }
+        }
+
+        if (setId) {
+          const graph = store.queryWorkingSetGraph(setId, {});
+          for (const arr of graph.syntheticArrows) {
+            if (!arr.dstId) continue;
+            const id = `syn_${arr.id}`;
+            if (seenArrows.has(id)) continue;
+            seenArrows.add(id);
+            lines.push(`  ${dotId(arr.srcId)} -> ${dotId(arr.dstId)} [label=${dotId(arr.kind)} style=dashed color=blue];`);
           }
         }
 

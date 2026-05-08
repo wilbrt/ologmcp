@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/index-mining.ts', 'src/index-init.ts'],
+  entry: ['src/index.ts', 'src/index-mining.ts', 'src/index-init.ts', 'src/index-ws-assert.ts'],
   outDir: 'dist',
   format: ['esm'],
   target: 'node20',

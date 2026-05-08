@@ -23,97 +23,13 @@
       "environment": {
         "OLOG_LANGUAGES": "typescript"
       }
-    }
-  },
-  "agent": {
-    "olog-ingestion": {
-      "mode": "primary",
-      "model": "opencode-go/glm-5.1",
-      "prompt": "{file:./prompts/ingestion-agent.txt}",
-      "description": "Domain ingestion agent. Runs interactive olog_domain_discover sessions (start → refine → commit) and mines path equations. Use this agent to build and maintain the domain layer of the olog — discovering domain objects, proposing arrows, and formalising structural invariants.",
-      "permission": {
-        "edit": "deny",
-        "bash": {
-          "*": "deny"
-        },
-        "webfetch": "deny",
-        "task": {
-          "*": "deny"
-        },
-        "question": "allow",
-        "mcp": {
-          "olog": "allow",
-          "olog-mining": "allow"
-        }
-      }
     },
-    "olog-planning": {
-      "mode": "primary",
-      "model": "opencode-go/glm-5.1",
-      "prompt": "{file:./prompts/planning-agent.txt}",
-      "description": "Planning agent. Interactively plans structural changes with the user, records plans as olog-format files in .plans/, validates them against the olog, and delegates implementation slices to the 'edit' subagent via the Task tool. Gathers all structural context by invoking the 'explore' subagent via the Task tool — never reads source files directly.",
-      "permission": {
-        "edit": {
-          "*": "deny",
-          ".plans/*": "allow"
-        },
-        "bash": {
-          "*": "deny"
-        },
-        "webfetch": "deny",
-        "task": {
-          "*": "deny",
-          "olog-explore": "allow",
-          "olog-edit": "allow"
-        },
-        "question": "allow",
-        "mcp": {
-          "olog": "allow"
-        }
-      }
-    },
-    "olog-explore": {
-      "mode": "subagent",
-      "model": "opencode-go/minimax-m2.7",
-      "prompt": "{file:./prompts/explore-agent.txt}",
-      "description": "Read-only structural explorer. Answers a specific structural question by querying the olog (olog_query, olog_inspect, olog_dump). Returns grounded facts with olog entity references. Invoke with a single focused question; do not use for planning or editing.",
-      "permission": {
-        "edit": "deny",
-        "bash": {
-          "*": "deny"
-        },
-        "webfetch": "deny",
-        "task": {
-          "*": "deny"
-        },
-        "mcp": {
-          "olog": "allow"
-        }
-      }
-    },
-    "olog-edit": {
-      "mode": "subagent",
-      "model": "opencode-go/minimax-m2.7",
-      "prompt": "{file:./prompts/edit-agent.txt}",
-      "description": "Source editor. Receives a fully-resolved DelegationBrief JSON from olog_delegate and writes the corresponding source changes. All context is in the brief. After editing, asserts discoveredDependency synthetic arrows back to the working set via olog_ws_assert. Verifies changes with tsc after editing.",
-      "steps": 20,
-      "permission": {
-        "edit": "allow",
-        "bash": {
-          "*": "deny",
-          "rm *": "allow",
-          "npx tsc --noEmit *": "allow",
-          "npx vitest run *": "allow",
-          "npm run build *": "allow"
-        },
-        "webfetch": "deny",
-        "task": {
-          "*": "deny"
-        },
-        "mcp": {
-          "olog": "allow"
-        }
-      }
+    "olog-ws-assert": {
+      "type": "local",
+      "command": [
+        "./run-olog-ws-assert-mcp.sh"
+      ],
+      "enabled": true
     }
   }
 }

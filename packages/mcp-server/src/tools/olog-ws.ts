@@ -150,3 +150,30 @@ export function registerOlogWs(server: McpServer, store: OlogStore): void {
     }
   );
 }
+
+export function registerOlogWsAssertOnly(server: McpServer, store: OlogStore): void {
+  server.registerTool(
+    'olog_ws_assert',
+    {
+      description: 'Assert a synthetic arrow into the working set. Records a dependency discovered during implementation that was not listed in the DelegationBrief.',
+      inputSchema: z.object({
+        setId: z.string().describe('Working set ID from the DelegationBrief'),
+        srcId: z.string().describe('Source element ID'),
+        dstId: z.string().optional().describe('Destination element ID — omit if not in olog'),
+        kind: z.string().describe('Arrow kind, e.g. "discoveredDependency"'),
+        source: z.enum(['elicit', 'orient', 'orchestrate', 'implement', 'propose_functor', 'legacy']).describe('Which agent role asserted this arrow'),
+        note: z.string().optional().describe('Why this dependency was needed'),
+      }),
+      annotations: { idempotentHint: false },
+    },
+    async (args) => {
+      try {
+        const id = store.assertSyntheticArrow(args.setId, args.srcId, args.dstId, args.kind, args.source, args.note);
+        const result: SyntheticArr = { id, setId: args.setId, kind: args.kind, srcId: args.srcId, dstId: args.dstId ?? null, note: args.note ?? null, source: args.source, synthetic: true };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+}

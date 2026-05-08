@@ -25,7 +25,7 @@ import { registerOlogValidate } from './tools/olog-validate.js';
 import { registerOlogProposeSchema } from './tools/olog-propose-schema.js';
 import { registerOlogRender } from './tools/olog-render.js';
 import { registerOlogDelegate } from './tools/olog-delegate.js';
-import { registerOlogDot } from './tools/olog-dot.js';
+import { registerOlogDotDomain } from './tools/olog-dot-domain.js';
 import { registerOlogWs } from './tools/olog-ws.js';
 
 const projectRoot = process.env.OLOG_ROOT || process.cwd();
@@ -63,7 +63,7 @@ registerOlogValidate(server, store, projectRoot);
 registerOlogApply(server, store, projectRoot);
 registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
-registerOlogDot(server, store);
+registerOlogDotDomain(server, store);
 registerOlogWs(server, store);
 
 const transport = new StdioServerTransport();

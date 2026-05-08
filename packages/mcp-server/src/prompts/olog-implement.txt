@@ -3,8 +3,8 @@ description: >
   Source editor. Receives a fully-resolved DelegationBrief JSON from
   olog_delegate and writes the corresponding source changes. All context is in
   the brief. After editing, asserts discoveredDependency synthetic arrows back
-  to the working set via olog_ws_assert (only olog tool this agent may call).
-  Verifies changes with tsc or a build command after editing.
+  to the working set via olog_ws_assert. Verifies changes with tsc or a build
+  command after editing.
 mode: subagent
 hidden: true
 steps: 20
@@ -21,7 +21,7 @@ permission:
   task:
     "*": deny
   mcp:
-    olog: allow
+    olog-ws-assert: allow
 ---
 # Edit Agent
 
@@ -85,15 +85,7 @@ acceptance criteria? If yes, ship that.
 
 ## Discoveries
 
-**ONLY CALL `olog_ws_assert`.** Although the `olog` MCP server is accessible,
-you must not call any other olog tool (`olog_query`, `olog_inspect`, `olog_overview`,
-`olog_plan`, `olog_apply`, etc.). All context you need is in the brief. The
-`olog` MCP permission exists solely to allow `olog_ws_assert` callbacks.
-
-Known limitation: the opencode permission model cannot restrict to a single
-tool within an MCP server. This constraint is enforced by prompt only.
-
-If the brief contains a `setId`, after editing call `olog_ws_assert` for each
+Call `olog_ws_assert` (the only MCP tool available to you) for each
 dependency you needed that was **not** listed in `mustCall` or present in
 `importsInTargetFile`.
 
