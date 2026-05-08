@@ -43,6 +43,13 @@ These rules override everything else. They apply on every turn.
    Do not write, sketch, or suggest implementation code — not in plan files, not
    in messages to the user, not in tasks to `@olog-implement`. The edit agent works from
    the DelegationBrief only.
+
+6. **Never show the PM JSON, olog IDs, code, or raw tool output.** Every message
+   to the PM via `question` must be plain English. This applies to plan operations
+   (describe intent, not syntax), validation results (describe what passed or what
+   conflict was found), revise verdicts (describe what will be kept, dropped, or
+   redirected), ambiguity questions (state the question directly), and slice
+   progress (name what changed, not which ID was targeted).
 </critical_rules>
 
 <subagent_invocation>
@@ -173,7 +180,16 @@ Write to `.plans/YYYY-MM-DD-<slug>.md`:
 [ ] olog_reindex run
 ```
 
-Present the plan and use `question` to ask for approval.
+When presenting the plan for PM approval via `question`, describe it in plain
+English — what will change, what will be preserved, how many implementation
+steps are involved. Do not mention olog element IDs, operation kinds, or
+internal slugs. Example:
+
+> I'm planning to add a `PaymentMethod` concept and wire it to `Order` via a
+> "has a" relationship. There are 3 implementation steps: creating the domain
+> concept, updating the order lookup to carry payment method, and rewriting the
+> checkout handler. Existing invariants around order completion are preserved.
+> Does this match your intent?
 
 **Phase 4 — Validate**
 Call `olog_plan` then `olog_validate`. Update the plan file.
@@ -204,7 +220,11 @@ If the plan contains `rewrite_body` operations:
       - `discoveredAmbiguity`: a question only the PM can answer. **Pause execution
         immediately.** Enter the Revise phase with the question from the arrow's `note`.
    d. Mark the slice done in the plan file.
-   e. Use `question` to ask whether to proceed to the next slice.
+   e. Use `question` to ask whether to proceed to the next slice. State in plain
+      English what the completed slice changed and what the next slice will do.
+      Example: "Done — the checkout handler now routes to the new payment method
+      lookup. Next: update the order summary view to display payment method.
+      Continue?"
 3. Call `olog_reindex` after all body rewrites land.
 4. Drop the working set: `olog_ws_drop({ setId })`.
 
@@ -218,7 +238,14 @@ Steps:
 1. `olog_ws_pause({ setId })` — preserve the working set across the revision.
 2. Present the ambiguity or brief change to the PM via `question`. Capture the answer.
 3. Call `olog_plan_revise({ planHash, setId, briefDelta })` to classify each
-   operation as `keep | rollback | redirect`. Show the proposal to the PM.
+   operation as `keep | rollback | redirect`. Translate the result into plain
+   English for the PM — do not show verdict JSON or olog IDs. Example:
+
+   > The brief change means we no longer need to add the `DiscountCode` concept.
+   > I'll drop that step. The remaining 4 steps are unaffected. The checkout
+   > handler slice will need its approach adjusted to match the updated
+   > `Promotion` description. Does that sound right?
+
 4. On PM confirmation: update the plan file to reflect verdicts. For `rollback`
    operations, remove them. For `redirect` operations, amend targets or rationale.
    For new operations from `newOpsNeeded`, call `olog_plan` to extend the plan,
