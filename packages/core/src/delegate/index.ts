@@ -92,6 +92,18 @@ export interface DelegationBrief {
    * arrows back to the working set after editing.
    */
   setId?: string;
+
+  /**
+   * Path equations from the plan-olog that this slice must preserve.
+   * Set by the orchestrate agent when the slice was derived from a DomainBrief.
+   */
+  mustSatisfyEquations?: Array<{ equationId: string; description: string }>;
+
+  /**
+   * Back-pointer to the DomainBrief elements that motivated this slice.
+   * Enables the Revise phase to identify which slices are affected by brief changes.
+   */
+  originBriefRef?: { briefId: string; elementIds: string[] };
 }
 
 export interface ContextOverrides {

@@ -113,6 +113,32 @@ olog_ws_query({ setId, arrows: ["callerOf", "calls", "structurallyDependsOn"], d
 The working set graph accumulates structural knowledge across turns — no need
 to re-invoke explore for elements already in the set.
 
+**Phase 2.5 — Map (skip if no DomainBrief)**
+
+If the task arrived with a `DomainBrief` from the elicit agent, run the Map phase
+before drafting the plan:
+
+```
+olog_propose_functor({ setId, brief })
+```
+
+This writes `proposedImplementation` synthetic arrows into the working set for
+every brief element that has a matching olog element. Read the result:
+
+- `mapping: "existing"` — the concept maps to an existing olog element; use it
+  as the plan operation target.
+- `mapping: "to-create"` — no matching element found; add an `addSymbol` operation
+  to the plan before the `rewrite_body` slice.
+- `mapping: "ambiguous"` — multiple candidates; ask the user to clarify which one
+  via the `question` tool before proceeding.
+
+After reviewing the mapping, query the working set with
+`source: "propose_functor"` to see what was asserted, then continue to Phase 3.
+Populate `originBriefRef` and `mustSatisfyEquations` on the `DelegationBrief` for
+each slice that was derived from a brief element.
+
+If the task has no DomainBrief, skip this phase entirely.
+
 **Phase 3 — Draft the plan**
 Write to `.plans/YYYY-MM-DD-<slug>.md`:
 
