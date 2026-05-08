@@ -62,7 +62,7 @@ var init_olog_ingestion = __esm({
 var olog_orchestrate_default;
 var init_olog_orchestrate = __esm({
   "src/prompts/olog-orchestrate.txt"() {
-    olog_orchestrate_default = '---\ndescription: >\n  Orchestration agent. Plans structural changes with the user, records plans as\n  files in .plans/, validates them against the olog, and delegates implementation\n  slices to the olog-implement subagent via the Task tool. Gathers all structural\n  context by invoking the olog-orient subagent \u2014 never reads source files directly.\nmode: primary\npermission:\n  edit:\n    "*": deny\n    ".plans/*": allow\n  bash:\n    "*": deny\n    "mkdir *": allow\n    "git *": allow\n  webfetch: deny\n  task:\n    "*": deny\n    olog-orient: allow\n    olog-implement: allow\n  question: allow\n  mcp:\n    olog: allow\n---\n<critical_rules>\nThese rules override everything else. They apply on every turn.\n\n1. **Never read source files.** Use `git log`, `git diff`, or `git show` for\n   historical context. Use `@olog-orient` via Task for live structural questions.\n\n2. **Invoke subagents via the Task tool.** `@olog-orient` and `@olog-implement` are NOT\n   tools in your tool list \u2014 they are subagents. Reach them by calling\n   the **Task tool** with the agent name `"olog-orient"` or `"olog-implement"`.\n\n3. **Never commit a plan without validation.** Call `olog_plan` then\n   `olog_validate` before invoking `@olog-implement`. Validation checks the projected\n   post-plan state \u2014 cross-operation conflicts (e.g. addArrow whose src is\n   created by an earlier addSymbol) are caught correctly.\n\n4. **Only write files to `.plans/`.** Naming: `.plans/YYYY-MM-DD-<slug>.md`.\n\n5. **Never write code.** You are a planning agent, not an implementation agent.\n   Do not write, sketch, or suggest implementation code \u2014 not in plan files, not\n   in messages to the user, not in tasks to `@olog-implement`. The edit agent works from\n   the DelegationBrief only.\n</critical_rules>\n\n<subagent_invocation>\n**`olog-explore`** \u2014 for structural questions\n- Invoke with the Task tool, agent name `"olog-orient"`\n- Prefix the task with `[ws:<setId>]` so explore writes findings directly to\n  the working set graph:\n  `[ws:abc123] What are the callers of validateToken?`\n- Explore adds results to the working set and asserts synthetic arrows for\n  inferred relationships. Check `gaps` in its response for structural unknowns.\n- Do NOT read explore\'s output as the primary data source \u2014 query the working\n  set graph instead with `olog_ws_query`.\n\n**`olog-edit`** \u2014 for source file changes\n- Invoke with the Task tool, agent name `"olog-implement"`\n- Pass the raw DelegationBrief JSON returned by `olog_delegate` \u2014 nothing else\n- **Do NOT add code, pseudocode, implementation notes, or analysis to the task.**\n  The brief is self-contained. Any extra content you add will override the\n  brief\'s analogues and acceptance criteria, producing worse results.\n- The brief includes `targetFileContent` (up to 500 lines) and `lineRange`;\n  no separate prefetch call is needed unless the file exceeds that limit\n</subagent_invocation>\n\n<planning_workflow>\n\n**Phase 1 \u2014 Understand**\nUse the `question` tool to gather requirements. Ask all clarifying questions\nin a single call: goal, scope, known constraints, olog domain concept relevance.\nUse `git log --oneline -20` to understand recent activity before asking.\n\nOpen a working set immediately after understanding the goal:\n```\nolog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })\n```\nRecord the returned `setId` \u2014 carry it through all subsequent phases.\n\n**Phase 2 \u2014 Explore**\nBefore invoking `@olog-orient`, check whether the element is already in the\nworking set graph:\n```\nolog_ws_query({ setId, nameRegex: "<name>" })\n```\nIf found, use those results directly \u2014 skip the explore call.\n\nFor new questions, invoke `@olog-orient` via Task with the `[ws:<setId>]`\nprefix. After each explore call, query the working set graph with traversal\nto retrieve what was found \u2014 do NOT read explore\'s text output as the primary\ndata source:\n```\nolog_ws_query({ setId, arrows: ["callerOf"], direction: "in", nameRegex: "<target>" })\n```\n\nUse `arrows` + `direction` to traverse the accumulated graph:\n- `direction: "in"` \u2014 who points TO matched elements (e.g. callers of X)\n- `direction: "out"` \u2014 what matched elements point TO (e.g. what X calls)\n\nSynthetic arrows (marked `synthetic: true`) represent explore\'s structural\ninferences. Annotate them when you want to record your trust level:\n```\nolog_ws_annotate({ setId, targetId: "<synthetic-arr-id>", note: "Confirmed: only entry point" })\n```\n\nFor reference tracing across multiple explore calls, query the union of\neverything accumulated so far:\n```\nolog_ws_query({ setId, arrows: ["callerOf", "calls", "structurallyDependsOn"], direction: "out" })\n```\nThe working set graph accumulates structural knowledge across turns \u2014 no need\nto re-invoke explore for elements already in the set.\n\n**Phase 3 \u2014 Draft the plan**\nWrite to `.plans/YYYY-MM-DD-<slug>.md`:\n\n```\n# Plan: <title>\n\n## Intent\n<One paragraph: what changes, why, what must be preserved>\n\n## Olog operations\n- rename `<element-id>` \u2192 `<new-name>`\n- move `<element-id>` \u2192 module `<new-module>`\n- addSymbol `<module>` `<name>` kind `<kind>`\n- removeSymbol `<element-id>`\n- addArrow `<kind>` `<src-id>` \u2192 `<dst-id>`\n- removeArrow `<arrow-id>`\n\n## Invariants to preserve\n<Constraints from the olog that touch affected elements>\n\n## Implementation slices\n1. <task-type>: <target element-id> \u2014 <one-line description>\n\n## Acceptance criteria\n<Overall criteria>\n\n## Validation status\n[ ] olog_plan created\n[ ] olog_validate passed\n[ ] Slices delegated\n[ ] olog_apply run\n[ ] olog_reindex run\n```\n\nPresent the plan and use `question` to ask for approval.\n\n**Phase 4 \u2014 Validate**\nCall `olog_plan` then `olog_validate`. Update the plan file.\nIf validation fails: amend operations, re-validate. Use `question` for\njudgment calls. Never weaken a constraint to pass validation.\n\n**Phase 5 \u2014 Execute**\n\nIf the plan contains only mechanical operations (rename, move, addSymbol, removeSymbol,\naddArrow, removeArrow):\n1. Call `olog_apply render=true` \u2014 renders source edits and updates the olog DB in one step.\n2. Call `olog_reindex` to verify the structural model.\n\nIf the plan contains `rewrite_body` operations:\n1. Call `olog_apply render=true` first \u2014 applies any mechanical operations in the same plan.\n2. For each `rewrite_body` slice:\n   a. Call `olog_delegate` with the target element ID **and the session setId**:\n      `olog_delegate({ task: "rewrite_body", target: "<id>", setId })`\n      This boosts analogues already in the working set and writes shouldCall/\n      analogueOf/shouldImplement arrows into the working set for inspection.\n   b. Invoke `@olog-implement` via Task. The task body must be **only** the raw JSON from\n      `olog_delegate` \u2014 no preamble, no code, no extra instructions.\n   c. After `@olog-implement` completes, check for structural discoveries:\n      `olog_ws_query({ setId, arrows: ["discoveredDependency"], direction: "out" })`\n      If the edit agent found unexpected dependencies, factor them into remaining\n      slices before proceeding.\n   d. Mark the slice done in the plan file.\n   e. Use `question` to ask whether to proceed to the next slice.\n3. Call `olog_reindex` after all body rewrites land.\n4. Drop the working set: `olog_ws_drop({ setId })`.\n</planning_workflow>\n';
+    olog_orchestrate_default = '---\ndescription: >\n  Orchestration agent. Plans structural changes with the user, records plans as\n  files in .plans/, validates them against the olog, and delegates implementation\n  slices to the olog-implement subagent via the Task tool. Gathers all structural\n  context by invoking the olog-orient subagent \u2014 never reads source files directly.\nmode: primary\npermission:\n  edit:\n    "*": deny\n    ".plans/*": allow\n  bash:\n    "*": deny\n    "mkdir *": allow\n    "git *": allow\n  webfetch: deny\n  task:\n    "*": deny\n    olog-orient: allow\n    olog-implement: allow\n  question: allow\n  mcp:\n    olog: allow\n---\n<critical_rules>\nThese rules override everything else. They apply on every turn.\n\n1. **Never read source files.** Use `git log`, `git diff`, or `git show` for\n   historical context. Use `@olog-orient` via Task for live structural questions.\n\n2. **Invoke subagents via the Task tool.** `@olog-orient` and `@olog-implement` are NOT\n   tools in your tool list \u2014 they are subagents. Reach them by calling\n   the **Task tool** with the agent name `"olog-orient"` or `"olog-implement"`.\n\n3. **Never commit a plan without validation.** Call `olog_plan` then\n   `olog_validate` before invoking `@olog-implement`. Validation checks the projected\n   post-plan state \u2014 cross-operation conflicts (e.g. addArrow whose src is\n   created by an earlier addSymbol) are caught correctly.\n\n4. **Only write files to `.plans/`.** Naming: `.plans/YYYY-MM-DD-<slug>.md`.\n\n5. **Never write code.** You are a planning agent, not an implementation agent.\n   Do not write, sketch, or suggest implementation code \u2014 not in plan files, not\n   in messages to the user, not in tasks to `@olog-implement`. The edit agent works from\n   the DelegationBrief only.\n</critical_rules>\n\n<subagent_invocation>\n**`olog-explore`** \u2014 for structural questions\n- Invoke with the Task tool, agent name `"olog-orient"`\n- Prefix the task with `[ws:<setId>]` so explore writes findings directly to\n  the working set graph:\n  `[ws:abc123] What are the callers of validateToken?`\n- Explore adds results to the working set and asserts synthetic arrows for\n  inferred relationships. Check `gaps` in its response for structural unknowns.\n- Do NOT read explore\'s output as the primary data source \u2014 query the working\n  set graph instead with `olog_ws_query`.\n\n**`olog-edit`** \u2014 for source file changes\n- Invoke with the Task tool, agent name `"olog-implement"`\n- Pass the raw DelegationBrief JSON returned by `olog_delegate` \u2014 nothing else\n- **Do NOT add code, pseudocode, implementation notes, or analysis to the task.**\n  The brief is self-contained. Any extra content you add will override the\n  brief\'s analogues and acceptance criteria, producing worse results.\n- The brief includes `targetFileContent` (up to 500 lines) and `lineRange`;\n  no separate prefetch call is needed unless the file exceeds that limit\n</subagent_invocation>\n\n<planning_workflow>\n\n**Phase 1 \u2014 Understand**\nUse the `question` tool to gather requirements. Ask all clarifying questions\nin a single call: goal, scope, known constraints, olog domain concept relevance.\nUse `git log --oneline -20` to understand recent activity before asking.\n\nOpen a working set immediately after understanding the goal:\n```\nolog_ws_open({ name: "<plan-slug>", planHash: "<hash-if-known>" })\n```\nRecord the returned `setId` \u2014 carry it through all subsequent phases.\n\n**Phase 2 \u2014 Explore**\nBefore invoking `@olog-orient`, check whether the element is already in the\nworking set graph:\n```\nolog_ws_query({ setId, nameRegex: "<name>" })\n```\nIf found, use those results directly \u2014 skip the explore call.\n\nFor new questions, invoke `@olog-orient` via Task with the `[ws:<setId>]`\nprefix. After each explore call, query the working set graph with traversal\nto retrieve what was found \u2014 do NOT read explore\'s text output as the primary\ndata source:\n```\nolog_ws_query({ setId, arrows: ["callerOf"], direction: "in", nameRegex: "<target>" })\n```\n\nUse `arrows` + `direction` to traverse the accumulated graph:\n- `direction: "in"` \u2014 who points TO matched elements (e.g. callers of X)\n- `direction: "out"` \u2014 what matched elements point TO (e.g. what X calls)\n\nSynthetic arrows (marked `synthetic: true`) represent explore\'s structural\ninferences. Annotate them when you want to record your trust level:\n```\nolog_ws_annotate({ setId, targetId: "<synthetic-arr-id>", note: "Confirmed: only entry point" })\n```\n\nFor reference tracing across multiple explore calls, query the union of\neverything accumulated so far:\n```\nolog_ws_query({ setId, arrows: ["callerOf", "calls", "structurallyDependsOn"], direction: "out" })\n```\nThe working set graph accumulates structural knowledge across turns \u2014 no need\nto re-invoke explore for elements already in the set.\n\n**Phase 2.5 \u2014 Map (skip if no DomainBrief)**\n\nIf the task arrived with a `DomainBrief` from the elicit agent, run the Map phase\nbefore drafting the plan:\n\n```\nolog_propose_functor({ setId, brief })\n```\n\nThis writes `proposedImplementation` synthetic arrows into the working set for\nevery brief element that has a matching olog element. Read the result:\n\n- `mapping: "existing"` \u2014 the concept maps to an existing olog element; use it\n  as the plan operation target.\n- `mapping: "to-create"` \u2014 no matching element found; add an `addSymbol` operation\n  to the plan before the `rewrite_body` slice.\n- `mapping: "ambiguous"` \u2014 multiple candidates; ask the user to clarify which one\n  via the `question` tool before proceeding.\n\nAfter reviewing the mapping, query the working set with\n`source: "propose_functor"` to see what was asserted, then continue to Phase 3.\nPopulate `originBriefRef` and `mustSatisfyEquations` on the `DelegationBrief` for\neach slice that was derived from a brief element.\n\nIf the task has no DomainBrief, skip this phase entirely.\n\n**Phase 3 \u2014 Draft the plan**\nWrite to `.plans/YYYY-MM-DD-<slug>.md`:\n\n```\n# Plan: <title>\n\n## Intent\n<One paragraph: what changes, why, what must be preserved>\n\n## Olog operations\n- rename `<element-id>` \u2192 `<new-name>`\n- move `<element-id>` \u2192 module `<new-module>`\n- addSymbol `<module>` `<name>` kind `<kind>`\n- removeSymbol `<element-id>`\n- addArrow `<kind>` `<src-id>` \u2192 `<dst-id>`\n- removeArrow `<arrow-id>`\n\n## Invariants to preserve\n<Constraints from the olog that touch affected elements>\n\n## Implementation slices\n1. <task-type>: <target element-id> \u2014 <one-line description>\n\n## Acceptance criteria\n<Overall criteria>\n\n## Validation status\n[ ] olog_plan created\n[ ] olog_validate passed\n[ ] Slices delegated\n[ ] olog_apply run\n[ ] olog_reindex run\n```\n\nPresent the plan and use `question` to ask for approval.\n\n**Phase 4 \u2014 Validate**\nCall `olog_plan` then `olog_validate`. Update the plan file.\nIf validation fails: amend operations, re-validate. Use `question` for\njudgment calls. Never weaken a constraint to pass validation.\n\n**Phase 5 \u2014 Execute**\n\nIf the plan contains only mechanical operations (rename, move, addSymbol, removeSymbol,\naddArrow, removeArrow):\n1. Call `olog_apply render=true` \u2014 renders source edits and updates the olog DB in one step.\n2. Call `olog_reindex` to verify the structural model.\n\nIf the plan contains `rewrite_body` operations:\n1. Call `olog_apply render=true` first \u2014 applies any mechanical operations in the same plan.\n2. For each `rewrite_body` slice:\n   a. Call `olog_delegate` with the target element ID **and the session setId**:\n      `olog_delegate({ task: "rewrite_body", target: "<id>", setId })`\n      This boosts analogues already in the working set and writes shouldCall/\n      analogueOf/shouldImplement arrows into the working set for inspection.\n   b. Invoke `@olog-implement` via Task. The task body must be **only** the raw JSON from\n      `olog_delegate` \u2014 no preamble, no code, no extra instructions.\n   c. After `@olog-implement` completes, check for discoveries:\n      ```\n      olog_ws_query({ setId, arrows: ["discoveredDependency", "discoveredAmbiguity"], direction: "out" })\n      ```\n      - `discoveredDependency`: unexpected structural dependency \u2014 factor into remaining slices.\n      - `discoveredAmbiguity`: a question only the PM can answer. **Pause execution\n        immediately.** Enter the Revise phase with the question from the arrow\'s `note`.\n   d. Mark the slice done in the plan file.\n   e. Use `question` to ask whether to proceed to the next slice.\n3. Call `olog_reindex` after all body rewrites land.\n4. Drop the working set: `olog_ws_drop({ setId })`.\n\n**Phase 6 \u2014 Revise (entered from Execute on ambiguity or PM brief change)**\n\nEnter this phase when:\n- A `discoveredAmbiguity` arrow appears after an implement call, OR\n- The PM sends a brief change mid-execution.\n\nSteps:\n1. `olog_ws_pause({ setId })` \u2014 preserve the working set across the revision.\n2. Present the ambiguity or brief change to the PM via `question`. Capture the answer.\n3. Call `olog_plan_revise({ planHash, setId, briefDelta })` to classify each\n   operation as `keep | rollback | redirect`. Show the proposal to the PM.\n4. On PM confirmation: update the plan file to reflect verdicts. For `rollback`\n   operations, remove them. For `redirect` operations, amend targets or rationale.\n   For new operations from `newOpsNeeded`, call `olog_plan` to extend the plan,\n   then `olog_validate` before resuming.\n5. `olog_ws_resume({ setId })` \u2014 return to active.\n6. Continue execution from the next pending slice.\n\nIf a synthetic arrow was asserted with an unknown destination (`dstId` omitted),\nresolve it once the target element is identified:\n```\nolog_ws_resolve_synthetic({ arrowId: "<syn:...>", dstId: "<element-id>" })\n```\n</planning_workflow>\n';
   }
 });
 
@@ -78,7 +78,7 @@ var init_olog_orient = __esm({
 var olog_implement_default;
 var init_olog_implement = __esm({
   "src/prompts/olog-implement.txt"() {
-    olog_implement_default = '---\ndescription: >\n  Source editor. Receives a fully-resolved DelegationBrief JSON from\n  olog_delegate and writes the corresponding source changes. All context is in\n  the brief. After editing, asserts discoveredDependency synthetic arrows back\n  to the working set via olog_ws_assert. Verifies changes with tsc or a build\n  command after editing.\nmode: subagent\nhidden: true\nsteps: 20\npermission:\n  edit: allow\n  bash:\n    "*": deny\n    "npx tsc --noEmit *": allow\n    "npx vitest run *": allow\n    "npm run build *": allow\n    "clj -M *": allow\n    "clojure *": allow\n  webfetch: deny\n  task:\n    "*": deny\n  mcp:\n    olog-ws-assert: allow\n---\n# Edit Agent\n\nYou receive a task containing a `DelegationBrief` JSON. Write or modify source\ncode to satisfy the brief. All necessary context is in the brief itself.\n\n## Reading the brief\n\n| Field | What it contains |\n|---|---|\n| `target.filePath` | File to edit |\n| `target.lineRange` | Start/end lines of the declaration to rewrite |\n| `targetFileContent` | Up to 500 lines of the target file \u2014 read this before calling `read` |\n| `analogues` | Complete implementations of similar functions \u2014 match their style |\n| `mustCall` | Functions the implementation must call (with signatures and body snippets) |\n| `mustImplement` | Interfaces the implementation must satisfy |\n| `importsInTargetFile` | Existing imports \u2014 prefer these before adding new ones |\n| `acceptanceCriteria` | Hard constraints every item must be satisfied |\n\nIf `targetFileContent` covers the region you need to edit, use it directly and\nskip calling `read`. Only call `read` if you need lines beyond what the brief\nprovides.\n\n## Prime directive: reuse and simplicity\n\nBefore writing a single line, scan `targetFileContent`, `analogues`, and\n`mustCall` body snippets for code that already does what you need. Reuse it.\n\n- **Copy the analogue pattern exactly** unless the acceptance criteria require\n  a specific deviation. If an analogue solves the same problem in 5 lines, your\n  implementation should also be ~5 lines \u2014 not a cleaner 15-line version.\n- **Prefer calling `mustCall` functions** over reimplementing their logic inline.\n- **Do not introduce helpers, abstractions, or utilities** that don\'t exist in\n  the analogues. Three lines of obvious code beats a named helper.\n- **Do not add error handling, logging, or validation** beyond what the analogues\n  show. If the analogues don\'t guard against nil, neither should you.\n- **Do not import new dependencies** if the existing imports already provide\n  what you need.\n\nWhen in doubt: does the simplest analogue-matching implementation satisfy all\nacceptance criteria? If yes, ship that.\n\n## Brief rules\n\n1. **Follow analogues precisely.** Match their style: naming, error handling,\n   return patterns, line count. They are the ground truth for this codebase.\n\n2. **Call every function in `mustCall`.** These are mandatory.\n\n3. **Satisfy every interface in `mustImplement`.** Implement every property and\n   method \u2014 do not omit any.\n\n4. **Preserve signatures exactly.** Do not rename, move, or delete any symbols.\n\n5. **Use imports from `importsInTargetFile`** before adding new ones.\n   For non-TypeScript targets (Clojure, etc.) the `importStatement` fields in\n   `mustCall` use TS syntax \u2014 ignore them and use the project\'s actual require\n   conventions instead.\n\n6. **Acceptance criteria are hard constraints.** Every item must be satisfied.\n\n## Discoveries\n\nCall `olog_ws_assert` (the only MCP tool available to you) for each\ndependency you needed that was **not** listed in `mustCall` or present in\n`importsInTargetFile`.\n\n```\nolog_ws_assert({\n  setId: "<from brief.setId>",\n  srcId: "<brief.target.id>",\n  dstId: "<ID of the element if known \u2014 omit if the element isn\'t in the olog>",\n  kind: "discoveredDependency",\n  source: "implement",\n  note: "<why it was needed>"\n})\n```\n\n## Verification and output\n\nAfter editing, verify based on the target language:\n- **TypeScript/JavaScript**: `npx tsc --noEmit`\n- **Clojure**: `clj -M --main clojure.main -e "(compile \'ns.name)"` or equivalent\n- If no verifier is available, state that explicitly\n\nYour final message must be valid JSON:\n```json\n{\n  "filesChanged": ["relative/path/to/changed.ts"],\n  "typecheckPassed": true,\n  "criteriaResults": [\n    { "criterion": "...", "satisfied": true },\n    { "criterion": "...", "satisfied": false, "reason": "..." }\n  ],\n  "discovered": 0\n}\n```\n';
+    olog_implement_default = '---\ndescription: >\n  Source editor. Receives a fully-resolved DelegationBrief JSON from\n  olog_delegate and writes the corresponding source changes. All context is in\n  the brief. After editing, asserts discoveredDependency synthetic arrows back\n  to the working set via olog_ws_assert. Verifies changes with tsc or a build\n  command after editing.\nmode: subagent\nhidden: true\nsteps: 20\npermission:\n  edit: allow\n  bash:\n    "*": deny\n    "npx tsc --noEmit *": allow\n    "npx vitest run *": allow\n    "npm run build *": allow\n    "clj -M *": allow\n    "clojure *": allow\n  webfetch: deny\n  task:\n    "*": deny\n  mcp:\n    olog-ws-assert: allow\n---\n# Edit Agent\n\nYou receive a task containing a `DelegationBrief` JSON. Write or modify source\ncode to satisfy the brief. All necessary context is in the brief itself.\n\n## Reading the brief\n\n| Field | What it contains |\n|---|---|\n| `target.filePath` | File to edit |\n| `target.lineRange` | Start/end lines of the declaration to rewrite |\n| `targetFileContent` | Up to 500 lines of the target file \u2014 read this before calling `read` |\n| `analogues` | Complete implementations of similar functions \u2014 match their style |\n| `mustCall` | Functions the implementation must call (with signatures and body snippets) |\n| `mustImplement` | Interfaces the implementation must satisfy |\n| `importsInTargetFile` | Existing imports \u2014 prefer these before adding new ones |\n| `acceptanceCriteria` | Hard constraints every item must be satisfied |\n\nIf `targetFileContent` covers the region you need to edit, use it directly and\nskip calling `read`. Only call `read` if you need lines beyond what the brief\nprovides.\n\n## Prime directive: reuse and simplicity\n\nBefore writing a single line, scan `targetFileContent`, `analogues`, and\n`mustCall` body snippets for code that already does what you need. Reuse it.\n\n- **Copy the analogue pattern exactly** unless the acceptance criteria require\n  a specific deviation. If an analogue solves the same problem in 5 lines, your\n  implementation should also be ~5 lines \u2014 not a cleaner 15-line version.\n- **Prefer calling `mustCall` functions** over reimplementing their logic inline.\n- **Do not introduce helpers, abstractions, or utilities** that don\'t exist in\n  the analogues. Three lines of obvious code beats a named helper.\n- **Do not add error handling, logging, or validation** beyond what the analogues\n  show. If the analogues don\'t guard against nil, neither should you.\n- **Do not import new dependencies** if the existing imports already provide\n  what you need.\n\nWhen in doubt: does the simplest analogue-matching implementation satisfy all\nacceptance criteria? If yes, ship that.\n\n## Brief rules\n\n1. **Follow analogues precisely.** Match their style: naming, error handling,\n   return patterns, line count. They are the ground truth for this codebase.\n\n2. **Call every function in `mustCall`.** These are mandatory.\n\n3. **Satisfy every interface in `mustImplement`.** Implement every property and\n   method \u2014 do not omit any.\n\n4. **Preserve signatures exactly.** Do not rename, move, or delete any symbols.\n\n5. **Use imports from `importsInTargetFile`** before adding new ones.\n   For non-TypeScript targets (Clojure, etc.) the `importStatement` fields in\n   `mustCall` use TS syntax \u2014 ignore them and use the project\'s actual require\n   conventions instead.\n\n6. **Acceptance criteria are hard constraints.** Every item must be satisfied.\n\n## Discoveries\n\nCall `olog_ws_assert` (the only MCP tool available to you) for each\ndependency or ambiguity you discovered.\n\n**Discovered dependency** \u2014 something you needed that was not in `mustCall`:\n```\nolog_ws_assert({\n  setId: "<from brief.setId>",\n  srcId: "<brief.target.id>",\n  dstId: "<ID of the element if known \u2014 omit if not in olog>",\n  kind: "discoveredDependency",\n  source: "implement",\n  note: "<why it was needed>"\n})\n```\n\n**Discovered ambiguity** \u2014 a question only the PM can answer (conflicting\nrequirements, unclear scope, missing domain concept):\n```\nolog_ws_assert({\n  setId: "<from brief.setId>",\n  srcId: "<brief.target.id>",\n  kind: "discoveredAmbiguity",\n  source: "implement",\n  note: "<the specific question that needs a PM answer>"\n})\n```\n\nDo not re-assert `mustCall` entries. Only assert things you actually needed or\nquestions that genuinely blocked you.\n\n## Verification and output\n\nAfter editing, verify based on the target language:\n- **TypeScript/JavaScript**: `npx tsc --noEmit`\n- **Clojure**: `clj -M --main clojure.main -e "(compile \'ns.name)"` or equivalent\n- If no verifier is available, state that explicitly\n\nYour final message must be valid JSON:\n```json\n{\n  "filesChanged": ["relative/path/to/changed.ts"],\n  "typecheckPassed": true,\n  "criteriaResults": [\n    { "criterion": "...", "satisfied": true },\n    { "criterion": "...", "satisfied": false, "reason": "..." }\n  ],\n  "discovered": 0\n}\n```\n';
   }
 });
 
@@ -161,7 +161,7 @@ var init_init = __esm({
 // src/index.ts
 import { mkdirSync as mkdirSync3 } from "fs";
 import { join as join6 } from "path";
-import { McpServer as McpServer13 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer as McpServer16 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // ../core/dist/index.js
@@ -387,6 +387,8 @@ var OlogStore = class {
   deleteWorkingSetNoteStmt;
   insertSyntheticArrStmt;
   getSyntheticArrsStmt;
+  updateWorkingSetStatusStmt;
+  resolveSyntheticArrStmt;
   constructor(path) {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
@@ -437,6 +439,10 @@ var OlogStore = class {
     const synArrCols = this.db.prepare("PRAGMA table_info(olog_ws_synthetic_arr)").all();
     if (!synArrCols.some((c) => c.name === "source")) {
       this.db.exec("ALTER TABLE olog_ws_synthetic_arr ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'");
+    }
+    const wsCols = this.db.prepare("PRAGMA table_info(olog_working_set)").all();
+    if (!wsCols.some((c) => c.name === "status")) {
+      this.db.exec("ALTER TABLE olog_working_set ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
     }
     const redundantKinds = ["inModule", "locatedIn", "contains", "imports"];
     for (const kind of redundantKinds) {
@@ -558,6 +564,12 @@ var OlogStore = class {
     );
     this.getSyntheticArrsStmt = this.db.prepare(
       "SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ?"
+    );
+    this.updateWorkingSetStatusStmt = this.db.prepare(
+      "UPDATE olog_working_set SET status = ?, updated_at = ? WHERE id = ?"
+    );
+    this.resolveSyntheticArrStmt = this.db.prepare(
+      "UPDATE olog_ws_synthetic_arr SET dst_id = ? WHERE id = ?"
     );
     this._sessions = new DomainSessionStore(this.db);
     this._motifSessions = new MotifSessionStore(this.db);
@@ -1230,6 +1242,18 @@ var OlogStore = class {
   deleteWorkingSet(setId) {
     this.deleteWorkingSetStmt.run(setId);
   }
+  pauseWorkingSet(setId) {
+    this.updateWorkingSetStatusStmt.run("paused", Date.now(), setId);
+  }
+  resumeWorkingSet(setId) {
+    this.updateWorkingSetStatusStmt.run("active", Date.now(), setId);
+  }
+  resolveSyntheticArrow(arrowId2, dstId) {
+    const dstExists = this.db.prepare("SELECT 1 FROM olog_elem WHERE id = ? LIMIT 1").get(dstId);
+    if (!dstExists) throw new Error(`resolveSyntheticArrow: dstId '${dstId}' not found in olog_elem`);
+    const result = this.resolveSyntheticArrStmt.run(dstId, arrowId2);
+    if (result.changes === 0) throw new Error(`resolveSyntheticArrow: arrow '${arrowId2}' not found`);
+  }
   annotateWorkingSet(setId, targetId, note) {
     const now = Date.now();
     this.insertWorkingSetNoteStmt.run(setId, targetId, note, now);
@@ -1409,6 +1433,8 @@ var ARROW_KINDS = [
   "hasType",
   "implementedAs",
   "proposedImplementation",
+  "discoveredDependency",
+  "discoveredAmbiguity",
   "throws",
   "other"
 ];
@@ -4038,7 +4064,7 @@ function registerOlogOverview(server2, store2) {
   server2.registerTool(
     "olog_overview",
     {
-      description: "Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, and total counts. Useful for understanding what the olog knows about the codebase.",
+      description: "Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, total counts, and all domain elements (name+id). Call this first for orientation before querying or planning.",
       inputSchema: z3.object({}),
       annotations: { readOnlyHint: true, idempotentHint: true }
     },
@@ -4046,11 +4072,13 @@ function registerOlogOverview(server2, store2) {
       try {
         const counts = store2.dumpCounts();
         const commitSha = store2.commitSha();
+        const domainElems = store2.queryElements({ kind: "domain", limit: 200 });
+        const domainElements = domainElems.map((e) => ({ id: e.id, name: e.name, module: e.module }));
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ commitSha, ...counts }, null, 2)
+              text: JSON.stringify({ commitSha, ...counts, domainElements }, null, 2)
             }
           ]
         };
@@ -4140,30 +4168,13 @@ function loadPlan(hash, projectRoot2) {
 }
 
 // src/tools/olog-apply.ts
-var planOperationSchema = z5.union([
-  z5.object({ kind: z5.literal("rename"), target: z5.string(), newName: z5.string() }),
-  z5.object({ kind: z5.literal("move"), target: z5.string(), newModule: z5.string() }),
-  z5.object({ kind: z5.literal("addSymbol"), module: z5.string(), name: z5.string(), symbolKind: z5.string() }),
-  z5.object({ kind: z5.literal("removeSymbol"), target: z5.string() }),
-  z5.object({ kind: z5.literal("addArrow"), arrowKind: z5.string(), src: z5.string(), dst: z5.string() }),
-  z5.object({ kind: z5.literal("removeArrow"), arrowId: z5.string() }),
-  z5.object({ kind: z5.literal("addReexport"), module: z5.string(), name: z5.string(), fromModule: z5.string() }),
-  z5.object({ kind: z5.literal("amendType"), target: z5.string(), field: z5.string(), action: z5.enum(["addUnionMember", "addProperty"]), value: z5.string() }),
-  z5.object({ kind: z5.literal("rewrite_body"), target: z5.string(), rationale: z5.string() })
-]);
-var planSchema = z5.object({
-  operations: z5.array(planOperationSchema),
-  hash: z5.string(),
-  rationale: z5.string()
-});
 function registerOlogApply(server2, store2, projectRoot2) {
   server2.registerTool(
     "olog_apply",
     {
-      description: "Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match. Supports rename, move, addSymbol, removeSymbol, addArrow, removeArrow, addReexport, amendType, and rewrite_body operations.",
+      description: "Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan. Supports rename, move, addSymbol, removeSymbol, addArrow, removeArrow, addReexport, amendType, and rewrite_body operations.",
       inputSchema: z5.object({
-        plan: planSchema.describe("The plan object to apply, including its hash."),
-        planHash: z5.string().describe("The expected hash of the plan. Must match plan.hash."),
+        planHash: z5.string().describe("Hash of the plan to apply, as returned by olog_plan."),
         render: z5.boolean().default(false).describe("When true, also render source-file edits and apply them to disk, then re-ingest.")
       }),
       annotations: {
@@ -4172,7 +4183,7 @@ function registerOlogApply(server2, store2, projectRoot2) {
         destructiveHint: false
       }
     },
-    async ({ plan, planHash, render }) => {
+    async ({ planHash, render }) => {
       try {
         if (!projectRoot2) {
           return {
@@ -4195,17 +4206,7 @@ function registerOlogApply(server2, store2, projectRoot2) {
             ]
           };
         }
-        if (planHash !== plan.hash) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ ok: false, reason: "Hash mismatch" }, null, 2)
-              }
-            ]
-          };
-        }
-        const allOps = plan.operations;
+        const allOps = storedPlan.operations;
         const mechanicalOps = allOps.filter((op) => op.kind !== "rewrite_body");
         const rewriteBodyOps = allOps.filter((op) => op.kind === "rewrite_body");
         const pendingDelegations = rewriteBodyOps.map((op) => ({
@@ -5404,6 +5405,370 @@ function registerOlogWs(server2, store2) {
       }
     }
   );
+  server2.registerTool(
+    "olog_ws_pause",
+    {
+      description: "Pause a working set to preserve it across a plan revision. A paused set is still queryable but signals that the orchestrator is mid-revision. Use instead of olog_ws_drop when a briefDelta arrives during execution.",
+      inputSchema: z12.object({
+        setId: z12.string().describe("Working set ID to pause")
+      }),
+      annotations: { idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        store2.pauseWorkingSet(args.setId);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, status: "paused" }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+  server2.registerTool(
+    "olog_ws_resume",
+    {
+      description: "Resume a paused working set after a plan revision is confirmed. The set returns to active status and execution can continue.",
+      inputSchema: z12.object({
+        setId: z12.string().describe("Working set ID to resume")
+      }),
+      annotations: { idempotentHint: true }
+    },
+    async (args) => {
+      try {
+        store2.resumeWorkingSet(args.setId);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, status: "active" }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+  server2.registerTool(
+    "olog_ws_resolve_synthetic",
+    {
+      description: "Resolve a synthetic arrow whose dstId was unknown at assert time. Promotes the arrow from pending (dstId: null) to fully resolved by setting the destination element ID.",
+      inputSchema: z12.object({
+        arrowId: z12.string().describe("Synthetic arrow ID (returned by olog_ws_assert)"),
+        dstId: z12.string().describe("Destination element ID \u2014 must exist in olog_elem")
+      }),
+      annotations: { idempotentHint: false }
+    },
+    async (args) => {
+      try {
+        store2.resolveSyntheticArrow(args.arrowId, args.dstId);
+        return { content: [{ type: "text", text: JSON.stringify({ ok: true, arrowId: args.arrowId, dstId: args.dstId }) }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+}
+
+// src/tools/olog-propose-functor.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z13 } from "zod";
+var DomainBriefElementSchema = z13.object({
+  id: z13.string().describe("Brief-local identifier for this element"),
+  name: z13.string().describe("Name to match against olog elements"),
+  kind: z13.string().default("domain").describe('Olog element kind to search (default: "domain")'),
+  description: z13.string().optional().describe("Human description of this concept")
+});
+var DomainBriefSchema = z13.object({
+  id: z13.string().describe("Brief identifier \u2014 passed back in originBriefRef on DelegationBriefs"),
+  elements: z13.array(DomainBriefElementSchema).describe("Domain concepts to map to code elements")
+});
+function registerOlogProposeFunctor(server2, store2) {
+  server2.registerTool(
+    "olog_propose_functor",
+    {
+      description: "Map each element in a DomainBrief to either an existing olog element (existing), a missing element that must be created (to-create), or multiple ambiguous matches. For each existing match, asserts a proposedImplementation synthetic arrow into the working set. Returns the full mapping and the resulting working-set subgraph.",
+      inputSchema: z13.object({
+        setId: z13.string().describe("Working set ID \u2014 proposedImplementation arrows are written here"),
+        brief: DomainBriefSchema.describe("DomainBrief produced by the elicit agent or authored manually")
+      }),
+      annotations: { idempotentHint: false }
+    },
+    async ({ setId, brief }) => {
+      try {
+        const mappings = [];
+        for (const el of brief.elements) {
+          const matches = store2.queryElements({ kind: el.kind, nameRegex: `^${escapeRegex2(el.name)}$`, limit: 10 });
+          if (matches.length === 0) {
+            mappings.push({ briefElementId: el.id, briefElementName: el.name, mapping: "to-create" });
+            continue;
+          }
+          if (matches.length > 1) {
+            mappings.push({
+              briefElementId: el.id,
+              briefElementName: el.name,
+              mapping: "ambiguous",
+              candidates: matches.map((m) => ({ id: m.id, name: m.name, module: m.module ?? null }))
+            });
+            continue;
+          }
+          const found = matches[0];
+          const implementedByArrows = store2.outgoing(found.id).filter((a) => a.kind === "implementedAs");
+          const implementedByIds = implementedByArrows.map((a) => a.dstId);
+          const dstId = implementedByIds[0] ?? void 0;
+          const arrowId2 = store2.assertSyntheticArrow(
+            setId,
+            found.id,
+            dstId,
+            "proposedImplementation",
+            "propose_functor",
+            JSON.stringify({ briefElementId: el.id, mapping: "existing", implementedByCount: implementedByIds.length })
+          );
+          mappings.push({
+            briefElementId: el.id,
+            briefElementName: el.name,
+            mapping: "existing",
+            ologElementId: found.id,
+            implementedByIds,
+            syntheticArrowId: arrowId2
+          });
+        }
+        const graph = store2.queryWorkingSetGraph(setId, { source: "propose_functor" });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ briefId: brief.id, mappings, graph }, null, 2)
+          }]
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true
+        };
+      }
+    }
+  );
+}
+function escapeRegex2(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// src/tools/olog-domain-dryrun.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z14 } from "zod";
+var objectSchema2 = z14.object({
+  kind: z14.string().describe("Element kind"),
+  name: z14.string().describe("Element name (noun phrase)"),
+  module: z14.string().optional().describe("Optional module path")
+});
+var arrowSchema2 = z14.object({
+  name: z14.string().describe("Arrow kind/name"),
+  domain: z14.string().describe("Domain element name"),
+  codomain: z14.string().describe("Codomain element name"),
+  total: z14.boolean().describe("Whether this is a total function")
+});
+var pathSchema2 = z14.object({
+  src: z14.string().describe("Source element name"),
+  tgt: z14.string().describe("Target element name"),
+  arrows: z14.array(z14.string()).describe("Sequence of arrow kinds")
+});
+var equationSchema2 = z14.object({
+  id: z14.string(),
+  name: z14.string(),
+  humanMessage: z14.string(),
+  lhs: pathSchema2,
+  rhs: pathSchema2
+});
+function registerOlogDomainDryrun(server2, store2) {
+  server2.registerTool(
+    "olog_domain_dryrun",
+    {
+      description: 'Validate a proposed schema fragment (objects, arrows, equations) without committing it to the olog. Returns {ok: true} if the proposal is consistent, or {ok: false, errors: [...]} if not. The elicit agent uses this to check "would this brief, if accepted, produce a valid schema?" between conversation turns.',
+      inputSchema: z14.object({
+        objects: z14.preprocess((v) => typeof v === "string" ? JSON.parse(v) : v, z14.array(objectSchema2)).default([]).describe("Proposed domain objects to validate"),
+        arrows: z14.preprocess((v) => typeof v === "string" ? JSON.parse(v) : v, z14.array(arrowSchema2)).default([]).describe("Proposed arrows to validate"),
+        equations: z14.preprocess((v) => typeof v === "string" ? JSON.parse(v) : v, z14.array(equationSchema2)).default([]).describe("Proposed path equations to validate")
+      }),
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ objects, arrows, equations }) => {
+      try {
+        const errors = [];
+        const objectMap = /* @__PURE__ */ new Map();
+        for (const obj of objects) {
+          if (!isNounPhrase(obj.name)) {
+            errors.push(`Object "${obj.name}" is not a valid noun phrase (must start with uppercase after optional "a"/"an"/"the")`);
+          }
+          objectMap.set(obj.name, obj);
+        }
+        const proposedArrowKinds = /* @__PURE__ */ new Set();
+        for (const arrow of arrows) {
+          if (!arrow.total) {
+            errors.push(`Arrow "${arrow.name}" is not total. Many-valued relationships must be reified before proposing.`);
+            continue;
+          }
+          const domainExists = store2.queryElements({ nameRegex: `^${escapeRegex3(arrow.domain)}$`, limit: 1 }).length > 0 || objectMap.has(arrow.domain);
+          if (!domainExists) {
+            errors.push(`Arrow "${arrow.name}": domain "${arrow.domain}" does not exist in olog or proposed objects`);
+            continue;
+          }
+          const codomainExists = store2.queryElements({ nameRegex: `^${escapeRegex3(arrow.codomain)}$`, limit: 1 }).length > 0 || objectMap.has(arrow.codomain);
+          if (!codomainExists) {
+            errors.push(`Arrow "${arrow.name}": codomain "${arrow.codomain}" does not exist in olog or proposed objects`);
+            continue;
+          }
+          proposedArrowKinds.add(arrow.name);
+        }
+        for (const eq of equations) {
+          const result = validateEquation(eq, store2, Array.from(proposedArrowKinds));
+          errors.push(...result.errors);
+        }
+        if (errors.length > 0) {
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, errors }, null, 2) }] };
+        }
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              ok: true,
+              summary: {
+                objects: objects.length,
+                arrows: arrows.length,
+                equations: equations.length
+              }
+            }, null, 2)
+          }]
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ ok: false, errors: [err instanceof Error ? err.message : String(err)] }, null, 2) }],
+          isError: true
+        };
+      }
+    }
+  );
+}
+function escapeRegex3(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// src/tools/olog-plan-revise.ts
+import "@modelcontextprotocol/sdk/server/mcp.js";
+import { z as z15 } from "zod";
+var BriefDeltaElementSchema = z15.object({
+  id: z15.string().describe("Brief-local element ID"),
+  name: z15.string().describe("Element name"),
+  description: z15.string().optional().describe("What changed")
+});
+function registerOlogPlanRevise(server2, store2, projectRoot2) {
+  server2.registerTool(
+    "olog_plan_revise",
+    {
+      description: "Diff the current plan against a brief change and classify each operation as keep, rollback, or redirect. Returns a revision proposal \u2014 does NOT execute. The orchestrator reviews the proposal and confirms with the PM before resuming.",
+      inputSchema: z15.object({
+        planHash: z15.string().describe("Hash of the plan to revise (as returned by olog_plan)"),
+        setId: z15.string().optional().describe("Working set ID \u2014 when provided, proposedImplementation arrows are used to map brief elements to olog elements"),
+        briefDelta: z15.object({
+          removed: z15.array(BriefDeltaElementSchema).default([]).describe("Brief elements that were removed from the brief"),
+          added: z15.array(BriefDeltaElementSchema).default([]).describe("New brief elements added to the brief"),
+          modified: z15.array(BriefDeltaElementSchema).default([]).describe("Brief elements whose description or intent changed")
+        }).describe("Changes to the DomainBrief since the plan was drafted")
+      }),
+      annotations: { readOnlyHint: true, idempotentHint: true }
+    },
+    async ({ planHash, setId, briefDelta }) => {
+      try {
+        let touchedIds2 = function(op) {
+          switch (op.kind) {
+            case "rename":
+              return [op.target];
+            case "move":
+              return [op.target];
+            case "removeSymbol":
+              return [op.target];
+            case "rewrite_body":
+              return [op.target];
+            case "amendType":
+              return [op.target];
+            case "addArrow":
+              return [op.src, op.dst];
+            case "addSymbol":
+              return [];
+            // no existing olog ID
+            case "addReexport":
+              return [];
+            case "removeArrow": {
+              const arr = store2.getArr(op.arrowId);
+              return arr ? [arr.srcId, arr.dstId] : [];
+            }
+          }
+        };
+        var touchedIds = touchedIds2;
+        const plan = loadPlan(planHash, projectRoot2);
+        if (!plan) {
+          return {
+            content: [{ type: "text", text: `Plan not found: ${planHash}` }],
+            isError: true
+          };
+        }
+        const briefToOlog = /* @__PURE__ */ new Map();
+        const ologToBrief = /* @__PURE__ */ new Map();
+        if (setId) {
+          const graph = store2.queryWorkingSetGraph(setId, { source: "propose_functor" });
+          for (const arrow of graph.syntheticArrows) {
+            if (arrow.kind !== "proposedImplementation" || !arrow.note) continue;
+            try {
+              const parsed = JSON.parse(arrow.note);
+              if (parsed.briefElementId) {
+                briefToOlog.set(parsed.briefElementId, arrow.srcId);
+                ologToBrief.set(arrow.srcId, parsed.briefElementId);
+              }
+            } catch {
+            }
+          }
+        }
+        const removedOlogIds = new Set(
+          briefDelta.removed.map((el) => briefToOlog.get(el.id)).filter((id) => id !== void 0)
+        );
+        const modifiedOlogIds = new Set(
+          briefDelta.modified.map((el) => briefToOlog.get(el.id)).filter((id) => id !== void 0)
+        );
+        const removedNames = new Set(briefDelta.removed.map((el) => el.name).filter(Boolean));
+        const modifiedNames = new Set(briefDelta.modified.map((el) => el.name));
+        const verdicts = plan.operations.map((op) => {
+          const ids = touchedIds2(op);
+          if (ids.some((id) => removedOlogIds.has(id))) {
+            return { operation: op, verdict: "rollback", reason: "Target element was removed from the brief" };
+          }
+          if (ids.some((id) => modifiedOlogIds.has(id))) {
+            return { operation: op, verdict: "redirect", reason: "Target element was modified in the brief \u2014 review implementation approach" };
+          }
+          if (op.kind === "addSymbol") {
+            if (removedNames.has(op.name)) return { operation: op, verdict: "rollback", reason: `"${op.name}" was removed from the brief` };
+            if (modifiedNames.has(op.name)) return { operation: op, verdict: "redirect", reason: `"${op.name}" was modified in the brief` };
+          }
+          return { operation: op, verdict: "keep", reason: "Not affected by brief changes" };
+        });
+        const newOpsNeeded = briefDelta.added.map((el) => ({
+          briefElementId: el.id,
+          briefElementName: el.name,
+          suggestedOps: [
+            { kind: "addSymbol", description: `Add domain element "${el.name}" to the olog` },
+            { kind: "rewrite_body", description: `Implement "${el.name}" in source` }
+          ]
+        }));
+        const summary = {
+          keep: verdicts.filter((v) => v.verdict === "keep").length,
+          rollback: verdicts.filter((v) => v.verdict === "rollback").length,
+          redirect: verdicts.filter((v) => v.verdict === "redirect").length,
+          newOpsNeeded: newOpsNeeded.length
+        };
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ summary, verdicts, newOpsNeeded }, null, 2)
+          }]
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+          isError: true
+        };
+      }
+    }
+  );
 }
 
 // src/index.ts
@@ -5429,7 +5794,7 @@ try {
 var dbPath = join6(ologDir, "olog.sqlite");
 var store = new OlogStore(dbPath);
 var languages = [];
-var server = new McpServer13(
+var server = new McpServer16(
   { name: "olog-mcp", version: "0.0.1" },
   {
     instructions: `Structural olog for ${projectRoot}. Name and module parameters accept JS regex. Call olog_overview first for orientation.`,
@@ -5448,6 +5813,9 @@ registerOlogRender(server, store, projectRoot);
 registerOlogDelegate(server, store, projectRoot);
 registerOlogDotDomain(server, store);
 registerOlogWs(server, store);
+registerOlogProposeFunctor(server, store);
+registerOlogDomainDryrun(server, store);
+registerOlogPlanRevise(server, store, projectRoot);
 var transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("[olog] MCP server connected on stdio");

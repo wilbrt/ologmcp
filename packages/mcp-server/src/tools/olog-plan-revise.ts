@@ -34,7 +34,7 @@ export function registerOlogPlanRevise(server: McpServer, store: OlogStore, proj
         planHash: z.string().describe('Hash of the plan to revise (as returned by olog_plan)'),
         setId: z.string().optional().describe('Working set ID — when provided, proposedImplementation arrows are used to map brief elements to olog elements'),
         briefDelta: z.object({
-          removed: z.array(z.string()).default([]).describe('Brief element IDs that were removed from the brief'),
+          removed: z.array(BriefDeltaElementSchema).default([]).describe('Brief elements that were removed from the brief'),
           added: z.array(BriefDeltaElementSchema).default([]).describe('New brief elements added to the brief'),
           modified: z.array(BriefDeltaElementSchema).default([]).describe('Brief elements whose description or intent changed'),
         }).describe('Changes to the DomainBrief since the plan was drafted'),
@@ -72,7 +72,7 @@ export function registerOlogPlanRevise(server: McpServer, store: OlogStore, proj
         }
 
         const removedOlogIds = new Set<string>(
-          briefDelta.removed.map(bid => briefToOlog.get(bid)).filter((id): id is string => id !== undefined)
+          briefDelta.removed.map(el => briefToOlog.get(el.id)).filter((id): id is string => id !== undefined)
         );
         const modifiedOlogIds = new Set<string>(
           briefDelta.modified.map(el => briefToOlog.get(el.id)).filter((id): id is string => id !== undefined)
@@ -97,11 +97,7 @@ export function registerOlogPlanRevise(server: McpServer, store: OlogStore, proj
         }
 
         // Helper: match addSymbol by name against removed/modified brief element names
-        const removedNames = new Set(briefDelta.removed.map(bid => {
-          const ologId = briefToOlog.get(bid);
-          if (ologId) { const el = store.getElem(ologId); return el?.name ?? ''; }
-          return '';
-        }).filter(Boolean));
+        const removedNames = new Set(briefDelta.removed.map(el => el.name).filter(Boolean));
         const modifiedNames = new Set(briefDelta.modified.map(el => el.name));
 
         const verdicts: OperationVerdict[] = plan.operations.map(op => {

@@ -7,7 +7,7 @@ export function registerOlogOverview(server: McpServer, store: OlogStore): void 
     'olog_overview',
     {
       description:
-        'Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, and total counts. Useful for understanding what the olog knows about the codebase.',
+        'Get a summary overview of the ontology log: element counts by kind, arrow counts by kind, total counts, and all domain elements (name+id). Call this first for orientation before querying or planning.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -15,12 +15,14 @@ export function registerOlogOverview(server: McpServer, store: OlogStore): void 
       try {
         const counts = store.dumpCounts();
         const commitSha = store.commitSha();
+        const domainElems = store.queryElements({ kind: 'domain', limit: 200 });
+        const domainElements = domainElems.map(e => ({ id: e.id, name: e.name, module: e.module }));
 
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ commitSha, ...counts }, null, 2),
+              text: JSON.stringify({ commitSha, ...counts, domainElements }, null, 2),
             },
           ],
         };

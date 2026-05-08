@@ -3,33 +3,14 @@ import { z } from 'zod';
 import { OlogStore, type PlanOperation, renderPlan, applySourceEdits, rollback, reindexProject, getDefaultRegistry } from '@olog/core';
 import { loadPlan } from './olog-plan-store.js';
 
-const planOperationSchema = z.union([
-  z.object({ kind: z.literal('rename'), target: z.string(), newName: z.string() }),
-  z.object({ kind: z.literal('move'), target: z.string(), newModule: z.string() }),
-  z.object({ kind: z.literal('addSymbol'), module: z.string(), name: z.string(), symbolKind: z.string() }),
-  z.object({ kind: z.literal('removeSymbol'), target: z.string() }),
-  z.object({ kind: z.literal('addArrow'), arrowKind: z.string(), src: z.string(), dst: z.string() }),
-  z.object({ kind: z.literal('removeArrow'), arrowId: z.string() }),
-  z.object({ kind: z.literal('addReexport'), module: z.string(), name: z.string(), fromModule: z.string() }),
-  z.object({ kind: z.literal('amendType'), target: z.string(), field: z.string(), action: z.enum(['addUnionMember', 'addProperty']), value: z.string() }),
-  z.object({ kind: z.literal('rewrite_body'), target: z.string(), rationale: z.string() }),
-]);
-
-const planSchema = z.object({
-  operations: z.array(planOperationSchema),
-  hash: z.string(),
-  rationale: z.string(),
-});
-
 export function registerOlogApply(server: McpServer, store: OlogStore, projectRoot?: string): void {
   server.registerTool(
     'olog_apply',
     {
       description:
-        'Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan and the hash must match. Supports rename, move, addSymbol, removeSymbol, addArrow, removeArrow, addReexport, amendType, and rewrite_body operations.',
+        'Apply a validated plan to the olog graph. When render=true, also renders source-file edits and re-ingests. The plan must have been created by olog_plan. Supports rename, move, addSymbol, removeSymbol, addArrow, removeArrow, addReexport, amendType, and rewrite_body operations.',
       inputSchema: z.object({
-        plan: planSchema.describe('The plan object to apply, including its hash.'),
-        planHash: z.string().describe('The expected hash of the plan. Must match plan.hash.'),
+        planHash: z.string().describe('Hash of the plan to apply, as returned by olog_plan.'),
         render: z.boolean().default(false).describe('When true, also render source-file edits and apply them to disk, then re-ingest.'),
       }),
       annotations: {
@@ -38,7 +19,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
         destructiveHint: false,
       },
     },
-    async ({ plan, planHash, render }) => {
+    async ({ planHash, render }) => {
       try {
         if (!projectRoot) {
           return {
@@ -62,18 +43,7 @@ export function registerOlogApply(server: McpServer, store: OlogStore, projectRo
           };
         }
 
-        if (planHash !== plan.hash) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({ ok: false, reason: 'Hash mismatch' }, null, 2),
-              },
-            ],
-          };
-        }
-
-        const allOps = plan.operations;
+        const allOps = storedPlan.operations;
         const mechanicalOps = allOps.filter(op => op.kind !== 'rewrite_body');
         const rewriteBodyOps = allOps.filter((op): op is Extract<PlanOperation, { kind: 'rewrite_body' }> => op.kind === 'rewrite_body');
         const pendingDelegations = rewriteBodyOps.map(op => ({

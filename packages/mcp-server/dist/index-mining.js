@@ -223,6 +223,8 @@ var OlogStore = class {
   deleteWorkingSetNoteStmt;
   insertSyntheticArrStmt;
   getSyntheticArrsStmt;
+  updateWorkingSetStatusStmt;
+  resolveSyntheticArrStmt;
   constructor(path) {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
@@ -273,6 +275,10 @@ var OlogStore = class {
     const synArrCols = this.db.prepare("PRAGMA table_info(olog_ws_synthetic_arr)").all();
     if (!synArrCols.some((c) => c.name === "source")) {
       this.db.exec("ALTER TABLE olog_ws_synthetic_arr ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'");
+    }
+    const wsCols = this.db.prepare("PRAGMA table_info(olog_working_set)").all();
+    if (!wsCols.some((c) => c.name === "status")) {
+      this.db.exec("ALTER TABLE olog_working_set ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
     }
     const redundantKinds = ["inModule", "locatedIn", "contains", "imports"];
     for (const kind of redundantKinds) {
@@ -394,6 +400,12 @@ var OlogStore = class {
     );
     this.getSyntheticArrsStmt = this.db.prepare(
       "SELECT id, kind, src_id, dst_id, note, source FROM olog_ws_synthetic_arr WHERE set_id = ?"
+    );
+    this.updateWorkingSetStatusStmt = this.db.prepare(
+      "UPDATE olog_working_set SET status = ?, updated_at = ? WHERE id = ?"
+    );
+    this.resolveSyntheticArrStmt = this.db.prepare(
+      "UPDATE olog_ws_synthetic_arr SET dst_id = ? WHERE id = ?"
     );
     this._sessions = new DomainSessionStore(this.db);
     this._motifSessions = new MotifSessionStore(this.db);
@@ -1065,6 +1077,18 @@ var OlogStore = class {
   }
   deleteWorkingSet(setId) {
     this.deleteWorkingSetStmt.run(setId);
+  }
+  pauseWorkingSet(setId) {
+    this.updateWorkingSetStatusStmt.run("paused", Date.now(), setId);
+  }
+  resumeWorkingSet(setId) {
+    this.updateWorkingSetStatusStmt.run("active", Date.now(), setId);
+  }
+  resolveSyntheticArrow(arrowId2, dstId) {
+    const dstExists = this.db.prepare("SELECT 1 FROM olog_elem WHERE id = ? LIMIT 1").get(dstId);
+    if (!dstExists) throw new Error(`resolveSyntheticArrow: dstId '${dstId}' not found in olog_elem`);
+    const result = this.resolveSyntheticArrStmt.run(dstId, arrowId2);
+    if (result.changes === 0) throw new Error(`resolveSyntheticArrow: arrow '${arrowId2}' not found`);
   }
   annotateWorkingSet(setId, targetId, note) {
     const now = Date.now();
