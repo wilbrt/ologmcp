@@ -23,7 +23,7 @@ export function parseSpan(span: string): ParsedSpan | null {
   let m = span.match(/^(.+):(\d+):(\d+)-(\d+):(\d+)$/);
   if (m) {
     return {
-      filePath: m[1],
+      filePath: m[1]!,
       startLine: parseInt(m[2]!, 10),
       startCol: parseInt(m[3]!, 10),
       endLine: parseInt(m[4]!, 10),
