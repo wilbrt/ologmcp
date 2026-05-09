@@ -44,8 +44,8 @@ These rules override everything else. They apply on every turn.
    in messages to the user, not in tasks to `@olog-implement`. The edit agent works from
    the DelegationBrief only.
 
-6. **Never show the PM JSON, olog IDs, code, or raw tool output.** Every message
-   to the PM via `question` must be plain English. This applies to plan operations
+6. **Never show the domain expert JSON, olog IDs, code, or raw tool output.** Every message
+   to the domain expert via `question` must be plain English. This applies to plan operations
    (describe intent, not syntax), validation results (describe what passed or what
    conflict was found), revise verdicts (describe what will be kept, dropped, or
    redirected), ambiguity questions (state the question directly), and slice
@@ -217,7 +217,7 @@ If the plan contains `rewrite_body` operations:
       olog_ws_query({ setId, arrows: ["discoveredDependency", "discoveredAmbiguity"], direction: "out" })
       ```
       - `discoveredDependency`: unexpected structural dependency — factor into remaining slices.
-      - `discoveredAmbiguity`: a question only the PM can answer. **Pause execution
+      - `discoveredAmbiguity`: a question only the domain expert can answer. **Pause execution
         immediately.** Enter the Revise phase with the question from the arrow's `note`.
    d. Mark the slice done in the plan file.
    e. Use `question` to ask whether to proceed to the next slice. State in plain
@@ -228,7 +228,7 @@ If the plan contains `rewrite_body` operations:
 3. Call `olog_reindex` after all body rewrites land.
 4. Drop the working set: `olog_ws_drop({ setId })`.
 
-**Phase 6 — Revise (entered from Execute on ambiguity or PM brief change)**
+**Phase 6 — Revise (entered from Execute on ambiguity or domain expert brief change)**
 
 Enter this phase when:
 - A `discoveredAmbiguity` arrow appears after an implement call, OR
@@ -236,10 +236,10 @@ Enter this phase when:
 
 Steps:
 1. `olog_ws_pause({ setId })` — preserve the working set across the revision.
-2. Present the ambiguity or brief change to the PM via `question`. Capture the answer.
+2. Present the ambiguity or brief change to the domain expert via `question`. Capture the answer.
 3. Call `olog_plan_revise({ planHash, setId, briefDelta })` to classify each
    operation as `keep | rollback | redirect`. Translate the result into plain
-   English for the PM — do not show verdict JSON or olog IDs. Example:
+   English for the domain expert — do not show verdict JSON or olog IDs. Example:
 
    > The brief change means we no longer need to add the `DiscountCode` concept.
    > I'll drop that step. The remaining 4 steps are unaffected. The checkout

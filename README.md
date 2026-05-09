@@ -4,7 +4,7 @@ A structural model server for software codebases, exposed as an MCP server for u
 
 ## Goals and philosophy
 
-The name comes from David Spivak's *ologs* — a way of representing knowledge as typed objects, typed arrows, and commutative diagrams. The central idea is that domain knowledge and code are both ologs, and that implementation is a functor between them: domain concepts map to code elements, relationships map to structural arrows, and invariants map to path equations that must hold in the graph. The impetus for this project was to make that functor explicit and machine-checkable — so that a PM's conceptual model can be formally translated into code through a pipeline that preserves structure at every step.
+The name comes from David Spivak's *ologs* — a way of representing knowledge as typed objects, typed arrows, and commutative diagrams. The central idea is that domain knowledge and code are both ologs, and that implementation is a functor between them: domain concepts map to code elements, relationships map to structural arrows, and invariants map to path equations that must hold in the graph. The impetus for this project was to make that functor explicit and machine-checkable — so that a domain expert's conceptual model can be formally translated into code through a pipeline that preserves structure at every step.
 
 ## What you get
 
@@ -139,7 +139,7 @@ The PM never sees JSON or code. The full flow:
 
 **3. Execution** — on your approval, orchestrate runs the mechanical operations (`rename`, `move`, `addSymbol`, etc.) via `olog_apply`, then delegates each source-edit slice to `@olog-implement` with a fully-resolved DelegationBrief. Between slices it tells you in plain English what changed and asks whether to continue.
 
-**4. Revision** — if implement discovers an ambiguity that only the PM can resolve, orchestrate pauses, presents the question in plain English, and waits for your answer before resuming.
+**4. Revision** — if implement discovers an ambiguity that only the domain expert can resolve, orchestrate pauses, presents the question in plain English, and waits for your answer before resuming.
 
 ### Domain ingestion (bottom-up)
 

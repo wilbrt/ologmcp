@@ -100,7 +100,7 @@ olog_ws_assert({
 })
 ```
 
-**Discovered ambiguity** — a question only the PM can answer (conflicting
+**Discovered ambiguity** — a question only the domain expert can answer (conflicting
 requirements, unclear scope, missing domain concept):
 ```
 olog_ws_assert({
