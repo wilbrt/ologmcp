@@ -4,4 +4,5 @@ packages/node_modules/
 .olog/
 .plans/
 .claude/
+memory/
 packages/*/dist/
