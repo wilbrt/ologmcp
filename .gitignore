@@ -2,4 +2,6 @@ node_modules/
 packages/node_modules/
 .sisyphus/
 .olog/
+.plans/
+.claude/
 packages/*/dist/
