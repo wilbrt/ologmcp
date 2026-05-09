@@ -65,16 +65,25 @@ Exposes only `olog_ws_assert`. The implement agent writes to working sets throug
 
 ## Installation
 
-Run this once in the root of the project you want to model:
+Clone the repository and build:
 
 ```bash
-npx -p @olog/mcp-server olog-mcp-init
+git clone https://github.com/wilbrt/ologmcp.git /path/to/olog-mcp
+cd /path/to/olog-mcp
+npm install
+npm run build
+```
+
+Then run the init command once in the root of the project you want to model:
+
+```bash
+node /path/to/olog-mcp/packages/mcp-server/dist/index-init.js
 ```
 
 This will:
 1. Detect which languages your project uses
 2. Write five agent files into `.opencode/agents/`
-3. Add all three MCP server configurations to `opencode.json`
+3. Add all three MCP server configurations to `opencode.json`, pointing at the built scripts
 
 Commit both — teammates get the agents automatically when they open the project in opencode.
 
@@ -128,37 +137,35 @@ Use `@olog-ingestion` to build the domain layer from the bottom up — surfacing
 
 ### Visualisation
 
-Export the domain layer as a Graphviz DOT graph:
+Export the domain layer as a Graphviz DOT graph by calling `olog_dot_domain` from any agent, or from the olog-mcp directory:
 
 ```bash
-npm run dot:svg   # render and open as SVG (requires graphviz)
-npm run dot       # print DOT to stdout
+OLOG_ROOT=/path/to/your-project npm run dot:svg   # render and open as SVG (requires graphviz)
+OLOG_ROOT=/path/to/your-project npm run dot       # print DOT to stdout
 ```
-
-Or call `olog_dot_domain` directly from any agent.
 
 ## Configuration
 
-The generated `opencode.json` section:
+The generated `opencode.json` section (paths are set by the init command to wherever you cloned olog-mcp):
 
 ```json
 {
   "mcp": {
     "olog": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp"],
+      "command": ["/path/to/olog-mcp/run-olog-mcp.sh"],
       "environment": { "OLOG_LANGUAGES": "typescript" },
       "enabled": true
     },
     "olog-mining": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp-mining"],
+      "command": ["/path/to/olog-mcp/run-olog-mining-mcp.sh"],
       "environment": { "OLOG_LANGUAGES": "typescript" },
       "enabled": true
     },
     "olog-ws-assert": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "@olog/mcp-server", "olog-mcp-ws-assert"],
+      "command": ["/path/to/olog-mcp/run-olog-ws-assert-mcp.sh"],
       "enabled": true
     }
   }
