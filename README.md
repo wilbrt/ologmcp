@@ -2,6 +2,44 @@
 
 A structural model server for software codebases, exposed as an MCP server for use with [opencode](https://opencode.ai). It ingests your codebase using tree-sitter, builds a persistent graph (the *olog*) of every element and relationship, and gives AI agents grounded, queryable structural knowledge — so they plan and edit code based on facts, not guesses.
 
+## Goals and philosophy
+
+### The problem with context windows
+
+AI coding agents read source files, hold them in a context window, and reason about them. That works for small, isolated tasks. It breaks down when the change spans many files, when the relevant structure is implicit rather than local, or when the agent's context fills up and earlier facts get pushed out. The agent loses the thread, hallucinates relationships that don't exist, and makes changes that violate constraints it has already forgotten.
+
+The root problem is that source code is not the right representation for structural reasoning. Files are a storage format. What agents need is a queryable model of the elements and relationships that matter.
+
+### The olog as a structural model
+
+The name comes from David Spivak's *ologs* — a category-theoretic way of formalising knowledge as typed objects, typed arrows (relationships), and commutative diagrams (invariants that must hold). An olog in this sense is a small category: a graph where every node is a type, every edge is a total function, and every commutative diagram is a constraint.
+
+This project builds two ologs and keeps them in correspondence:
+
+- **The codebase olog** — every function, class, type, interface, method, import, and call site, with arrows for every structural relationship between them. Built automatically from source by tree-sitter. Stored in SQLite.
+- **The domain olog** — the PM's conceptual model: domain objects, relationships, and invariants, elicited through conversation. A small category authored by the PM.
+
+Implementation is a functor from the domain olog into the codebase olog: every domain concept maps to a code element, every domain relationship maps to a structural arrow, and every domain invariant maps to a path equation that must hold in the code graph.
+
+### The pipeline
+
+The pipeline has four roles with strict separation:
+
+- **Elicit** — talks only to the PM. Produces the domain olog (DomainBrief) through conversation. Never reads source files. Never writes plans. The PM never sees JSON or code.
+- **Orchestrate** — maps the domain olog to the codebase olog via `olog_propose_functor`, drafts a plan, validates it against structural constraints, and delegates implementation slices. Never writes code. Plans are validated before any execution begins.
+- **Orient** — read-only structural queries against the codebase olog. Answers focused questions for the orchestrate agent.
+- **Implement** — receives a fully-resolved brief with analogues, required interfaces, and acceptance criteria. Writes code. Reports discoveries (unexpected dependencies, ambiguities) back through the working set — never directly to the PM.
+
+Ambiguities that require PM input bubble back up through the orchestrate agent, which pauses execution and asks in plain English. The PM never falls out of their role into a technical one.
+
+### Invariants as first-class citizens
+
+Plans are not just lists of operations — they are validated against the olog before any code is touched. Structural constraints (uniqueness, referential integrity, path equations) are checked against the projected post-plan state. A plan that would violate a constraint is rejected before execution begins, not discovered as a broken build afterward.
+
+### What this is not
+
+This is not a code search tool, a RAG system, or a context-stuffing layer. It is a structural model that agents query, plan against, and update — an attempt to give AI agents the kind of grounded, queryable knowledge about a codebase that a senior engineer carries in their head.
+
 ## What you get
 
 **Five agents** pre-configured in opencode:
