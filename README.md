@@ -85,12 +85,22 @@ This will:
 2. Write five agent files into `.opencode/agents/`
 3. Add all three MCP server configurations to `opencode.json`, pointing at the built scripts
 
-Commit both — teammates get the agents automatically when they open the project in opencode.
+Also add `.olog/` to your project's `.gitignore` — the SQLite database is regenerated on each start and should not be committed:
 
 ```bash
-git add .opencode/agents/ opencode.json
+echo '.olog/' >> .gitignore
+```
+
+Commit everything — teammates get the agents automatically when they open the project in opencode:
+
+```bash
+git add .opencode/agents/ opencode.json .gitignore
 git commit -m "Add olog-mcp"
 ```
+
+### Elicit-to-orchestrate handoff
+
+Copy `.opencode/commands/olog-orchestrate-brief.md` from this repository into your project's `.opencode/commands/` directory. This adds a `/olog-orchestrate-brief` slash command that opens a fresh orchestration session with the most recently confirmed DomainBrief.
 
 ## Language support
 
@@ -113,7 +123,7 @@ For projects not yet supported, the server starts without a language adapter —
 
 When opencode starts, the core MCP server automatically ingests your codebase using tree-sitter. Every function, class, type, interface, method, import, and call site becomes an element in the olog. Relationships between them (calls, imports, extends, implements, etc.) become arrows.
 
-The olog is stored in `.olog/olog.sqlite` in your project root. Add it to `.gitignore` — it is regenerated on each start.
+The olog is stored in `.olog/olog.sqlite` in your project root. It is regenerated on each start and should not be committed.
 
 ### Domain specification (PM workflow)
 
@@ -199,7 +209,7 @@ npm run typecheck   # type-check all packages
 npm run dot:svg     # visualise the domain graph of this repo
 ```
 
-The repository is a monorepo with four packages:
+The repository is a monorepo with five packages:
 
 | Package | Description |
 |---|---|
@@ -207,3 +217,4 @@ The repository is a monorepo with four packages:
 | `packages/lang-typescript` | Tree-sitter TypeScript/TSX adapter |
 | `packages/lang-clojure` | Tree-sitter Clojure/ClojureScript adapter (includes re-frame support) |
 | `packages/mcp-server` | MCP server, tool registration, `init` CLI |
+| `packages/viewer` | Working set graph viewer (local web UI) |
