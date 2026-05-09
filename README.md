@@ -12,7 +12,7 @@ The name comes from David Spivak's *ologs* — a way of representing knowledge a
 
 | Agent | Purpose |
 |---|---|
-| `@olog-elicit` | PM interlocutor — elicits domain concepts through conversation and writes a confirmed DomainBrief to `.plans/briefs/` |
+| `@olog-elicit` | Domain expert interlocutor — elicits domain concepts through conversation and writes a confirmed DomainBrief to `.plans/briefs/` |
 | `@olog-ingestion` | Domain ingestion — runs interactive discovery sessions to surface domain objects from types and classes, and mines structural invariants |
 | `@olog-orchestrate` | Plans structural changes, validates them against the olog, and delegates implementation slices to `@olog-implement` |
 | `@olog-orient` | Read-only structural queries — answers focused questions about the codebase from olog facts |
@@ -102,9 +102,6 @@ git add .opencode/agents/ opencode.json .gitignore
 git commit -m "Add olog-mcp"
 ```
 
-### Elicit-to-orchestrate handoff
-
-Copy `.opencode/commands/olog-orchestrate-brief.md` from this repository into your project's `.opencode/commands/` directory. This adds a `/olog-orchestrate-brief` slash command that opens a fresh orchestration session with the most recently confirmed DomainBrief.
 
 ## Language support
 
@@ -129,9 +126,9 @@ When opencode starts, the core MCP server automatically ingests your codebase us
 
 The olog is stored in `.olog/olog.sqlite` in your project root. It is regenerated on each start and should not be committed.
 
-### Domain specification (PM workflow)
+### Domain specification
 
-The PM never sees JSON or code. The full flow:
+The domain expert never sees JSON or code. The full flow:
 
 **1. Elicitation** — open `@olog-elicit` and describe what the system should do. The agent asks focused questions about domain concepts, relationships, and invariants. All tool output is translated to plain English before anything is shown to you. When the conversation is complete and you confirm, the agent writes a `DomainBrief` to `.plans/briefs/` and gives you a file path.
 
