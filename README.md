@@ -4,11 +4,7 @@ A structural model server for software codebases, exposed as an MCP server for u
 
 ## Goals and philosophy
 
-The impetus was watching AI coding agents lose the thread on larger changes — reading files into a context window, making edits that violated structural constraints they had already forgotten, hallucinating relationships that didn't exist. Source files are a storage format; they are not a great representation for structural reasoning across a codebase.
-
-The name comes from David Spivak's *ologs* — a category-theoretic way of representing knowledge as typed objects, typed arrows, and commutative diagrams (invariants). The codebase olog is built automatically from source. The domain olog is the PM's conceptual model, elicited through conversation. Implementation is a functor between them: domain concepts map to code elements, domain relationships map to structural arrows, domain invariants map to path equations that must hold in the code graph.
-
-The pipeline enforces a separation of roles: elicit talks to the PM and produces the domain olog, orchestrate plans and validates, orient answers structural questions, implement writes code. Plans are checked against structural constraints before any code is touched. Ambiguities that need a PM decision surface back through orchestrate in plain English — the PM stays in their role throughout.
+The name comes from David Spivak's *ologs* — a way of representing knowledge as typed objects, typed arrows, and commutative diagrams. The central idea is that domain knowledge and code are both ologs, and that implementation is a functor between them: domain concepts map to code elements, relationships map to structural arrows, and invariants map to path equations that must hold in the graph. The impetus for this project was to make that functor explicit and machine-checkable — so that a PM's conceptual model can be formally translated into code through a pipeline that preserves structure at every step.
 
 ## What you get
 
